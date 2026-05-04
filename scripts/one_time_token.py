@@ -13,50 +13,89 @@ import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-TOKEN_FILE = os.path.expanduser("~/.openclaw/workspace/skills/agent-comm/contacts/pending_token.json")
+TOKEN_DIR = os.path.expanduser("~/.openclaw/workspace/skills/agent-comm/contacts")
+ISSUED_FILE = os.path.join(TOKEN_DIR, "issued_tokens.json")
+
+
+def _load_issued() -> dict:
+    """Load issued tokens registry."""
+    if not os.path.exists(ISSUED_FILE):
+        return {"tokens": {}}
+    with open(ISSUED_FILE) as f:
+        return json.load(f)
+
+
+def _save_issued(data: dict) -> None:
+    """Save issued tokens registry."""
+    os.makedirs(TOKEN_DIR, exist_ok=True)
+    with open(ISSUED_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+    os.chmod(ISSUED_FILE, 0o600)
 
 
 def generate_token(ttl_seconds: int = 3600) -> dict:
-    """Create a new one-time token, invalidating any previous one."""
-    os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
+    """Create a new one-time token, adding it to the issued registry."""
+    data = _load_issued()
 
     token_bytes = secrets.token_bytes(32)
     token_hex = token_bytes.hex()
 
-    entry = {
-        "token": token_hex,
+    data["tokens"][token_hex] = {
         "createdAt": datetime.datetime.now().isoformat(),
         "ttlSeconds": ttl_seconds,
         "used": False,
         "usedBy": None,
     }
 
-    with open(TOKEN_FILE, "w") as f:
-        json.dump(entry, f, indent=2)
-    os.chmod(TOKEN_FILE, 0o600)
-
-    return entry
+    _save_issued(data)
+    return {"token": token_hex, **data["tokens"][token_hex]}
 
 
 def get_current_token() -> dict | None:
-    """Load the current pending token, or None if none exists."""
-    if not os.path.exists(TOKEN_FILE):
+    """Load the most recently issued unused token, or None."""
+    data = _load_issued()
+    unused = [t for t, v in data["tokens"].items() if not v.get("used")]
+    if not unused:
         return None
-    with open(TOKEN_FILE) as f:
-        return json.load(f)
+    # Return the most recently created unused token
+    unused_entries = [(t, data["tokens"][t]) for t in unused]
+    unused_entries.sort(key=lambda x: x[1]["createdAt"], reverse=True)
+    token, info = unused_entries[0]
+    return {"token": token, **info}
+
+
+def add_peer_token(token_hex: str) -> bool:
+    """
+    Pre-register a peer's token so it can be consumed on first connection.
+    This stores the token as pending in our issued registry.
+    Returns True if added, False if already exists.
+    """
+    data = _load_issued()
+    if token_hex in data["tokens"]:
+        return False  # already registered
+    data["tokens"][token_hex] = {
+        "createdAt": datetime.datetime.now().isoformat(),
+        "ttlSeconds": 3600,
+        "used": False,
+        "usedBy": "peer",
+    }
+    _save_issued(data)
+    return True
 
 
 def consume_token(token_hex: str) -> bool:
     """
-    Attempt to consume a token.
+    Attempt to consume a token that was previously issued by this agent
+    OR pre-registered from a peer's contact.
     Returns True if successfully consumed (first and only caller).
-    Returns False if token missing, expired, or already used.
+    Returns False if token unknown, expired, or already used.
     """
-    if not os.path.exists(TOKEN_FILE):
+    data = _load_issued()
+
+    if token_hex not in data["tokens"]:
         return False
 
-    with open(TOKEN_FILE) as f:
-        entry = json.load(f)
+    entry = data["tokens"][token_hex]
 
     if entry.get("used"):
         return False
@@ -67,26 +106,49 @@ def consume_token(token_hex: str) -> bool:
     if age > entry.get("ttlSeconds", 3600):
         return False
 
-    if entry["token"] != token_hex:
-        return False
-
     entry["used"] = True
     entry["usedAt"] = datetime.datetime.now().isoformat()
 
-    with open(TOKEN_FILE, "w") as f:
-        json.dump(entry, f, indent=2)
-
+    _save_issued(data)
     return True
 
 
-def revoke_token() -> bool:
-    """Manually revoke the current pending token (e.g., suspect abuse)."""
-    if not os.path.exists(TOKEN_FILE):
-        return False
-    os.remove(TOKEN_FILE)
-    return True
+def revoke_token(token_hex: str | None = None) -> bool:
+    """Revoke a specific token, or the most recent unused one if None."""
+    data = _load_issued()
+    if token_hex is None:
+        unused = [t for t, v in data["tokens"].items() if not v.get("used")]
+        if not unused:
+            return False
+        unused.sort(key=lambda t: data["tokens"][t]["createdAt"], reverse=True)
+        token_hex = unused[0]
+    if token_hex in data["tokens"]:
+        del data["tokens"][token_hex]
+        _save_issued(data)
+        return True
+    return False
 
 
 if __name__ == "__main__":
-    print("Token management. Use as a module.")
+    import argparse
+    parser = argparse.ArgumentParser(description="Token management.")
+    sub = parser.add_subcommands(dest="cmd")
+    sub.add_argument("generate", help="Generate a new token")
+    sub.add_argument("revoke", help="Revoke a token")
+    sub.add_argument("list", help="List issued tokens")
+    args = parser.parse_args()
+
+    if args.cmd == "generate":
+        entry = generate_token()
+        print(f"Token: {entry['token']}")
+    elif args.cmd == "revoke":
+        ok = revoke_token()
+        print("Revoked" if ok else "No token to revoke")
+    elif args.cmd == "list":
+        data = _load_issued()
+        for tok, info in data["tokens"].items():
+            status = "USED" if info.get("used") else "ACTIVE"
+            print(f"  {status}  {tok}  ({info['createdAt']})")
+    else:
+        print("Token management. Use as a module.")
     sys.exit(1)

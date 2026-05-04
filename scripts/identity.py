@@ -108,8 +108,12 @@ def sign_data(private_key_pem: bytes, data: bytes) -> bytes:
 def verify_signature(public_key_pem: bytes, data: bytes, signature: bytes) -> bool:
     """Verify an Ed25519 signature. Returns True if valid, False otherwise."""
     _, Ed25519PublicKey, _, _, serialization = _import_crypto()
-    public_key = serialization.load_pem_public_key(public_key_pem)
     try:
+        if len(public_key_pem) == 32:
+            # Raw 32-byte Ed25519 key — load from raw bytes
+            public_key = Ed25519PublicKey.from_public_bytes(public_key_pem)
+        else:
+            public_key = serialization.load_pem_public_key(public_key_pem)
         public_key.verify(signature, data)
         return True
     except Exception:
@@ -122,8 +126,30 @@ def encode_hex(data: bytes) -> str:
 
 
 def decode_hex(hex_str: str) -> bytes:
-    """Decode hex string to bytes."""
+    """Decode hex string to bytes. Also handles PEM strings transparently."""
+    if "-----BEGIN" in hex_str:
+        # PEM string passed directly — return as-is for decode_pub_key
+        return hex_str.encode()
     return bytes.fromhex(hex_str)
+
+
+def decode_pub_key(key_data: bytes | str) -> bytes:
+    """
+    Decode a public key from PEM or raw 32-byte hex string.
+    Returns 32-byte raw Ed25519 public key.
+    """
+    if isinstance(key_data, str):
+        key_data = key_data.encode()
+    if key_data.startswith(b"-----BEGIN"):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        pk = serialization.load_pem_public_key(key_data)
+        return pk.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    # Try as hex first
+    try:
+        return bytes.fromhex(key_data.decode())
+    except Exception:
+        return key_data  # assume raw bytes
 
 
 def compute_fingerprint(ed25519_public_pem: bytes) -> str:
