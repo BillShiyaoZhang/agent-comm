@@ -18,6 +18,7 @@ import json
 import os
 import secrets
 import sys
+import threading
 import uuid
 from datetime import datetime, timezone
 from functools import wraps
@@ -28,6 +29,11 @@ QUEUE_DIR = os.path.join(CONTACTS_DIR, "message_queue")
 AUTH_TOKEN_FILE = os.path.join(CONTACTS_DIR, "auth_token.json")
 LISTEN_PORT = 18792
 LISTEN_HOST = "127.0.0.1"
+
+# Protects concurrent writes to the message queue directory within the same process.
+# Between processes, atomicity relies on the OS guaranteeing that individual
+# json.dump + file rename operations are atomic (which we approximate here with the lock).
+_QUEUE_LOCK = threading.Lock()
 
 
 # ───────────────────────────────────────────────────────────────
@@ -62,8 +68,9 @@ def enqueue_message(encrypted_msg: dict) -> str:
         "encrypted": encrypted_msg,
     }
     path = os.path.join(QUEUE_DIR, f"{msg_id}.json")
-    with open(path, "w") as f:
-        json.dump(entry, f, indent=2)
+    with _QUEUE_LOCK:
+        with open(path, "w") as f:
+            json.dump(entry, f, indent=2)
     return msg_id
 
 
@@ -97,11 +104,12 @@ def mark_message_read(msg_id: str) -> bool:
     path = os.path.join(QUEUE_DIR, f"{msg_id}.json")
     if not os.path.exists(path):
         return False
-    with open(path) as f:
-        msg = json.load(f)
-    msg["read"] = True
-    with open(path, "w") as f:
-        json.dump(msg, f, indent=2)
+    with _QUEUE_LOCK:
+        with open(path) as f:
+            msg = json.load(f)
+        msg["read"] = True
+        with open(path, "w") as f:
+            json.dump(msg, f, indent=2)
     return True
 
 

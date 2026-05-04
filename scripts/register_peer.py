@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Register a peer agent's contact info from a JSON file, verifying its signature."""
 
-import hashlib
 import json
 import os
 import sys
@@ -122,7 +121,21 @@ def register_peer(
     peer_file = os.path.join(CONTACTS_DIR, f"peer-{peer_id}.json")
 
     pub_bytes = identity.decode_pub_key(identity.decode_hex(contact_data["publicKey"]))
-    fingerprint = hashlib.sha256(pub_bytes).hexdigest()[:16]
+    # Use the canonical fingerprint function so publisher and registrar always agree.
+    fingerprint = identity.compute_fingerprint(pub_bytes)
+
+    # Validate that the fingerprint field in the contact JSON matches the publicKey.
+    # A mismatch means the contact is internally inconsistent (keygen bug or tampering).
+    claimed_fp = contact_data.get("fingerprint", "")
+    if claimed_fp and claimed_fp != fingerprint:
+        print(
+            f"ERROR: Contact fingerprint is internally inconsistent!\n"
+            f"  fingerprint field in JSON : {claimed_fp}\n"
+            f"  computed from publicKey   : {fingerprint}\n"
+            "The peer must republish a fresh contact (run publish_contact.py again).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     meta = {
         "_registered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),

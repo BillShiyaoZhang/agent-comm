@@ -152,13 +152,18 @@ def decode_pub_key(key_data: bytes | str) -> bytes:
         return key_data  # assume raw bytes
 
 
-def compute_fingerprint(ed25519_public_pem: bytes) -> str:
-    """
-    Compute SHA-256 fingerprint of Ed25519 public key, truncated to 16 hex chars.
-    Used as the agent's stable identity identifier.
+def compute_fingerprint(ed25519_public_key: bytes) -> str:
+    """Compute SHA-256 fingerprint of an Ed25519 public key, truncated to 16 hex chars.
+
+    Always normalizes the input to raw 32-byte key material before hashing,
+    so the result is identical whether the caller passes PEM-encoded bytes or
+    already-decoded raw bytes. Previously this function hashed the raw PEM text,
+    while register_peer.py hashed the decoded raw key — causing fingerprint
+    mismatches that broke message routing and decryption.
     """
     import hashlib
-    return hashlib.sha256(ed25519_public_pem).hexdigest()[:16]
+    raw = decode_pub_key(ed25519_public_key)  # PEM -> raw 32 bytes; raw bytes pass through
+    return hashlib.sha256(raw).hexdigest()[:16]
 
 
 if __name__ == "__main__":
