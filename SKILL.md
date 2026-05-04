@@ -1,0 +1,183 @@
+---
+name: agent-comm
+description: >
+  Enable two OpenClaw agents to discover each other and communicate via the OpenClaw
+  message bus with cryptographic identity verification, one-time token exchange, and
+  end-to-end ECIES encryption. Used when two agents running on different machines
+  (or the same machine) need to exchange messages directly. Activated when:
+  (1) setting up agent-to-agent communication, (2) exchanging contact information
+  between agents, (3) sending messages to a peer agent, (4) managing agent
+  contacts/peer registry, or (5) receiving messages from a peer.
+---
+
+# Agent Comm
+
+## Overview
+
+This skill enables two OpenClaw agents to communicate across machines with three security properties:
+- **Mutual cryptographic identity**: Ed25519 signatures in contact exchange
+- **One-time token protection**: Contact JSON can only be registered once, preventing reuse
+- **End-to-end message encryption**: ECIES (X25519 ECDH + HKDF + AES-256-GCM-SIV)
+
+**Architecture:**
+
+```
+Agent A                           Agent B
+────────                          ────────
+publish_contact.py               publish_contact.py
+  → signed contact.json            → signed contact.json
+  (user manually exchanges via any channel)
+register_peer.py                  register_peer.py
+  → Ed25519 signature verify       → Ed25519 signature verify
+  → consume one-time token         → consume one-time token
+  → store x25519 public key       → store x25519 public key
+
+crypto.encrypt_message()          server.py (Flask on :18792)
+  → X25519 ECDH key exchange        ← receives HTTPS messages
+  → AES-256-GCM-SIV encrypt        → decrypt + queue
+sessions_send / HTTP POST          GET /agent-comm/messages
+```
+
+## Identity Keypair
+
+Each agent auto-generates two Ed25519 keypairs on first use:
+
+| File | Purpose |
+|---|---|
+| `identity_sk.pem` | Ed25519 private key — never shared, used to sign contacts |
+| `identity_pk.pem` | Ed25519 public key — embedded in contact for signature verification |
+| `identity_x25519_sk.pem` | X25519 private key — used for ECIES decryption |
+| `identity_x25519_pk.pem` | X25519 public key — embedded in contact for ECIES encryption |
+
+Fingerprint = SHA-256(Ed25519 public key)[:16 hex chars].
+
+## One-Time Token Mechanism
+
+When you publish a contact, a fresh 256-bit random token is generated and embedded in the signed payload. When the peer registers your contact, the token is consumed — the same contact JSON cannot be used again. This prevents forwarded contacts from being reused by intermediaries.
+
+Token TTL: 1 hour. Can be manually revoked via `revoke_token.py`.
+
+## Contact Exchange Flow
+
+### Step 1: A publishes their signed contact (with one-time token + x25519 key)
+
+```bash
+~/.openclaw/venvs/kg/bin/python3 \
+  ~/.openclaw/workspace/skills/agent-comm/scripts/publish_contact.py \
+  --output /tmp/my-contact.json
+```
+
+Output: `gatewayUrl`, `agentId`, `publicKey` (Ed25519), `x25519PublicKey`, `fingerprint`, `signature`, `token`.
+
+### Step 2: Users manually exchange contact JSON files
+
+### Step 3: B registers A (verifies Ed25519 signature + consumes token)
+
+```bash
+~/.openclaw/venvs/kg/bin/python3 \
+  ~/.openclaw/workspace/skills/agent-comm/scripts/register_peer.py \
+  --contact-file /tmp/alice-contact.json \
+  --peer-id alice
+```
+
+On success: B stores A's Ed25519 pub, X25519 pub, and fingerprint. Bidirectional exchange required — B also publishes and A registers B.
+
+## Message Server
+
+Each agent runs a Flask HTTP server (`server.py`) on `localhost:18792`, exposed via Cloudflare Tunnel as HTTPS. This server receives ECIES-encrypted messages from peers.
+
+**Endpoints:**
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/agent-comm/health` | No | Liveness probe |
+| GET | `/agent-comm/identity` | No | Returns fingerprint, X25519 pub, auth token |
+| POST | `/agent-comm/messages` | No* | Submit encrypted message (ciphertext proves sender) |
+| GET | `/agent-comm/messages` | Bearer token | Poll for messages (with auto-decrypt) |
+| GET | `/agent-comm/messages/<id>` | Bearer token | Fetch single message |
+
+*POST requires valid ciphertext (proof of sender identity via ECIES).
+
+**Start the server:**
+
+```bash
+~/.openclaw/venvs/kg/bin/python3 \
+  ~/.openclaw/workspace/skills/agent-comm/scripts/server.py &
+```
+
+**Or add to `start-claw.sh`** alongside the Gateway + tunnel:
+
+```bash
+# Start agent-comm HTTP server
+nohup ~/.openclaw/venvs/kg/bin/python3 \
+  ~/.openclaw/workspace/skills/agent-comm/scripts/server.py > /tmp/agent-comm-server.log 2>&1 &
+```
+
+## Sending Messages
+
+Encrypt with peer's X25519 public key (from registered contact), then POST to peer's `/agent-comm/messages`:
+
+```bash
+# Resolve peer's session key
+SESSION_KEY=$(~/.openclaw/venvs/kg/bin/python3 \
+  ~/.openclaw/workspace/skills/agent-comm/scripts/send_message.py \
+  --peer-id alice)
+
+# Encrypt and send
+MSG="Hello Alice!"
+ENCRYPTED=$(~/.openclaw/venvs/kg/bin/python3 \
+  ~/.openclaw/workspace/skills/agent-comm/scripts/send_message.py \
+  --peer-id alice --encrypt "$MSG")
+
+# POST to peer's server
+curl -X POST "https://alice-tunnel-url.trycloudflare.com/agent-comm/messages" \
+  -H "Content-Type: application/json" \
+  -d "$ENCRYPTED"
+```
+
+## Receiving Messages
+
+Poll the server for new messages:
+
+```bash
+AUTH_TOKEN=$(cat ~/.openclaw/workspace/skills/agent-comm/contacts/auth_token.json | \
+  python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
+
+~/.openclaw/venvs/kg/bin/python3 \
+  ~/.openclaw/workspace/skills/agent-comm/scripts/receive_messages.py \
+  --auth-token "$AUTH_TOKEN" \
+  --mark-read
+```
+
+Or use the `GET /agent-comm/messages` endpoint directly — messages are auto-decrypted when sender is in contacts.
+
+## Message Encryption Protocol (ECIES)
+
+- **Key exchange**: X25519 ECDH (Curve25519)
+- **Key derivation**: HKDF-SHA256 (RFC 5869), info="agent-comm-v1"
+- **Encryption**: AES-256-GCM-SIV (AEAD, nonce-misuse resistant)
+- **AAD**: Sender Ed25519 fingerprint (binds ciphertext to sender identity)
+
+Each message uses a fresh ephemeral X25519 keypair → **perfect forward secrecy**.
+
+## Scripts Reference
+
+| Script | Purpose |
+|---|---|
+| `get_tunnel_url.py` | Read current Cloudflare Tunnel URL |
+| `identity.py` | Ed25519 + X25519 keypair generation, sign, verify |
+| `one_time_token.py` | One-time token generate/consume/revoke |
+| `publish_contact.py` | Generate signed contact with fresh token |
+| `register_peer.py` | Verify signature + consume token, store peer contact |
+| `send_message.py` | Encrypt message for peer, resolve session key |
+| `receive_messages.py` | Poll server for messages, auto-decrypt |
+| `server.py` | Flask HTTP server for receiving encrypted messages |
+| `revoke_token.py` | Revoke current pending token |
+| `crypto.py` | ECIES encrypt/decrypt (X25519 + HKDF + AES-256-GCM-SIV) |
+
+## Limitations
+
+- **Manual contact exchange**: Users share contact JSON via any channel before agents can communicate.
+- **Temporary tunnels**: Tunnel URLs change on restart without a Cloudflare account + domain.
+- **Token TTL**: Published contacts expire after 1 hour.
+- **Dependencies**: Requires `cryptography` and `flask` in the kg venv.
