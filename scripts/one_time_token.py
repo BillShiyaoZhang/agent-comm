@@ -41,7 +41,7 @@ def generate_token(ttl_seconds: int = 3600) -> dict:
     token_hex = token_bytes.hex()
 
     data["tokens"][token_hex] = {
-        "createdAt": datetime.datetime.now().isoformat(),
+        "createdAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "ttlSeconds": ttl_seconds,
         "used": False,
         "usedBy": None,
@@ -74,7 +74,7 @@ def add_peer_token(token_hex: str) -> bool:
     if token_hex in data["tokens"]:
         return False  # already registered
     data["tokens"][token_hex] = {
-        "createdAt": datetime.datetime.now().isoformat(),
+        "createdAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "ttlSeconds": 3600,
         "used": False,
         "usedBy": "peer",
@@ -100,14 +100,18 @@ def consume_token(token_hex: str) -> bool:
     if entry.get("used"):
         return False
 
-    # Check expiry
+    # Check expiry (handle both naive and timezone-aware stored values)
     created = datetime.datetime.fromisoformat(entry["createdAt"])
-    age = (datetime.datetime.now() - created).total_seconds()
+    if created.tzinfo is None:
+        now = datetime.datetime.now()
+    else:
+        now = datetime.datetime.now(datetime.timezone.utc)
+    age = (now - created).total_seconds()
     if age > entry.get("ttlSeconds", 3600):
         return False
 
     entry["used"] = True
-    entry["usedAt"] = datetime.datetime.now().isoformat()
+    entry["usedAt"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     _save_issued(data)
     return True
@@ -132,23 +136,26 @@ def revoke_token(token_hex: str | None = None) -> bool:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Token management.")
-    sub = parser.add_subcommands(dest="cmd")
-    sub.add_argument("generate", help="Generate a new token")
-    sub.add_argument("revoke", help="Revoke a token")
-    sub.add_argument("list", help="List issued tokens")
+    sub = parser.add_subparsers(dest="cmd")
+    sub.add_parser("generate", help="Generate a new one-time token")
+    sub.add_parser("revoke", help="Revoke the most recent unused token")
+    sub.add_parser("list", help="List all issued tokens and their status")
     args = parser.parse_args()
 
     if args.cmd == "generate":
         entry = generate_token()
         print(f"Token: {entry['token']}")
+        print(f"Expires: {entry['ttlSeconds']}s")
     elif args.cmd == "revoke":
         ok = revoke_token()
-        print("Revoked" if ok else "No token to revoke")
+        print("Revoked" if ok else "No active token to revoke")
     elif args.cmd == "list":
         data = _load_issued()
+        if not data["tokens"]:
+            print("No tokens issued.")
         for tok, info in data["tokens"].items():
             status = "USED" if info.get("used") else "ACTIVE"
-            print(f"  {status}  {tok}  ({info['createdAt']})")
+            print(f"  {status}  {tok[:16]}...  (created: {info['createdAt']})")
     else:
-        print("Token management. Use as a module.")
-    sys.exit(1)
+        parser.print_help()
+        sys.exit(1)

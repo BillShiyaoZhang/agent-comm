@@ -71,7 +71,7 @@ Output: `gatewayUrl`, `agentId`, `publicKey` (Ed25519), `x25519PublicKey`, `fing
 
 ### Step 2: Users manually exchange contact JSON files
 
-### Step 3: B registers A (verifies Ed25519 signature + consumes token)
+### Step 3: B registers A (verifies Ed25519 signature + consumes token on A's server)
 
 ```bash
 ~/.openclaw/venvs/kg/bin/python3 \
@@ -80,7 +80,12 @@ Output: `gatewayUrl`, `agentId`, `publicKey` (Ed25519), `x25519PublicKey`, `fing
   --peer-id alice
 ```
 
-On success: B stores A's Ed25519 pub, X25519 pub, and fingerprint. Bidirectional exchange required — B also publishes and A registers B.
+On success: B verifies A's Ed25519 signature (over all identifying fields including `x25519PublicKey` and
+`fingerprint`), then calls A's `/agent-comm/consume-token` endpoint to burn the token on A's side.
+The same contact JSON cannot be registered by any other party after this point.
+Bidirectional exchange required — B also publishes and A registers B.
+
+Use `--no-consume-remote` only for offline testing (skips the remote token burn).
 
 ## Message Server
 
@@ -92,11 +97,13 @@ Each agent runs a Flask HTTP server (`server.py`) on `localhost:18792`, exposed 
 |---|---|---|---|
 | GET | `/agent-comm/health` | No | Liveness probe |
 | GET | `/agent-comm/identity` | No | Returns fingerprint, X25519 pub, auth token |
-| POST | `/agent-comm/messages` | No* | Submit encrypted message (ciphertext proves sender) |
+| POST | `/agent-comm/consume-token` | No* | Consume a one-time registration token (called by registering peer) |
+| POST | `/agent-comm/messages` | No** | Submit encrypted message (timestamp-validated, replay-resistant) |
 | GET | `/agent-comm/messages` | Bearer token | Poll for messages (with auto-decrypt) |
 | GET | `/agent-comm/messages/<id>` | Bearer token | Fetch single message |
 
-*POST requires valid ciphertext (proof of sender identity via ECIES).
+*No auth: the 256-bit token is the credential. Returns 409 if already consumed or expired.
+**POST requires valid ciphertext; messages with a timestamp older than 5 minutes are rejected.
 
 **Start the server:**
 
@@ -180,4 +187,4 @@ Each message uses a fresh ephemeral X25519 keypair → **perfect forward secrecy
 - **Manual contact exchange**: Users share contact JSON via any channel before agents can communicate.
 - **Temporary tunnels**: Tunnel URLs change on restart without a Cloudflare account + domain.
 - **Token TTL**: Published contacts expire after 1 hour.
-- **Dependencies**: Requires `cryptography` and `flask` in the kg venv.
+- **Dependencies**: Requires `cryptography`, `flask`, and `waitress` in the kg venv.
