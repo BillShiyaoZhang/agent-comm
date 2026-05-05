@@ -137,13 +137,18 @@ def register_peer(
         )
         sys.exit(1)
 
+    # Strip fields that are only needed during registration/handshake, not for messaging.
+    # Keep: gatewayUrl, agentId, publicKey, x25519PublicKey, fingerprint.
+    KEPT_FIELDS = ("gatewayUrl", "agentId", "publicKey", "x25519PublicKey", "fingerprint")
+    contact_stripped = {k: contact_data[k] for k in KEPT_FIELDS if k in contact_data}
+
     meta = {
         "_registered_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "_fingerprint": fingerprint,
     }
 
     with open(peer_file, "w") as f:
-        json.dump({**meta, **contact_data}, f, indent=2)
+        json.dump({**meta, **contact_stripped}, f, indent=2)
 
     print(f"Registered peer '{peer_id}' (fingerprint: {fingerprint})")
     return peer_file

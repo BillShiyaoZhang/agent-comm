@@ -193,7 +193,7 @@ Each message uses a fresh ephemeral X25519 keypair → **perfect forward secrecy
 | `one_time_token.py` | One-time token generate/consume/revoke |
 | `publish_contact.py` | Generate signed contact with fresh token |
 | `register_peer.py` | Verify signature + consume token, store peer contact |
-| `send_message.py` | Encrypt message for peer, resolve session key |
+| `send_message.py` | Encrypt + send message to peer, resolve session key |
 | `receive_messages.py` | Poll server for messages, auto-decrypt |
 | `server.py` | Flask HTTP server for receiving encrypted messages |
 | `revoke_token.py` | Revoke current pending token |
@@ -220,6 +220,37 @@ Contact JSON 包含 PEM 编码的公钥（如 `-----BEGIN PUBLIC KEY-----...----
 
 ### 飞书文件传输可能损坏 PEM
 飞书文件上传/下载可能会对 JSON 内容做格式处理，导致 PEM 少 dash。遇到签名验证失败时，优先使用 `media/inbound/` 下的原始文件。
+
+## Startup
+
+All services (agent-comm server, cloudflared tunnel, OpenClaw Gateway) are managed via `~/.openclaw/start-claw.sh`:
+
+```bash
+~/.openclaw/start-claw.sh
+```
+
+The script starts:
+1. **agent-comm server** — Flask on `localhost:18792`
+2. **Cloudflare Tunnel** — exposes server as HTTPS public URL
+3. **OpenClaw Gateway** — main agent orchestration
+
+## Data Storage
+
+All agent-comm data lives under `~/.openclaw/workspace/skills/agent-comm/contacts/`:
+
+
+| File/Directory | Contents |
+|---|---|
+| `identity_sk.pem` | Ed25519 private key (never shared) |
+| `identity_pk.pem` | Ed25519 public key |
+| `identity_x25519_sk.pem` | X25519 private key |
+| `identity_x25519_pk.pem` | X25519 public key |
+| `auth_token.json` | Bearer token for polling `GET /agent-comm/messages` |
+| `peer-<id>.json` | Registered peer contacts |
+| `issued_tokens.json` | One-time token issuance/consumption log |
+| `message_queue/` | Queued encrypted messages (auto-deleted on read) |
+
+Auth token and peer data are private — do not share.
 
 ## Limitations
 

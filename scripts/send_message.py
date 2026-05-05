@@ -23,7 +23,39 @@ def resolve_peer(peer_id: str) -> dict | None:
         return json.load(f)
 
 
-def resolve_session_key(peer_id: str) -> str | None:
+def post_to_peer(peer_id: str, encrypted_msg: dict) -> str | None:
+    """POST encrypted message to peer's server. Returns message id on success."""
+    peer = resolve_peer(peer_id)
+    if not peer:
+        return None
+    gateway_url = peer.get("gatewayUrl", "").rstrip("/")
+    if not gateway_url:
+        print("ERROR: Peer has no gatewayUrl", file=sys.stderr)
+        return None
+
+    import urllib.request
+    import urllib.error
+    url = f"{gateway_url}/agent-comm/messages"
+    data = json.dumps(encrypted_msg).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read())
+            if result.get("id"):
+                print(f"[send] Message sent to {peer_id}, id={result['id']}", flush=True)
+                return result["id"]
+            return result.get("status")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        print(f"ERROR: HTTP {e.code}: {body}", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return None
     """Resolve a peer's session key for sessions_send."""
     peer = resolve_peer(peer_id)
     if not peer:
@@ -71,6 +103,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Encrypt a message for a peer.")
     parser.add_argument("--peer-id", required=True, help="Peer ID to send to")
     parser.add_argument("--encrypt", metavar="TEXT", help="Plaintext message to encrypt and print")
+    parser.add_argument("--send", metavar="TEXT", help="Encrypt and send immediately (encrypt + POST)")
     parser.add_argument("--session-key", action="store_true", help="Print peer's session key instead")
     args = parser.parse_args()
 
@@ -78,6 +111,12 @@ if __name__ == "__main__":
         key = resolve_session_key(args.peer_id)
         if key:
             print(key)
+    elif args.send:
+        enc = encrypt_for_peer(args.peer_id, args.send)
+        if enc:
+            msg_id = post_to_peer(args.peer_id, enc)
+            if msg_id:
+                print(f"Message sent to {args.peer_id}: {msg_id}")
     elif args.encrypt:
         enc = encrypt_for_peer(args.peer_id, args.encrypt)
         if enc:

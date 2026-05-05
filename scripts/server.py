@@ -71,6 +71,10 @@ def enqueue_message(encrypted_msg: dict) -> str:
     with _QUEUE_LOCK:
         with open(path, "w") as f:
             json.dump(entry, f, indent=2)
+    # Log to stdout for server startup log
+    sender_fp = encrypted_msg.get("from", "unknown")
+    ts = entry["receivedAt"]
+    print(f"[queue] Message queued id={msg_id} from={sender_fp} at={ts}", flush=True)
     return msg_id
 
 
@@ -204,7 +208,7 @@ def create_app():
         return jsonify({
             "fingerprint": fp,
             "x25519PublicKey": identity.encode_hex(x_pub),
-            "authToken": get_or_create_auth_token(),
+            "gatewayUrl": request.host_url.rstrip("/"),
         })
 
     # ── POST /agent-comm/consume-token ───────────────────────
@@ -275,14 +279,6 @@ def create_app():
         messages = list_messages(include_read=include_read)
         _, _, x_priv, _ = identity.get_or_create_keypair()
 
-        # Probabilistic cleanup: delete old read messages ~5% of the time.
-        # This avoids unbounded queue growth without a separate background thread.
-        import random
-        if random.random() < 0.05:
-            n = cleanup_old_messages()
-            if n:
-                print(f"[cleanup] Deleted {n} old read message(s) from queue", flush=True)
-
         results = []
         for msg in messages:
             enc = msg.get("encrypted", {})
@@ -310,6 +306,14 @@ def create_app():
 
             if mark_read:
                 mark_message_read(msg["id"])
+                # Delete immediately after returning to caller.
+                # This replaces probabilistic cleanup with deterministic deletion on read.
+                qpath = os.path.join(QUEUE_DIR, f"{msg['id']}.json")
+                try:
+                    os.remove(qpath)
+                    print(f"[queue] Deleted read message id={msg['id']}", flush=True)
+                except Exception:
+                    pass
 
             results.append(entry)
 
