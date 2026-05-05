@@ -14,10 +14,7 @@ import datetime
 from contextlib import contextmanager
 
 sys.path.insert(0, os.path.dirname(__file__))
-
-TOKEN_DIR = os.path.expanduser("~/.openclaw/workspace/skills/agent-comm/contacts")
-ISSUED_FILE = os.path.join(TOKEN_DIR, "issued_tokens.json")
-_LOCK_FILE = ISSUED_FILE + ".lock"
+from paths import CONTACTS_DIR, ISSUED_TOKENS_FILE, TOKEN_LOCK_FILE
 
 
 @contextmanager
@@ -27,8 +24,8 @@ def _token_lock():
     Using fcntl.LOCK_EX ensures that concurrent processes (e.g. two peers
     registering simultaneously) cannot corrupt the token registry.
     """
-    os.makedirs(TOKEN_DIR, exist_ok=True)
-    with open(_LOCK_FILE, "a") as lf:
+    os.makedirs(CONTACTS_DIR, exist_ok=True)
+    with open(TOKEN_LOCK_FILE, "a") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         try:
             yield
@@ -38,18 +35,18 @@ def _token_lock():
 
 def _load_issued() -> dict:
     """Load issued tokens registry (call only while holding _token_lock)."""
-    if not os.path.exists(ISSUED_FILE):
+    if not os.path.exists(ISSUED_TOKENS_FILE):
         return {"tokens": {}}
-    with open(ISSUED_FILE) as f:
+    with open(ISSUED_TOKENS_FILE) as f:
         return json.load(f)
 
 
 def _save_issued(data: dict) -> None:
     """Save issued tokens registry (call only while holding _token_lock)."""
-    os.makedirs(TOKEN_DIR, exist_ok=True)
-    with open(ISSUED_FILE, "w") as f:
+    os.makedirs(CONTACTS_DIR, exist_ok=True)
+    with open(ISSUED_TOKENS_FILE, "w") as f:
         json.dump(data, f, indent=2)
-    os.chmod(ISSUED_FILE, 0o600)
+    os.chmod(ISSUED_TOKENS_FILE, 0o600)
 
 
 def generate_token(ttl_seconds: int = 3600) -> dict:

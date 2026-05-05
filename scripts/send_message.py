@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import identity
 import crypto
 
-CONTACTS_DIR = os.path.expanduser("~/.openclaw/workspace/skills/agent-comm/contacts")
+from paths import CONTACTS_DIR
 
 
 def resolve_peer(peer_id: str) -> dict | None:
@@ -21,6 +21,19 @@ def resolve_peer(peer_id: str) -> dict | None:
         return None
     with open(peer_file) as f:
         return json.load(f)
+
+
+def resolve_session_key(peer_id: str) -> str | None:
+    """Resolve a peer's session key for sessions_send."""
+    peer = resolve_peer(peer_id)
+    if not peer:
+        return None
+    gateway_url = peer.get("gatewayUrl")
+    agent_id = peer.get("agentId", "main")
+    if not gateway_url:
+        print("ERROR: Peer contact has no gatewayUrl", file=sys.stderr)
+        return None
+    return f"{gateway_url}/{agent_id}"
 
 
 def post_to_peer(peer_id: str, encrypted_msg: dict) -> str | None:
@@ -56,16 +69,6 @@ def post_to_peer(peer_id: str, encrypted_msg: dict) -> str | None:
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return None
-    """Resolve a peer's session key for sessions_send."""
-    peer = resolve_peer(peer_id)
-    if not peer:
-        return None
-    gateway_url = peer.get("gatewayUrl")
-    agent_id = peer.get("agentId", "main")
-    if not gateway_url:
-        print("ERROR: Peer contact has no gatewayUrl", file=sys.stderr)
-        return None
-    return f"{gateway_url}/{agent_id}"
 
 
 def encrypt_for_peer(peer_id: str, plaintext: str) -> dict | None:
@@ -81,22 +84,10 @@ def encrypt_for_peer(peer_id: str, plaintext: str) -> dict | None:
         return None
 
     x25519_pub = identity.decode_hex(x25519_pub_hex)
-    # identity.encode_hex already gives hex; decode_hex returns bytes from PEM-like hex
-    # But we stored it as PEM... let me check what format x25519PublicKey is stored in
-    # Actually in publish_contact.py: identity.encode_hex(x_pub) where x_pub is PEM bytes
-    # decode_hex reverses that. But if x_pub is PEM, encode_hex(PEM) gives hex of the PEM bytes.
-    # We stored the raw PEM bytes via identity.encode_hex. Let's just check.
-    try:
-        # Try as raw bytes (already decoded by identity.decode_hex)
-        x25519_pub_bytes = x25519_pub
-    except Exception:
-        print("ERROR: Could not decode peer's x25519PublicKey", file=sys.stderr)
-        return None
-
     ed_priv, ed_pub, _, _ = identity.get_or_create_keypair()
     fp = identity.compute_fingerprint(ed_pub)
 
-    return crypto.encrypt_message(plaintext.encode("utf-8"), x25519_pub_bytes, fp)
+    return crypto.encrypt_message(plaintext.encode("utf-8"), x25519_pub, fp)
 
 
 if __name__ == "__main__":

@@ -4,11 +4,9 @@
 import os
 import sys
 
-KEY_DIR = os.path.expanduser("~/.openclaw/workspace/skills/agent-comm/contacts")
-PRIV_KEY_FILE = os.path.join(KEY_DIR, "identity_sk.pem")
-PUB_KEY_FILE = os.path.join(KEY_DIR, "identity_pk.pem")
-X25519_PRIV_KEY_FILE = os.path.join(KEY_DIR, "identity_x25519_sk.pem")
-X25519_PUB_KEY_FILE = os.path.join(KEY_DIR, "identity_x25519_pk.pem")
+# Add scripts/ to path for local imports
+sys.path.insert(0, os.path.dirname(__file__))
+from paths import CONTACTS_DIR, IDENTITY_SK, IDENTITY_PK, IDENTITY_X25519_SK, IDENTITY_X25519_PK
 
 
 def _import_crypto():
@@ -20,7 +18,7 @@ def _import_crypto():
         return Ed25519PrivateKey, Ed25519PublicKey, X25519PrivateKey, X25519PublicKey, serialization
     except ImportError:
         print("ERROR: cryptography library not installed.", file=sys.stderr)
-        print("Run: uv pip install --python ~/.openclaw/venvs/kg/bin/python3 cryptography", file=sys.stderr)
+        print("Run: uv pip install cryptography flask", file=sys.stderr)
         sys.exit(1)
 
 
@@ -28,10 +26,10 @@ def _load_or_generate_ed25519():
     """Load existing Ed25519 keypair, or generate a new one."""
     Ed25519PrivateKey, Ed25519PublicKey, _, _, serialization = _import_crypto()
 
-    if os.path.exists(PRIV_KEY_FILE) and os.path.exists(PUB_KEY_FILE):
-        with open(PRIV_KEY_FILE, "rb") as f:
+    if os.path.exists(IDENTITY_SK) and os.path.exists(IDENTITY_PK):
+        with open(IDENTITY_SK, "rb") as f:
             priv = f.read()
-        with open(PUB_KEY_FILE, "rb") as f:
+        with open(IDENTITY_PK, "rb") as f:
             pub = f.read()
         return priv, pub
 
@@ -46,11 +44,11 @@ def _load_or_generate_ed25519():
         format=serialization.PublicFormat.SubjectPublicKeyInfo
     )
 
-    os.makedirs(KEY_DIR, exist_ok=True)
-    with open(PRIV_KEY_FILE, "wb") as f:
+    os.makedirs(CONTACTS_DIR, exist_ok=True)
+    with open(IDENTITY_SK, "wb") as f:
         f.write(private_bytes)
-    os.chmod(PRIV_KEY_FILE, 0o600)
-    with open(PUB_KEY_FILE, "wb") as f:
+    os.chmod(IDENTITY_SK, 0o600)
+    with open(IDENTITY_PK, "wb") as f:
         f.write(public_bytes)
 
     return private_bytes, public_bytes
@@ -60,10 +58,10 @@ def _load_or_generate_x25519():
     """Load existing X25519 keypair, or generate a new one."""
     _, _, X25519PrivateKey, X25519PublicKey, serialization = _import_crypto()
 
-    if os.path.exists(X25519_PRIV_KEY_FILE) and os.path.exists(X25519_PUB_KEY_FILE):
-        with open(X25519_PRIV_KEY_FILE, "rb") as f:
+    if os.path.exists(IDENTITY_X25519_SK) and os.path.exists(IDENTITY_X25519_PK):
+        with open(IDENTITY_X25519_SK, "rb") as f:
             priv = f.read()
-        with open(X25519_PUB_KEY_FILE, "rb") as f:
+        with open(IDENTITY_X25519_PK, "rb") as f:
             pub = f.read()
         return priv, pub
 
@@ -78,11 +76,11 @@ def _load_or_generate_x25519():
         format=serialization.PublicFormat.SubjectPublicKeyInfo
     )
 
-    os.makedirs(KEY_DIR, exist_ok=True)
-    with open(X25519_PRIV_KEY_FILE, "wb") as f:
+    os.makedirs(CONTACTS_DIR, exist_ok=True)
+    with open(IDENTITY_X25519_SK, "wb") as f:
         f.write(private_bytes)
-    os.chmod(X25519_PRIV_KEY_FILE, 0o600)
-    with open(X25519_PUB_KEY_FILE, "wb") as f:
+    os.chmod(IDENTITY_X25519_SK, 0o600)
+    with open(IDENTITY_X25519_PK, "wb") as f:
         f.write(public_bytes)
 
     return private_bytes, public_bytes

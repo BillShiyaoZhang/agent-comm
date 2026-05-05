@@ -38,21 +38,14 @@ crypto.encrypt_message()          server.py (Flask on :18792)
 sessions_send / HTTP POST          GET /agent-comm/messages
 ```
 
-## Python Version & Environment Setup
+## Python Version
 
-**Requires Python 3.10+** (scripts use modern `type | None` union syntax).
-Managed via `uv`.
+Requires **Python 3.10+** (uses `type | None` union syntax).
+Managed via `uv`. Install dependencies:
 
 ```bash
-# Recreate venv with a specific Python version (if needed)
 uv venv ~/.openclaw/venvs/kg --python 3.12
-uv pip install --python ~/.openclaw/venvs/kg/bin/python3 cryptography flask waitress
-```
-
-To change the Python version later:
-```bash
-uv venv ~/.openclaw/venvs/kg --python <version>   # e.g. 3.12, 3.13
-uv pip install --python ~/.openclaw/venvs/kg/bin/python3 cryptography flask waitress
+uv pip install cryptography flask waitress
 ```
 
 ## Identity Keypair
@@ -60,11 +53,11 @@ uv pip install --python ~/.openclaw/venvs/kg/bin/python3 cryptography flask wait
 Each agent auto-generates two Ed25519 keypairs on first use:
 
 | File | Purpose |
-|---|---|
-| `identity_sk.pem` | Ed25519 private key — never shared, used to sign contacts |
-| `identity_pk.pem` | Ed25519 public key — embedded in contact for signature verification |
-| `identity_x25519_sk.pem` | X25519 private key — used for ECIES decryption |
-| `identity_x25519_pk.pem` | X25519 public key — embedded in contact for ECIES encryption |
+|---|---|---|
+| `contacts/identity_sk.pem` | Ed25519 private key — never shared, used to sign contacts |
+| `contacts/identity_pk.pem` | Ed25519 public key — embedded in contact for signature verification |
+| `contacts/identity_x25519_sk.pem` | X25519 private key — used for ECIES decryption |
+| `contacts/identity_x25519_pk.pem` | X25519 public key — embedded in contact for ECIES encryption |
 
 Fingerprint = SHA-256(Ed25519 public key)[:16 hex chars].
 
@@ -79,9 +72,7 @@ Token TTL: 1 hour. Can be manually revoked via `revoke_token.py`.
 ### Step 1: A publishes their signed contact (with one-time token + x25519 key)
 
 ```bash
-~/.openclaw/venvs/kg/bin/python3 \
-  ~/.openclaw/workspace/skills/agent-comm/scripts/publish_contact.py \
-  --output /tmp/my-contact.json
+./scripts/publish_contact.py --output /tmp/my-contact.json
 ```
 
 Output: `gatewayUrl`, `agentId`, `publicKey` (Ed25519), `x25519PublicKey`, `fingerprint`, `signature`, `token`.
@@ -91,8 +82,7 @@ Output: `gatewayUrl`, `agentId`, `publicKey` (Ed25519), `x25519PublicKey`, `fing
 ### Step 3: B registers A (verifies Ed25519 signature + consumes token on A's server)
 
 ```bash
-~/.openclaw/venvs/kg/bin/python3 \
-  ~/.openclaw/workspace/skills/agent-comm/scripts/register_peer.py \
+./scripts/register_peer.py \
   --contact-file /tmp/alice-contact.json \
   --peer-id alice
 ```
@@ -125,17 +115,13 @@ Each agent runs a Flask HTTP server (`server.py`) on `localhost:18792`, exposed 
 **Start the server:**
 
 ```bash
-~/.openclaw/venvs/kg/bin/python3 \
-  ~/.openclaw/workspace/skills/agent-comm/scripts/server.py &
+./start-claw.sh
 ```
 
-**Or add to `start-claw.sh`** alongside the Gateway + tunnel:
-
-```bash
-# Start agent-comm HTTP server
-nohup ~/.openclaw/venvs/kg/bin/python3 \
-  ~/.openclaw/workspace/skills/agent-comm/scripts/server.py > /tmp/agent-comm-server.log 2>&1 &
-```
+The script starts:
+1. **agent-comm server** — Flask on `localhost:18792`
+2. **Cloudflare Tunnel** — exposes server as HTTPS public URL
+3. **OpenClaw Gateway** — main agent orchestration
 
 ## Sending Messages
 
@@ -143,15 +129,11 @@ Encrypt with peer's X25519 public key (from registered contact), then POST to pe
 
 ```bash
 # Resolve peer's session key
-SESSION_KEY=$(~/.openclaw/venvs/kg/bin/python3 \
-  ~/.openclaw/workspace/skills/agent-comm/scripts/send_message.py \
-  --peer-id alice)
+SESSION_KEY=$(./scripts/send_message.py --peer-id alice --session-key)
 
 # Encrypt and send
 MSG="Hello Alice!"
-ENCRYPTED=$(~/.openclaw/venvs/kg/bin/python3 \
-  ~/.openclaw/workspace/skills/agent-comm/scripts/send_message.py \
-  --peer-id alice --encrypt "$MSG")
+ENCRYPTED=$(./scripts/send_message.py --peer-id alice --encrypt "$MSG")
 
 # POST to peer's server
 curl -X POST "https://alice-tunnel-url.trycloudflare.com/agent-comm/messages" \
@@ -164,13 +146,10 @@ curl -X POST "https://alice-tunnel-url.trycloudflare.com/agent-comm/messages" \
 Poll the server for new messages:
 
 ```bash
-AUTH_TOKEN=$(cat ~/.openclaw/workspace/skills/agent-comm/contacts/auth_token.json | \
+AUTH_TOKEN=$(cat ./contacts/auth_token.json | \
   python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
 
-~/.openclaw/venvs/kg/bin/python3 \
-  ~/.openclaw/workspace/skills/agent-comm/scripts/receive_messages.py \
-  --auth-token "$AUTH_TOKEN" \
-  --mark-read
+./scripts/receive_messages.py --auth-token "$AUTH_TOKEN" --mark-read
 ```
 
 Or use the `GET /agent-comm/messages` endpoint directly — messages are auto-decrypted when sender is in contacts.
@@ -186,8 +165,11 @@ Each message uses a fresh ephemeral X25519 keypair → **perfect forward secrecy
 
 ## Scripts Reference
 
+All scripts use relative paths via `paths.py` — no absolute paths hard-coded in script logic.
+
 | Script | Purpose |
 |---|---|
+| `paths.py` | Centralized path configuration (SKILL_DIR, CONTACTS_DIR, QUEUE_DIR, etc.) |
 | `get_tunnel_url.py` | Read current Cloudflare Tunnel URL |
 | `identity.py` | Ed25519 + X25519 keypair generation, sign, verify |
 | `one_time_token.py` | One-time token generate/consume/revoke |
@@ -207,37 +189,56 @@ Contact JSON 包含 PEM 编码的公钥（如 `-----BEGIN PUBLIC KEY-----...----
 **正确做法：**
 - 直接使用文件路径操作（读/写/注册），不要复制粘贴文本内容
 - 通过飞书等渠道传输 contact JSON 时，用 `--media` 发送文件附件，而非粘贴文本
-- 注册 contact 时，使用 `~/.openclaw/media/inbound/` 下的原始文件路径
+- 注册 contact 时，使用 `./contacts/` 下的原始文件路径
 
 **错误做法：**
 ```bash
 # ❌ 手动复制粘贴 PEM 文本到 write 工具 —— 容易漏掉 dash
-# ✅ 直接使用文件路径
-~/.openclaw/venvs/kg/bin/python3 scripts/register_peer.py \
-  --contact-file ~/.openclaw/media/inbound/peer-contact---xxx.json \
+# ✅ 直接使用文件路径。示例如下：
+python3 scripts/register_peer.py \
+  --contact-file ./contacts/peer-alice.json \
   --peer-id alice
 ```
 
 ### 飞书文件传输可能损坏 PEM
 飞书文件上传/下载可能会对 JSON 内容做格式处理，导致 PEM 少 dash。遇到签名验证失败时，优先使用 `media/inbound/` 下的原始文件。
 
-## Startup
+## Sharing
 
-All services (agent-comm server, cloudflared tunnel, OpenClaw Gateway) are managed via `~/.openclaw/start-claw.sh`:
+Generate a shareable package (contact JSON + instructions) for another user:
 
 ```bash
-~/.openclaw/start-claw.sh
+./scripts/publish_contact.py --share /tmp/my-share
 ```
 
-The script starts:
-1. **agent-comm server** — Flask on `localhost:18792`
-2. **Cloudflare Tunnel** — exposes server as HTTPS public URL
-3. **OpenClaw Gateway** — main agent orchestration
+This creates a directory with:
+- `contact-peer.json` — your contact, to share with the other party (send as file attachment)
+- Instructions are printed to stdout — copy and paste to send to the other party's agent
+
+## External Resources Used
+
+This skill depends on the following external resources:
+
+| Resource | Purpose | Location |
+|---|---|---|
+| -managed venv (e.g. ) | Python runtime for all scripts | uv-managed venv |
+| `cryptography` package | Ed25519/X25519 key handling, AES-GCM-SIV | pip-installed in kg venv |
+| `flask` package | HTTP server (`server.py`) | pip-installed in kg venv |
+| `waitress` package | Production WSGI server (optional, falls back to Flask dev) | pip-installed in kg venv |
+| `/tmp/cloudflared-tunnel.log` | Cloudflare Tunnel log (read by `get_tunnel_url.py`) | local filesystem |
+| `~/.openclaw/openclaw.json` | OpenClaw config (read by `publish_contact.py` for agentId) | local config file |
+| Cloudflare Tunnel (`cloudflared`) | Public HTTPS exposure of `server.py` | must be installed and running |
+| Port `18792` | agent-comm HTTP server listen port | local only |
+| Port `18789` | OpenClaw Gateway (used internally, not exposed) | local only |
+
+**Python dependencies** (install via `uv pip install cryptography flask waitress`):
+- `cryptography`
+- `flask`
+- `waitress`
 
 ## Data Storage
 
-All agent-comm data lives under `~/.openclaw/workspace/skills/agent-comm/contacts/`:
-
+All agent-comm data lives under `./contacts/`:
 
 | File/Directory | Contents |
 |---|---|

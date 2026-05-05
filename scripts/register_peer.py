@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import identity
 import one_time_token as token_lib
 
-CONTACTS_DIR = os.path.expanduser("~/.openclaw/workspace/skills/agent-comm/contacts")
+from paths import CONTACTS_DIR
 
 # Fields that were signed — MUST match publish_contact.py's sign_payload keys exactly.
 _SIGNED_FIELDS = (
@@ -92,15 +92,7 @@ def register_peer(
     verify: bool = True,
     consume_remote: bool = True,
 ) -> str:
-    """Verify and store a peer contact.
-
-    Args:
-        peer_id: Short local name for this peer (e.g. "alice").
-        contact_data: Parsed contact JSON from the peer.
-        verify: If True, reject contacts with invalid Ed25519 signatures.
-        consume_remote: If True, call the peer's server to consume their
-            one-time token, making it impossible to re-register the same contact.
-    """
+    """Verify and store a peer contact."""
     if verify and not verify_contact(contact_data):
         print("ERROR: Signature verification failed. Refusing to register.", file=sys.stderr)
         sys.exit(1)
@@ -110,7 +102,6 @@ def register_peer(
         sys.exit(1)
 
     # Consume the token on the PEER's server — this is what makes it truly one-time.
-    # Without this step any party who obtains the contact JSON could register it.
     if consume_remote:
         if not consume_peer_token_remote(contact_data):
             print("WARNING: Remote token consumption failed. "
@@ -121,11 +112,9 @@ def register_peer(
     peer_file = os.path.join(CONTACTS_DIR, f"peer-{peer_id}.json")
 
     pub_bytes = identity.decode_pub_key(identity.decode_hex(contact_data["publicKey"]))
-    # Use the canonical fingerprint function so publisher and registrar always agree.
     fingerprint = identity.compute_fingerprint(pub_bytes)
 
     # Validate that the fingerprint field in the contact JSON matches the publicKey.
-    # A mismatch means the contact is internally inconsistent (keygen bug or tampering).
     claimed_fp = contact_data.get("fingerprint", "")
     if claimed_fp and claimed_fp != fingerprint:
         print(
@@ -138,7 +127,6 @@ def register_peer(
         sys.exit(1)
 
     # Strip fields that are only needed during registration/handshake, not for messaging.
-    # Keep: gatewayUrl, agentId, publicKey, x25519PublicKey, fingerprint.
     KEPT_FIELDS = ("gatewayUrl", "agentId", "publicKey", "x25519PublicKey", "fingerprint")
     contact_stripped = {k: contact_data[k] for k in KEPT_FIELDS if k in contact_data}
 
@@ -155,10 +143,7 @@ def register_peer(
 
 
 def complete_peer_registration(peer_id: str) -> bool:
-    """
-    Consume the deferred token for a peer after first successful connection.
-    Returns True if successfully consumed.
-    """
+    """Consume the deferred token for a peer after first successful connection."""
     peer_file = os.path.join(CONTACTS_DIR, f"peer-{peer_id}.json")
     if not os.path.exists(peer_file):
         print(f"ERROR: Peer '{peer_id}' not registered.", file=sys.stderr)
@@ -176,7 +161,6 @@ def complete_peer_registration(peer_id: str) -> bool:
         print(f"ERROR: Token already used, expired, or revoked for peer '{peer_id}'.", file=sys.stderr)
         return False
 
-    # Update the peer file to mark token as consumed
     peer_data["_token_consumed_at"] = datetime.datetime.now().isoformat()
     with open(peer_file, "w") as f:
         json.dump(peer_data, f, indent=2)

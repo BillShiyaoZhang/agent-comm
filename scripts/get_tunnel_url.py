@@ -3,13 +3,16 @@
 
 import re
 import sys
+import os
 
-LOG_PATH = "/tmp/cloudflared-tunnel.log"
+sys.path.insert(0, os.path.dirname(__file__))
+from paths import TUNNEL_LOG
 
 
-def get_tunnel_url(log_path: str = LOG_PATH) -> str | None:
+def get_tunnel_url(log_path: str | None = None) -> str | None:
+    path = log_path or TUNNEL_LOG
     try:
-        with open(log_path) as f:
+        with open(path) as f:
             content = f.read()
     except FileNotFoundError:
         return None

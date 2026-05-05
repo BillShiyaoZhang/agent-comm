@@ -5,13 +5,14 @@ import argparse
 import json
 import os
 import sys
+import urllib.request
+import urllib.parse
 
 sys.path.insert(0, os.path.dirname(__file__))
+from paths import CONTACTS_DIR, AUTH_TOKEN_FILE, LISTEN_HOST, LISTEN_PORT
 
-CONTACTS_DIR = os.path.expanduser("~/.openclaw/workspace/skills/agent-comm/contacts")
-AUTH_TOKEN_FILE = os.path.join(CONTACTS_DIR, "auth_token.json")
-LISTEN_HOST = "127.0.0.1"
-LISTEN_PORT = 18792
+LISTEN_HOST_STR = "127.0.0.1"
+LISTEN_PORT_INT = 18792
 
 
 def get_auth_token() -> str:
@@ -25,7 +26,7 @@ def get_auth_token() -> str:
 
 def get_server_url() -> str:
     """Get the local server base URL."""
-    return f"http://{LISTEN_HOST}:{LISTEN_PORT}"
+    return f"http://{LISTEN_HOST_STR}:{LISTEN_PORT_INT}"
 
 
 def main():
@@ -45,9 +46,6 @@ def main():
         params["mark_read"] = "1"
     if args.all:
         params["all"] = "1"
-
-    import urllib.request
-    import urllib.parse
 
     query = urllib.parse.urlencode(params) if params else ""
     url = f"{args.server_url}/agent-comm/messages"

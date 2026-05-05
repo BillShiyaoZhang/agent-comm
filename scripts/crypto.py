@@ -44,11 +44,6 @@ import secrets
 import sys
 from datetime import datetime, timezone
 
-IMPORT_ERROR_MSG = (
-    "ERROR: cryptography not installed. "
-    "Run: uv pip install --python ~/.openclaw/venvs/kg/bin/python3 cryptography"
-)
-
 
 def _import_crypto():
     from cryptography.hazmat.primitives.asymmetric.x25519 import (

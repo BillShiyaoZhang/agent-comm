@@ -7,6 +7,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 import one_time_token as token_lib
 
+
 if __name__ == "__main__":
     if token_lib.revoke_token():
         print("Token revoked.")

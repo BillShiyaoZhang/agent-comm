@@ -4,13 +4,6 @@ Flask HTTP server for receiving agent-comm encrypted messages.
 
 Listens on localhost:18792, exposed via Cloudflare Tunnel (HTTPS).
 Receives ECIES-encrypted agent-comm messages and queues them for retrieval.
-
-Endpoints:
-  GET  /agent-comm/health     — Liveness probe
-  GET  /agent-comm/identity   — Public info for contact exchange
-  POST /agent-comm/messages   — Submit an encrypted message
-  GET  /agent-comm/messages   — Poll for new messages
-  GET  /agent-comm/messages/<id> — Fetch a single message
 """
 
 import glob
@@ -23,22 +16,15 @@ import uuid
 from datetime import datetime, timezone
 from functools import wraps
 
-AGENT_COMM_DIR = os.path.expanduser("~/.openclaw/workspace/skills/agent-comm")
-CONTACTS_DIR = os.path.join(AGENT_COMM_DIR, "contacts")
-QUEUE_DIR = os.path.join(CONTACTS_DIR, "message_queue")
-AUTH_TOKEN_FILE = os.path.join(CONTACTS_DIR, "auth_token.json")
-LISTEN_PORT = 18792
-LISTEN_HOST = "127.0.0.1"
+sys.path.insert(0, os.path.dirname(__file__))
+from paths import CONTACTS_DIR, QUEUE_DIR, AUTH_TOKEN_FILE, LISTEN_HOST, LISTEN_PORT
+
+LISTEN_HOST_STR = "127.0.0.1"
+LISTEN_PORT_INT = 18792
 
 # Protects concurrent writes to the message queue directory within the same process.
-# Between processes, atomicity relies on the OS guaranteeing that individual
-# json.dump + file rename operations are atomic (which we approximate here with the lock).
 _QUEUE_LOCK = threading.Lock()
 
-
-# ───────────────────────────────────────────────────────────────
-# Auth token
-# ───────────────────────────────────────────────────────────────
 
 def get_or_create_auth_token() -> str:
     """Load existing auth token, or generate a new 256-bit one."""
@@ -52,10 +38,6 @@ def get_or_create_auth_token() -> str:
     os.chmod(AUTH_TOKEN_FILE, 0o600)
     return token
 
-
-# ───────────────────────────────────────────────────────────────
-# Message queue (file-based, one JSON file per message)
-# ───────────────────────────────────────────────────────────────
 
 def enqueue_message(encrypted_msg: dict) -> str:
     """Write encrypted message to queue, return message id."""
@@ -71,7 +53,6 @@ def enqueue_message(encrypted_msg: dict) -> str:
     with _QUEUE_LOCK:
         with open(path, "w") as f:
             json.dump(entry, f, indent=2)
-    # Log to stdout for server startup log
     sender_fp = encrypted_msg.get("from", "unknown")
     ts = entry["receivedAt"]
     print(f"[queue] Message queued id={msg_id} from={sender_fp} at={ts}", flush=True)
@@ -118,12 +99,7 @@ def mark_message_read(msg_id: str) -> bool:
 
 
 def cleanup_old_messages(max_age_seconds: int = 86400) -> int:
-    """Delete read messages older than max_age_seconds. Returns count deleted.
-
-    Called probabilistically on each poll to keep queue size bounded without
-    requiring a dedicated background thread.
-    """
-    import time
+    """Delete read messages older than max_age_seconds."""
     os.makedirs(QUEUE_DIR, exist_ok=True)
     deleted = 0
     for path in glob.glob(os.path.join(QUEUE_DIR, "*.json")):
@@ -145,26 +121,19 @@ def cleanup_old_messages(max_age_seconds: int = 86400) -> int:
     return deleted
 
 
-# ───────────────────────────────────────────────────────────────
-# Flask app
-# ───────────────────────────────────────────────────────────────
-
 def create_app():
     try:
         from flask import Flask, request, jsonify
     except ImportError:
-        print("ERROR: flask not installed. Run: uv pip install --python "
-              "~/.openclaw/venvs/kg/bin/python3 flask", file=sys.stderr)
+        print("ERROR: flask not installed. Run: uv pip install flask waitress, file=sys.stderr)
         sys.exit(1)
 
-    sys.path.insert(0, os.path.join(AGENT_COMM_DIR, "scripts"))
     import identity
     import crypto
 
     app = Flask(__name__)
 
     def require_auth(f):
-        """Decorator: require valid Bearer token."""
         @wraps(f)
         def decorated(*args, **kwargs):
             auth = request.headers.get("Authorization", "")
@@ -191,7 +160,6 @@ def create_app():
                 continue
         return None
 
-    # ── GET /agent-comm/health ────────────────────────────────
     @app.route("/agent-comm/health", methods=["GET"])
     def health():
         return jsonify({
@@ -199,8 +167,6 @@ def create_app():
             "at": datetime.now(timezone.utc).isoformat(),
         })
 
-    # ── GET /agent-comm/identity ──────────────────────────────
-    # Returns public info for contact exchange (out-of-band sharing, not via HTTP)
     @app.route("/agent-comm/identity", methods=["GET"])
     def identity_endpoint():
         ed_priv, ed_pub, x_priv, x_pub = identity.get_or_create_keypair()
@@ -211,26 +177,17 @@ def create_app():
             "gatewayUrl": request.host_url.rstrip("/"),
         })
 
-    # ── POST /agent-comm/consume-token ───────────────────────
-    # Allow a peer to consume our one-time registration token.
-    # No auth required: the token itself is the credential.
     @app.route("/agent-comm/consume-token", methods=["POST"])
     def consume_token_endpoint():
-        sys.path.insert(0, os.path.join(AGENT_COMM_DIR, "scripts"))
         import one_time_token as token_lib
-
         body = request.get_json(silent=True)
         if not body or "token" not in body:
             return jsonify({"error": "missing token"}), 400
-
         token = body["token"]
         if token_lib.consume_token(token):
             return jsonify({"consumed": True})
         return jsonify({"error": "token invalid, expired, or already consumed"}), 409
 
-    # ── POST /agent-comm/messages ─────────────────────────────
-    # Submit an ECIES-encrypted message. No sender auth needed
-    # (the ciphertext itself proves sender identity).
     @app.route("/agent-comm/messages", methods=["POST"])
     def receive_message():
         try:
@@ -243,33 +200,25 @@ def create_app():
         if "ciphertext" not in encrypted_msg:
             return jsonify({"error": "missing ciphertext"}), 400
 
-        # Validate timestamp to prevent replay attacks.
-        # Messages outside a 5-minute window are rejected.
         ts_str = encrypted_msg.get("timestamp")
         if ts_str:
             try:
                 ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                 now = datetime.now(timezone.utc)
-                # Make ts timezone-aware if needed
                 if ts.tzinfo is None:
                     from datetime import timedelta
                     ts = ts.replace(tzinfo=timezone.utc)
                 age = abs((now - ts).total_seconds())
-                if age > 300:  # 5 minutes
+                if age > 300:
                     return jsonify({
                         "error": "message timestamp outside 5-minute window (possible replay)"
                     }), 400
             except Exception:
-                pass  # Unparseable timestamp: let it through (defensive)
+                pass
 
         msg_id = enqueue_message(encrypted_msg)
         return jsonify({"status": "queued", "id": msg_id}), 202
 
-    # ── GET /agent-comm/messages ──────────────────────────────
-    # Poll for messages. Returns messages optionally decrypted.
-    # Query params:
-    #   all=1        — include already-read messages
-    #   mark_read=1  — mark returned messages as read
     @app.route("/agent-comm/messages", methods=["GET"])
     @require_auth
     def list_messages_handler():
@@ -293,7 +242,6 @@ def create_app():
             }
 
             if peer_x25519_pem:
-                # x_priv here is our own X25519 private key
                 dec = crypto.decrypt_message(enc, x_priv, sender_fp)
                 if dec is not None:
                     entry["decrypted"] = dec.decode("utf-8", errors="replace")
@@ -306,8 +254,6 @@ def create_app():
 
             if mark_read:
                 mark_message_read(msg["id"])
-                # Delete immediately after returning to caller.
-                # This replaces probabilistic cleanup with deterministic deletion on read.
                 qpath = os.path.join(QUEUE_DIR, f"{msg['id']}.json")
                 try:
                     os.remove(qpath)
@@ -319,7 +265,6 @@ def create_app():
 
         return jsonify({"count": len(results), "messages": results})
 
-    # ── GET /agent-comm/messages/<id> ────────────────────────
     @app.route("/agent-comm/messages/<msg_id>", methods=["GET"])
     @require_auth
     def get_message_handler(msg_id: str):
@@ -351,7 +296,7 @@ def create_app():
 
 if __name__ == "__main__":
     app = create_app()
-    print(f"agent-comm server → {LISTEN_HOST}:{LISTEN_PORT}")
+    print(f"agent-comm server → {LISTEN_HOST_STR}:{LISTEN_PORT_INT}")
     print(f"Queue: {QUEUE_DIR}")
     token = get_or_create_auth_token()
     print(f"Auth token (first 8 chars): {token[:8]}...")
@@ -360,12 +305,12 @@ if __name__ == "__main__":
     try:
         from waitress import serve
         print("Using waitress WSGI server (production-ready)")
-        serve(app, host=LISTEN_HOST, port=LISTEN_PORT)
+        serve(app, host=LISTEN_HOST_STR, port=LISTEN_PORT_INT)
     except ImportError:
         print(
             "WARNING: waitress not installed — falling back to Flask dev server. "
             "Install for production: "
-            "uv pip install --python ~/.openclaw/venvs/kg/bin/python3 waitress",
+            "uv pip install waitress",
             file=sys.stderr,
         )
-        app.run(host=LISTEN_HOST, port=LISTEN_PORT, threaded=True)
+        app.run(host=LISTEN_HOST_STR, port=LISTEN_PORT_INT, threaded=True)
