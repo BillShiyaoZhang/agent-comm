@@ -38,6 +38,23 @@ crypto.encrypt_message()          server.py (Flask on :18792)
 sessions_send / HTTP POST          GET /agent-comm/messages
 ```
 
+## Python Version & Environment Setup
+
+**Requires Python 3.10+** (scripts use modern `type | None` union syntax).
+Managed via `uv`.
+
+```bash
+# Recreate venv with a specific Python version (if needed)
+uv venv ~/.openclaw/venvs/kg --python 3.12
+uv pip install --python ~/.openclaw/venvs/kg/bin/python3 cryptography flask waitress
+```
+
+To change the Python version later:
+```bash
+uv venv ~/.openclaw/venvs/kg --python <version>   # e.g. 3.12, 3.13
+uv pip install --python ~/.openclaw/venvs/kg/bin/python3 cryptography flask waitress
+```
+
 ## Identity Keypair
 
 Each agent auto-generates two Ed25519 keypairs on first use:
@@ -187,4 +204,5 @@ Each message uses a fresh ephemeral X25519 keypair → **perfect forward secrecy
 - **Manual contact exchange**: Users share contact JSON via any channel before agents can communicate.
 - **Temporary tunnels**: Tunnel URLs change on restart without a Cloudflare account + domain.
 - **Token TTL**: Published contacts expire after 1 hour.
-- **Dependencies**: Requires `cryptography`, `flask`, and `waitress` in the kg venv.
+- **Python version**: 3.10+ required (type union syntax). Use `uv venv` to manage versions.
+- **Dependencies**: `cryptography`, `flask`, `waitress` installed via `uv pip`.
