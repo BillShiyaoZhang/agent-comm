@@ -199,6 +199,28 @@ Each message uses a fresh ephemeral X25519 keypair → **perfect forward secrecy
 | `revoke_token.py` | Revoke current pending token |
 | `crypto.py` | ECIES encrypt/decrypt (X25519 + HKDF + AES-256-GCM-SIV) |
 
+## Cautions & Gotchas
+
+### PEM/JSON 内容禁止手动复制粘贴
+Contact JSON 包含 PEM 编码的公钥（如 `-----BEGIN PUBLIC KEY-----...-----END PUBLIC KEY-----`），格式非常敏感。手动复制 PEM 文本时极易漏掉 dash（`-----END` 容易写成 `----END`），导致 `cryptography` 库无法解析。
+
+**正确做法：**
+- 直接使用文件路径操作（读/写/注册），不要复制粘贴文本内容
+- 通过飞书等渠道传输 contact JSON 时，用 `--media` 发送文件附件，而非粘贴文本
+- 注册 contact 时，使用 `~/.openclaw/media/inbound/` 下的原始文件路径
+
+**错误做法：**
+```bash
+# ❌ 手动复制粘贴 PEM 文本到 write 工具 —— 容易漏掉 dash
+# ✅ 直接使用文件路径
+~/.openclaw/venvs/kg/bin/python3 scripts/register_peer.py \
+  --contact-file ~/.openclaw/media/inbound/peer-contact---xxx.json \
+  --peer-id alice
+```
+
+### 飞书文件传输可能损坏 PEM
+飞书文件上传/下载可能会对 JSON 内容做格式处理，导致 PEM 少 dash。遇到签名验证失败时，优先使用 `media/inbound/` 下的原始文件。
+
 ## Limitations
 
 - **Manual contact exchange**: Users share contact JSON via any channel before agents can communicate.
