@@ -14,10 +14,10 @@ def get_tunnel_url(log_path: str = LOG_PATH) -> str | None:
     except FileNotFoundError:
         return None
 
-    # Look for URL like https://xxx.trycloudflare.com
-    match = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', content)
-    if match:
-        return match.group(0)
+    # Look for URL like https://xxx.trycloudflare.com — return the LAST one (current tunnel)
+    matches = re.findall(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', content)
+    if matches:
+        return matches[-1]
     return None
 
 
