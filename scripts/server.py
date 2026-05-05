@@ -13,11 +13,63 @@ import secrets
 import sys
 import threading
 import uuid
+import urllib.request
+import urllib.error
 from datetime import datetime, timezone
 from functools import wraps
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import CONTACTS_DIR, QUEUE_DIR, AUTH_TOKEN_FILE, LISTEN_HOST, LISTEN_PORT
+
+HOOK_TOKEN = os.environ.get("OPENCLAW_HOOK_TOKEN", "22b91b989127132cb84175d38c347c5f")
+HOOK_BASE = os.environ.get("OPENCLAW_HOOK_BASE", "http://127.0.0.1:18789")
+HOOK_PATH = "/hooks/agent"
+
+
+def trigger_agent_hook(message_text: str = "") -> bool:
+    """Fire POST /hooks/agent to trigger an isolated OpenClaw agent turn.
+
+    Returns True if the hook was triggered successfully, False otherwise.
+    Does NOT raise exceptions — logs errors and returns False.
+    """
+    payload = json.dumps({
+        "message": message_text or (
+            "有新的 agent-comm 加密消息到达，请读取并处理。\n"
+            "详见：~/.openclaw/workspace/skills/agent-comm/prompts/inbound-message-handler.md"
+        ),
+        "name": "agent-comm-inbound",
+        "timeoutSeconds": 300,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"{HOOK_BASE}{HOOK_PATH}",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {HOOK_TOKEN}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode("utf-8")
+            print(
+                f"[hook] /hooks/agent triggered ok status={resp.status} body={body[:200]}",
+                flush=True,
+            )
+            return True
+    except urllib.error.HTTPError as e:
+        print(
+            f"[hook] /hooks/agent HTTP error {e.code}: {e.reason} body={e.read().decode()[:200]}",
+            flush=True,
+        )
+        return False
+    except urllib.error.URLError as e:
+        print(f"[hook] /hooks/agent URL error: {e.reason}", flush=True)
+        return False
+    except Exception as e:
+        print(f"[hook] /hooks/agent unexpected error: {e}", flush=True)
+        return False
 
 LISTEN_HOST_STR = "127.0.0.1"
 LISTEN_PORT_INT = 18792
@@ -125,7 +177,7 @@ def create_app():
     try:
         from flask import Flask, request, jsonify
     except ImportError:
-        print("ERROR: flask not installed. Run: uv pip install flask waitress, file=sys.stderr)
+        print("ERROR: flask not installed. Run: uv pip install flask waitress", file=sys.stderr)
         sys.exit(1)
 
     import identity
@@ -217,6 +269,15 @@ def create_app():
                 pass
 
         msg_id = enqueue_message(encrypted_msg)
+
+        # ── Trigger OpenClaw isolated agent turn ──────────────────────────
+        sender_fp = encrypted_msg.get("from", "unknown")
+        hook_msg = (
+            f"[agent-comm] 收到来自 {sender_fp} 的加密消息 (id={msg_id})，"
+            f"请按 prompts/inbound-message-handler.md 处理。"
+        )
+        trigger_agent_hook(hook_msg)
+
         return jsonify({"status": "queued", "id": msg_id}), 202
 
     @app.route("/agent-comm/messages", methods=["GET"])
