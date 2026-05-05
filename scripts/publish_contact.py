@@ -19,14 +19,13 @@ CONTACTS_DIR = os.path.expanduser("~/.openclaw/workspace/skills/agent-comm/conta
 
 def get_agent_id() -> str:
     """Read agent ID from openclaw config."""
-    import subprocess
-    result = subprocess.run(
-        ["node", "-e",
-         "const c=require(process.env.HOME+'/.openclaw/openclaw.json'); "
-         "console.log(c.agents?.defaultAgentId || 'main')"],
-        capture_output=True, text=True
-    )
-    return result.stdout.strip() or "main"
+    try:
+        config_path = os.path.expanduser("~/.openclaw/openclaw.json")
+        with open(config_path) as f:
+            config = json.load(f)
+        return config.get("agents", {}).get("defaultAgentId", "main")
+    except Exception:
+        return "main"
 
 
 def publish_contact(output_path: str | None = None) -> dict:
