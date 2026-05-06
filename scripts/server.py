@@ -25,6 +25,10 @@ HOOK_TOKEN = os.environ.get("OPENCLAW_HOOK_TOKEN", "22b91b989127132cb84175d38c34
 HOOK_BASE = os.environ.get("OPENCLAW_HOOK_BASE", "http://127.0.0.1:18789")
 HOOK_PATH = "/hooks/agent"
 
+# Replay detection: path to seen-message IDs cache
+_SEEN_MSGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seen_message_ids.json")
+_SEEN_TTL_SECONDS = 600  # 10 minutes
+
 
 def trigger_agent_hook(message_text: str = "") -> bool:
     """Fire POST /hooks/agent to trigger an isolated OpenClaw agent turn.
@@ -173,6 +177,38 @@ def cleanup_old_messages(max_age_seconds: int = 86400) -> int:
     return deleted
 
 
+# ── Replay Detection ────────────────────────────────────────────────────────
+
+def _load_seen_ids() -> dict[str, float]:
+    """Load seen-message cache. Returns {msg_id: expiry_timestamp}."""
+    try:
+        with open(_SEEN_MSGS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_seen_ids(data: dict[str, float]) -> None:
+    """Save seen-message cache."""
+    with open(_SEEN_MSGS_FILE, "w") as f:
+        json.dump(data, f)
+
+
+def check_replay(msg_id: str) -> bool:
+    """Return True if msg_id has already been seen within TTL. Mutates cache."""
+    now = datetime.now(timezone.utc).timestamp()
+    seen = _load_seen_ids()
+    # Evict expired entries
+    expired = [mid for mid, exp in seen.items() if exp < now]
+    for mid in expired:
+        del seen[mid]
+    if msg_id in seen:
+        return True
+    seen[msg_id] = now + _SEEN_TTL_SECONDS
+    _save_seen_ids(seen)
+    return False
+
+
 def create_app():
     try:
         from flask import Flask, request, jsonify
@@ -252,21 +288,33 @@ def create_app():
         if "ciphertext" not in encrypted_msg:
             return jsonify({"error": "missing ciphertext"}), 400
 
+        sender_fp = encrypted_msg.get("from", "")
+
+        # ── Peer whitelist check ──────────────────────────────────────────
+        if sender_fp:
+            peer_key = get_peer_x25519_pub(sender_fp)
+            if peer_key is None:
+                return jsonify({"error": "sender not in contacts whitelist"}), 403
+
+        # ── Timestamp / replay check ──────────────────────────────────────
         ts_str = encrypted_msg.get("timestamp")
         if ts_str:
             try:
                 ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                 now = datetime.now(timezone.utc)
                 if ts.tzinfo is None:
-                    from datetime import timedelta
                     ts = ts.replace(tzinfo=timezone.utc)
                 age = abs((now - ts).total_seconds())
                 if age > 300:
                     return jsonify({
-                        "error": "message timestamp outside 5-minute window (possible replay)"
+                        "error": "message timestamp outside 5-minute window"
                     }), 400
             except Exception:
                 pass
+
+        # ── Replay detection (before enqueueing) ─────────────────────────
+        if sender_fp and check_replay(sender_fp):
+            return jsonify({"error": "duplicate message"}), 409
 
         msg_id = enqueue_message(encrypted_msg)
 
