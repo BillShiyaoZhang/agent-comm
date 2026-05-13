@@ -95,7 +95,6 @@ python3 scripts/send_message.py --peer-id <peerId> --encrypt "回复内容"
 
 ```bash
 $KG_VENV $KG_SCRIPTS/manage_entity.py \
-  --graph ~/.openclaw/workspace/skills/knowledge-graph/kg/graph.trig \
   --type concept \
   --id event-agent-comm-<msg_id> \
   --name "agent-comm 收到 peer 消息" \
