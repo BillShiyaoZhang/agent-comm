@@ -180,6 +180,7 @@ All scripts use relative paths via `paths.py` — no absolute paths hard-coded i
 | `server.py` | Flask HTTP server for receiving encrypted messages |
 | `revoke_token.py` | Revoke current pending token |
 | `crypto.py` | ECIES encrypt/decrypt (X25519 + HKDF + AES-256-GCM-SIV) |
+| `task_tracker.py` | Task delegation tracker (create/read/list/check/mark-done/append-log/archive) |
 
 ## Cautions & Gotchas
 

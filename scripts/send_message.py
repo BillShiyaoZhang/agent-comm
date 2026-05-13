@@ -90,26 +90,48 @@ def encrypt_for_peer(peer_id: str, plaintext: str) -> dict | None:
     return crypto.encrypt_message(plaintext.encode("utf-8"), x25519_pub, fp)
 
 
+def build_task_payload(task_id: str, content: str) -> str:
+    """Build a JSON payload for task delegation messages."""
+    return json.dumps({"type": "task", "taskId": task_id, "content": content}, ensure_ascii=False)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Encrypt a message for a peer.")
     parser.add_argument("--peer-id", required=True, help="Peer ID to send to")
     parser.add_argument("--encrypt", metavar="TEXT", help="Plaintext message to encrypt and print")
     parser.add_argument("--send", metavar="TEXT", help="Encrypt and send immediately (encrypt + POST)")
     parser.add_argument("--session-key", action="store_true", help="Print peer's session key instead")
+    parser.add_argument("--task-id", metavar="UUID", help="Task ID (creates task-type message payload)")
+    parser.add_argument("--task-content", metavar="TEXT", help="Task content (used with --task-id)")
     args = parser.parse_args()
+
+    # Determine plaintext: if --task-id given, build JSON payload
+    task_mode = args.task_id is not None
+    if task_mode and args.task_content is None:
+        print("ERROR: --task-id requires --task-content", file=sys.stderr)
+        sys.exit(1)
+
+    def resolve_plaintext(text: str | None) -> str | None:
+        if text is None:
+            return None
+        if task_mode:
+            return build_task_payload(args.task_id, text)
+        return text
 
     if args.session_key:
         key = resolve_session_key(args.peer_id)
         if key:
             print(key)
     elif args.send:
-        enc = encrypt_for_peer(args.peer_id, args.send)
+        plaintext = resolve_plaintext(args.send)
+        enc = encrypt_for_peer(args.peer_id, plaintext)
         if enc:
             msg_id = post_to_peer(args.peer_id, enc)
             if msg_id:
                 print(f"Message sent to {args.peer_id}: {msg_id}")
     elif args.encrypt:
-        enc = encrypt_for_peer(args.peer_id, args.encrypt)
+        plaintext = resolve_plaintext(args.encrypt)
+        enc = encrypt_for_peer(args.peer_id, plaintext)
         if enc:
             print(json.dumps(enc, indent=2))
     else:

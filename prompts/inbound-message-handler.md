@@ -25,6 +25,16 @@ python3 receive_and_process.py
 
 看到 `"empty": true` 或 `"replay": true` → 直接结束，无需处理。
 
+## 1.x：处理 task 类型消息
+
+当 `msg_type` 为 `"task"` 时：
+
+1. 解析 `decrypted` JSON：`{"type":"task","taskId":"...","content":"..."}`
+2. 执行任务（根据 `content` 中的描述执行对应操作）
+3. 发送回复：`type="ack"`，`content="任务已收到"`
+4. **不通知 Bill**
+5. 结束流程
+
 ## 2. 查询 KG 路由策略
 
 ```bash
