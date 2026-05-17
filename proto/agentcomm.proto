@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package agentcomm;
+
+option go_package = "github.com/nousresearch/hermes-agent/agent-comm/proto";
+
+// 通用信封，所有消息都封装在此结构中
+message Envelope {
+    string version = 1;           // "1.0.0"
+    string id = 2;                 // 消息唯一 ID (UUIDv4)
+    string from = 3;               // 发送方 URN
+    string to = 4;                 // 接收方 URN
+    string type = 5;               // request | notification | ack | task_result | unknown
+    int64 timestamp = 6;           // Unix 秒时间戳
+    bytes ephemeral_public_key = 7; // 临时 X25519 公钥（用于 ECIES）
+    bytes nonce = 8;               // AES-GCM nonce (12 bytes)
+    bytes ciphertext = 9;          // 加密内容
+    bytes tag = 10;                // GCM 认证标签 (16 bytes)
+    string aad = 11;               // Additional Auth Data (发送方 fingerprint)
+}
+
+// Contact JSON 对应的 Protobuf 结构
+message Contact {
+    string version = 1;            // "1.0"
+    string urn = 2;                 // URN: urn:hermes:agent:<fingerprint>
+    string fingerprint = 3;        // Base58(SHA256(Ed25519PubKey))[:16]
+    string peer_id = 4;            // libp2p PeerID (base58 encoded)
+    bytes public_key = 5;          // Ed25519 公钥 (32 bytes)
+    bytes x25519_public_key = 6;   // X25519 公钥 (32 bytes)
+    repeated string addrs = 7;     // 可访问的网络地址列表
+    repeated string relay_addrs = 8; // 中继地址列表
+    bytes signature = 9;           // Ed25519 签名
+    string token = 10;             // 一次性 Token (32 bytes, hex encoded)
+    int64 token_ttl = 11;           // Token 有效期（秒）
+    int64 issued_at = 12;          // 发布时间戳
+}
+
+// 中继节点存储的离线消息元数据
+message StoredMessageMeta {
+    string id = 1;                  // 消息 ID
+    string from_urn = 2;            // 发送方 URN
+    string to_urn = 3;              // 接收方 URN
+    int64 ts = 4;                   // 发送时间戳
+    int64 ttl = 5;                  // 剩余 TTL（秒）
+    string msg_type = 6;            // 消息类型
+    bytes iv = 7;                   // GCM nonce (用于解密校验)
+}
+
+// 消息列表响应（不返回内容）
+message PendingMessages {
+    repeated StoredMessageMeta messages = 1;
+}
+
+// DHT 注册记录
+message DHTRecord {
+    string urn = 1;
+    string peer_id = 2;
+    repeated string addrs = 3;
+    repeated string relay_addrs = 4;
+    int64 ts = 5;                  // 注册时间戳
+}
+
+// WoT 签名记录
+message WOTRecord {
+    string signer_urn = 1;         // 签名者 URN
+    string subject_urn = 2;        // 被签名者 URN
+    string trust_level = 3;        // high | medium | low
+    bytes signature = 4;           // Ed25519 签名
+    int64 ts = 5;                  // 签名时间戳
+}
+
+// libp2p 流处理的请求/响应包装
+message StreamMessage {
+    oneof payload {
+        Envelope envelope = 1;
+        RelayStoreRequest relay_request = 2;
+        RelayStoreResponse relay_response = 3;
+    }
+}
+
+// 中继存储请求
+message RelayStoreRequest {
+    string type = 1;              // store | list_pending | get_message | ack | revoke
+    string to_urn = 2;             // 目标接收方 URN（用于 list_pending）
+    string message_id = 3;        // 消息 ID（用于 get_message / ack）
+    bytes encrypted_payload = 4;  // 加密内容（用于 store）
+    StoredMessageMeta meta = 5;    // 元数据（用于 store）
+}
+
+// 中继存储响应
+message RelayStoreResponse {
+    bool success = 1;
+    string error = 2;
+    string message_id = 3;        // 存储成功后返回的 ID
+    repeated StoredMessageMeta pending = 4; // list_pending 返回的列表
+    bytes encrypted_payload = 5;  // get_message 返回的加密内容
+}

@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "github.com/nousresearch/hermes-agent/agent-comm/proto";
+
+// EncryptedEnvelope — wire format for agent-comm messages.
+// End-to-end encrypted payload only readable by recipient.
+message EncryptedEnvelope {
+  string sender_urn = 1;              // Sender's URN (for reply routing)
+  bytes sender_static_pubkey = 2;     // X25519 static public key (32 bytes) — for ECDH reply
+  bytes ephemeral_pubkey = 3;         // HKDF-derived 32-byte value from shared secret
+  bytes nonce = 4;                    // AES-GCM nonce (12 bytes)
+  bytes ciphertext = 5;               // Encrypted payload
+  bytes tag = 6;                      // GCM auth tag (16 bytes)
+  string message_id = 7;              // Unique message ID for deduplication
+}
+
+message TextMessage {
+  string text = 1;
+  int64 timestamp = 2;
+}
+
+message ChatMessage {
+  oneof body {
+    TextMessage text = 1;
+    bytes raw = 99;
+  }
+}

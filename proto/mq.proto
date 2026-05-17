@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "github.com/nousresearch/hermes-agent/agent-comm/proto";
+
+import "proto/envelope.proto";
+
+message MQRequest {
+  oneof op {
+    StoreRequest store = 1;
+    RetrieveRequest retrieve = 2;
+    AckRequest ack = 3;
+  }
+}
+
+message StoreRequest {
+  string recipient_urn = 1;
+  EncryptedEnvelope payload = 2;  // Encrypted message blob (relay cannot read)
+  int64 expiry_unix = 3;          // TTL: relay deletes after this Unix timestamp (0 = no expiry)
+}
+
+message RetrieveRequest {
+  string recipient_urn = 1;
+}
+
+message AckRequest {
+  repeated string message_ids = 1;  // Delete these after client processes them
+}
+
+message MQResponse {
+  oneof op {
+    StoreResponse store = 1;
+    RetrieveResponse retrieve = 2;
+    AckResponse ack = 3;
+    ErrorResponse error = 4;
+  }
+}
+
+message StoreResponse {
+  bool ok = 1;
+  string message_id = 2;  // Assigned by relay
+}
+
+message RetrieveResponse {
+  repeated EncryptedEnvelope payloads = 1;  // Oldest first
+}
+
+message AckResponse {
+  bool ok = 1;
+  int32 deleted_count = 2;
+}
+
+message ErrorResponse {
+  string message = 1;
+}

@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "github.com/nousresearch/hermes-agent/agent-comm/proto";
+
+enum TrustLevel {
+  UNKNOWN = 0;
+  TRUSTED = 1;
+  UNTRUSTED = 2;
+}
+
+// A signed claim that issuer vouches for subject's identity.
+// The signature is over SHA256(issuer_urn || subject_urn || subject_peer_id || subject_x25519_pk || level || issued_at).
+message TrustClaim {
+  string issuer_urn = 1;          // Who made this claim (e.g., "urn:hermes:agent:Charlie")
+  string subject_urn = 2;          // Who is being claimed about (e.g., "urn:hermes:agent:Alice")
+  string subject_peer_id = 3;      // Subject's libp2p PeerID (e.g., "12D3KooW...")
+  bytes  subject_x25519_pk = 4;   // Subject's X25519 static public key (32 bytes)
+  TrustLevel level = 5;           // TRUSTED, UNTRUSTED, or UNKNOWN
+  bytes  issuer_signature = 6;    // Ed25519 signature over the claim body
+  int64  issued_at_unix = 7;      // Unix timestamp
+}
+
+// WOT operation: query all claims known about a given subject URN.
+message WOTQuery {
+  string subject_urn = 1;
+}
+
+// Response: all claims about the target URN known by this node.
+message WOTResponse {
+  repeated TrustClaim claims = 1;
+}
+
+// Generic WOT request wrapper.
+message WOTRequest {
+  oneof op {
+    WOTQuery query = 1;
+    // Future: WOTPublish to gossip claims on the network
+  }
+}
+
+message WOTResponseWrapper {
+  WOTResponse response = 1;
+}

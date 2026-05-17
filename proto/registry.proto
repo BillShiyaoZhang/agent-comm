@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "github.com/nousresearch/hermes-agent/agent-comm/proto";
+
+import "proto/envelope.proto";
+
+message URNRegistryRequest {
+  oneof op {
+    RegisterRequest register = 1;
+    ResolveRequest resolve = 2;
+  }
+}
+
+message RegisterRequest {
+  string urn = 1;
+  string peer_id = 2;
+  repeated string addrs = 3;
+  bytes x25519_pubkey = 4;  // X25519 public key for ECIES encryption
+}
+
+message ResolveRequest {
+  string urn = 1;
+}
+
+message URNRegistryResponse {
+  oneof op {
+    RegisterResponse register = 1;
+    ResolveResponse resolve = 2;
+  }
+}
+
+message RegisterResponse {
+  bool ok = 1;
+  string info = 2;
+}
+
+message ResolveResponse {
+  bool found = 1;
+  string peer_id = 2;
+  repeated string addrs = 3;
+  bytes x25519_pubkey = 4;  // X25519 public key for ECIES encryption
+}
+
+// EncryptedEnvelope is imported from envelope.proto and reused here
+// so registry.proto definitions are self-contained for protocol definitions.
