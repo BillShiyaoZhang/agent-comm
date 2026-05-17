@@ -1,769 +1,322 @@
-# agent-comm — Technical Reference
+# agent-comm 教程
 
-P2P encrypted messaging for AI agents. Project: `~/.hermes/agent-comm/`
-
----
-
-## Table of Contents
-
-1. [Session](#session) — ECIES-encrypted peer-to-peer message exchange
-2. [Registry](#registry) — URN → PeerID/Addrs resolution
-3. [MQ](#mq) — Async message queue via relay nodes
-4. [libp2p](#libp2p) — Host creation and network transport
-5. [Crypto](#crypto) — Key management and ECIES encryption
-6. [Setup Guide](#setup-guide) — Getting started
+> 上手指南、背景知识、代码导读 —— 面向有计算机基础的本科生
 
 ---
 
-## Session
-
-**File:** `session/session.go`  
-**Protocol ID:** `/hermes/agent-comm/session/1.0.0`
-
-### Overview
-
-The session package provides encrypted peer-to-peer message exchange over libp2p streams. It uses ECIES (Elliptic Curve Integrated Encryption Scheme) with X25519 ECDH for key exchange, HKDF-SHA256 for key derivation, and AES-256-GCM for authenticated encryption.
-
-### Manager
-
-```go
-type Manager struct {
-    host          host.Host
-    ecies         *crypto.ECIES
-    keys          *crypto.IdentityKeys
-    peerX25519PK  map[peer.ID][]byte  // cache of known peer X25519 PKs
-}
-```
-
-### Key Methods
-
-| Method | Description |
-|--------|-------------|
-| `NewManager(h host.Host, keys *crypto.IdentityKeys)` | Creates a new session manager |
-| `SendMessage(ctx, target, recipientPubKey, plaintext)` | Opens stream, sends encrypted message, waits for encrypted reply |
-| `SendReply(stream, recipientStaticPubKey, recipientURN, plaintext)` | Encrypts and sends reply over existing stream |
-| `BuildEnvelope(recipientPubKey, plaintext)` | Builds encrypted envelope without sending (for MQ storage) |
-| `DecryptEnvelope(env)` | Decrypts an `EncryptedEnvelope` |
-| `PublicKey()` | Returns node's X25519 public key |
-| `SetPeerX25519PK(p peer.ID, pk []byte)` | Caches peer's X25519 PK for later use |
-| `PeerStaticX25519PK(p peer.ID)` | Retrieves cached peer's X25519 PK |
-| `Ecies()` | Returns the underlying ECIES instance |
-
-### Encryption Flow
+## 文档导航
 
 ```
-Sender:
-  1. ECDH(sender_SK, recipient_PK) → shared_secret
-  2. HKDF(shared_secret, "agent-comm-ephemeral-v1") → ephemeral (32 bytes, deterministic)
-  3. HKDF(shared_secret, ephemeral) → encKey (32 bytes)
-  4. AES-GCM(encKey, nonce, payload, AAD=ProtoAAD) → ciphertext+tag
-
-Recipient:
-  1. ECDH(recipient_SK, sender_PK) → same shared_secret
-  2. Re-derive ephemeral (deterministic, no transmission needed)
-  3. Re-derive encKey
-  4. AES-GCM-Decrypt(encKey, ciphertext, nonce, tag, AAD=ProtoAAD)
-```
-
-### Envelope Fields
-
-```protobuf
-message EncryptedEnvelope {
-    string sender_urn = 1;
-    bytes sender_static_pubkey = 2;   // X25519 static public key (32 bytes)
-    bytes ephemeral_pubkey = 3;       // HKDF-derived (32 bytes)
-    bytes nonce = 4;                  // AES-GCM nonce (12 bytes)
-    bytes ciphertext = 5;
-    bytes tag = 6;                    // GCM auth tag (16 bytes)
-    string message_id = 7;
-}
-```
-
-### AAD Constant
-
-```go
-const ProtoAAD = "agent-comm-v1"
-```
-
-AAD is computed as `SHA256("agent-comm-v1")[:16]`. **Never use PeerID or URN as AAD** — using a protocol-level constant avoids derivation mismatches between parties.
-
-### Gotchas
-
-1. **`mgr` must be created BEFORE `SetPeerX25519PK`**:
-   ```go
-   mgrB := session.NewManager(hostB, keysB)
-   mgrB.SetPeerX25519PK(aPeerID, aX25519PK) // ✅ correct order
-   ```
-
-2. **Simplex EOF is normal** — each message is a new stream; `io.EOF` on response read is expected when no reply is needed.
-
-3. **DR responder needs sender's X25519 PK** — `Receive()` looks up sender's PK via `mgr.PeerStaticX25519PK(senderPeerID)`. Cache it before the DR handler fires.
-
----
-
-## Registry
-
-**Files:** `registry/client.go`, `registry/server.go`  
-**Protocol ID:** `/hermes/agent-comm/registry/1.0.0`
-
-### Overview
-
-The registry provides URN → PeerID/Addrs resolution via libp2p streams. When a node joins the network, it registers its URN with a registry server (typically the bootstrap node). Other nodes can then resolve a URN to get the peer's PeerID, listen addresses, and X25519 public key for ECIES encryption.
-
-### Client
-
-```go
-type Client struct {
-    host host.Host
-}
-```
-
-#### Methods
-
-| Method | Description |
-|--------|-------------|
-| `NewClient(h host.Host)` | Creates a new registry client |
-| `Resolve(target peer.AddrInfo, urn string)` | Resolves a URN to PeerID, addrs, and X25519 pubkey |
-| `Register(target peer.AddrInfo, urn string, addrs []multiaddr.Multiaddr, x25519PubKey []byte)` | Registers this node's URN mapping |
-
-#### Resolve Result
-
-```go
-type ResolveResult struct {
-    peer.AddrInfo       // ID + Addrs
-    X25519PubKey []byte // X25519 public key for ECIES (nil if not registered)
-}
-```
-
-### Server
-
-```go
-type Server struct {
-    host  host.Host
-    mu    sync.RWMutex
-    账册  map[string]RegistryEntry  // in-memory URN → entry mapping
-}
-
-type RegistryEntry struct {
-    Info        peer.AddrInfo  // PeerID + addrs
-    X25519PubKey []byte        // X25519 public key for ECIES
-}
-```
-
-#### Methods
-
-| Method | Description |
-|--------|-------------|
-| `NewServer(h host.Host)` | Creates a new registry server |
-| `HandleStream(stream)` | Services a registry request over a libp2p stream |
-| `HandleRegister(urn, pid, addrs, x25519PubKey)` | Registers a URN mapping locally (used by bootstrap node) |
-| `ListURNs()` | Returns all registered URNs |
-| `Register()` | Sets the stream handler on the host |
-
-### Protocol Flow
-
-```
-Client                              Server
-   │── URNRegistryRequest(register) ──→  │
-   │←─ URNRegistryResponse(ok) ─────────── │
-
-Client                              Server
-   │── URNRegistryRequest(resolve) ───→    │
-   │←─ URNRegistryResponse(found) ───────── │
-```
-
-### Protocol Buffer Messages
-
-```protobuf
-message URNRegistryRequest {
-    oneof op {
-        RegisterRequest register = 1;
-        ResolveRequest resolve = 2;
-    }
-}
-
-message RegisterRequest {
-    string urn = 1;
-    string peer_id = 2;
-    repeated string addrs = 3;
-    bytes x25519_pubkey = 4;
-}
-
-message ResolveRequest {
-    string urn = 1;
-}
-
-message URNRegistryResponse {
-    oneof op {
-        RegisterResponse register = 1;
-        ResolveResponse resolve = 2;
-    }
-}
-
-message RegisterResponse {
-    bool ok = 1;
-    string info = 2;  // error info if !ok
-}
-
-message ResolveResponse {
-    bool found = 1;
-    string peer_id = 2;
-    repeated string addrs = 3;
-    bytes x25519_pubkey = 4;
-}
+OVERVIEW.md      → 问题与思路（先读这个）
+SPEC.md          → 各 Phase 的技术规格
+README.md        → 快速参考（测试命令、目录结构）
+SKILL.md         → agent 专用快速参考
+──────────────────────────────────────────
+docs/TUTORIAL.md ← 你在这里：背景知识 + 上手指南 + Phase 详解
+docs/DR-CODE-COMMENTARY.md → DR 代码逐文件注解
 ```
 
 ---
 
-## MQ
+## 1. 导言
 
-**Files:** `mq/client.go`, `mq/server.go`  
-**Protocol ID:** `/hermes/agent-comm/mq/1.0.0`
+这个项目解决一个问题：**两个在不同机器上的 AI agent，如何在没有中心化服务器的前提下，安全地找到对方并加密通信？**
 
-### Overview
+这不是"加密传输"的问题——TLS 可以加密，但依赖 CA，服务器能看到明文。这也不是"用 Signal"的问题——Signal 需要手机号，身份是中心化的。
 
-The MQ (Message Queue) package provides async offline message storage via relay nodes. When a recipient is offline, a sender can store an encrypted message blob on a relay. The relay cannot read the content — only the intended recipient can decrypt it with their X25519 private key.
-
-Messages are stored in SQLite on the relay, keyed by recipient URN. Each message has an expiry timestamp; relay auto-deletes expired messages.
-
-### Client
-
-```go
-type Client struct {
-    host host.Host
-}
-```
-
-#### Methods
-
-| Method | Description |
-|--------|-------------|
-| `NewClient(h host.Host)` | Creates a new MQ client |
-| `Store(ctx, relay, recipientURN, envelope, ttlDays)` | Stores encrypted envelope on relay; returns message ID |
-| `Retrieve(ctx, relay, recipientURN)` | Fetches all pending messages for recipient |
-| `Ack(ctx, relay, messageIDs)` | Deletes successfully processed messages from relay |
-
-### Server (Relay)
-
-```go
-type Server struct {
-    host host.Host
-    db   *sql.DB
-}
-```
-
-#### Constructor
-
-```go
-func NewServer(h host.Host, dbPath string) (*Server, error)
-```
-
-- Creates SQLite database at `dbPath`
-- Registers stream handler on `/hermes/agent-comm/mq/1.0.0`
-- Starts background expiry cleanup loop (every 5 minutes)
-
-#### Methods
-
-| Method | Description |
-|--------|-------------|
-| `Close()` | Closes the SQLite database |
-
-### SQLite Schema
-
-```sql
-CREATE TABLE messages (
-    id         TEXT PRIMARY KEY,
-    recipient  TEXT NOT NULL,     -- URN
-    payload    BLOB NOT NULL,     -- EncryptedEnvelope bytes
-    expiry     INTEGER NOT NULL,   -- Unix timestamp (0 = never expires)
-    stored_at  INTEGER NOT NULL   -- Unix timestamp
-);
-CREATE INDEX idx_recipient ON messages(recipient);
-CREATE INDEX idx_expiry ON messages(expiry);
-```
-
-### Protocol Flow
-
-```
-Sender ──→ Relay (store) ──→ Recipient (online later)
-                     └── SQLite: urn → [encrypted_envelope, msg_id, expiry]
-
-Recipient ──→ Relay (retrieve) ──→ Retrieve pending messages
-Recipient ──→ Relay (ack)  ──→ Delete read messages
-```
-
-### Protocol Buffer Messages
-
-```protobuf
-message MQRequest {
-    oneof op {
-        StoreRequest store = 1;
-        RetrieveRequest retrieve = 2;
-        AckRequest ack = 3;
-    }
-}
-
-message StoreRequest {
-    string recipient_urn = 1;
-    EncryptedEnvelope payload = 2;  // The encrypted message blob
-    int64 expiry_unix = 3;          // TTL, 0 = relay default (7 days)
-}
-
-message RetrieveRequest {
-    string recipient_urn = 1;
-}
-
-message AckRequest {
-    repeated string message_ids = 1;
-}
-
-message MQResponse {
-    oneof op {
-        StoreResponse store = 1;
-        RetrieveResponse retrieve = 2;
-        AckResponse ack = 3;
-        ErrorResponse error = 4;
-    }
-}
-
-message StoreResponse {
-    bool ok = 1;
-    string message_id = 2;
-}
-
-message RetrieveResponse {
-    repeated EncryptedEnvelope payloads = 1;
-}
-
-message AckResponse {
-    bool ok = 1;
-    int32 deleted_count = 2;
-}
-
-message ErrorResponse {
-    string message = 1;
-}
-```
-
-### End-to-End Flow
-
-1. **B → A (A online):** Direct session via libp2p stream, ECIES encrypted, reply encrypted
-2. **B → A (A offline):** B builds `EncryptedEnvelope`, calls `MQ.Store`, relay stores blob
-3. **A comes online:** A calls `MQ.Retrieve`, decrypts each envelope using session.Manager, acks deletion
+agent-comm 的目标：
+- **没有中心化的消息路由服务器**（用 DHT 分布式查找）
+- **没有中心化的消息存储服务器**（用加密 blob + relay）
+- **没有中心化的身份系统**（用自证明身份：公钥即身份）
+- **端到端加密**，Relay 只能存密文，不知道内容
+- **前向保密**（Double Ratchet）
 
 ---
 
-## libp2p
+## 2. 背景知识
 
-**File:** `libp2p/host.go`
+### 2.1 libp2p 是什么
 
-### Overview
+libp2p 是一个 P2P 网络库，最初为 IPFS 项目开发，现在独立通用。它解决的问题是：**进程之间如何通过 IP 网络建立连接并通信**，包括：
 
-The libp2p package handles network transport layer creation and configuration for agent-comm. It wraps `github.com/libp2p/go-libp2p` with sensible defaults for peer-to-peer messaging.
+- **节点发现**：通过 DHT 找到其他节点的地址
+- **NAT 穿透**：两个节点都在私有网络里如何建立直接连接（Relay v2）
+- **协议协商**：两个节点如何协商使用哪个加密/路由协议
+- **多传输协议**：同时支持 TCP、QUIC、WebRTC 等
 
-### Config
+在 agent-comm 中，libp2p 提供了底层的"打电话"能力——两个节点通过它建立点对点连接，在此之上我们跑自己的协议。
 
-```go
-type Config struct {
-    ListenAddrs   []string   // Multiaddr strings to listen on
-    EnableRelay   bool       // Enable Circuit Relay
-    EnableDHT     bool       // Enable Kad-DHT (Phase 2)
-    PrivKeyBytes  []byte     // Ed25519 private key bytes (for persistent identity)
-    ProtocolID    string     // Base protocol ID
-    ResourceConns int        // Max concurrent connections
-}
-```
+### 2.2 DHT（分布式哈希表）
 
-### Default Config
+DHT 是一个分布式数据库，把 (key, value) 对存在很多节点上，查找时通过分布式算法找到持有对应 key 的节点。
 
-```go
-func DefaultConfig() Config {
-    return Config{
-        ListenAddrs: []string{
-            "/ip4/0.0.0.0/tcp/0",
-            "/ip4/0.0.0.0/udp/0/quic",
-        },
-        EnableRelay:   true,
-        EnableDHT:     false,
-        ProtocolID:    "/hermes/agent-comm/1.0.0",
-        ResourceConns: 64,
-    }
-}
-```
+Kademlia 是最常见的 DHT 实现，核心思想是：**节点 ID 和数据的 key 用同样的格式，距离远的节点更可能持有这个 key**。查找时每次迭代都找更近的节点，直到找到。
 
-### Host Creation
+在 agent-comm 中，DHT 存储 `URN → PeerID + 地址` 的映射。URN 是身份，PeerID 是 libp2p 网络地址。没有中心化的"通讯录服务器"，每个节点都帮忙存一部分。
 
-```go
-func NewHost(cfg Config) (host.Host, error)
-```
+### 2.3 X25519/ECIES/公钥加密
 
-- If `PrivKeyBytes` is provided, uses it for identity (enabling persistence)
-- Otherwise generates a new random identity
-- Enables NAT service detection
+**X25519**：Curve25519 椭圆曲线 Diffie-Hellman（ECDH）密钥交换。两个人各有一个私钥（随机数）和公钥（私钥 × 基点）。双方用对方的公钥和自己的私钥算出同一个共享secret——即使第三方截获了所有公钥，也无法算出这个共享 secret。
 
-### Utility Functions
+**ECIES**（Elliptic Curve Integrated Encryption Scheme）：在 X25519 共享secret 的基础上，再做一层密钥派生和对称加密：
+1. ECDH → shared_secret
+2. HKDF（RFC 5869）：从 shared_secret 派生出一个对称密钥 encKey
+3. AES-GCM：用 encKey 加密消息，同时提供认证（防篡改）
 
-| Function | Description |
-|----------|-------------|
-| `ConnectToPeer(ctx, h, addr)` | Establishes connection to peer by address string |
-| `GetPeerID(h)` | Returns host's peer ID as base58 string |
-| `GetPeerAddrs(h)` | Returns all addresses in `/ip4/x.x.x.x/tcp/y/p2p/PeerID` format |
-| `AddrsWithID(h)` | Alias for `GetPeerAddrs` |
-| `CloseHost(h)` | Gracefully closes the host |
-| `ProtocolIDForTopic(topic)` | Returns full protocol ID for a topic |
+### 2.4 HKDF（密钥派生函数）
 
-### Address Format
+HKDF 是一个从"原始密钥材料"派生出多个"安全密钥"的函数，防止密钥被重复使用导致泄露。
 
-Peer addresses use the format: `/ip4/x.x.x.x/tcp/y/p2p/PeerID`
+HKDF-SHA256(input, info) → 固定长度的伪随机密钥。"info"参数用来区分不同的派生目的——同样的 input 派生不同的 key 时用不同的 info。
 
-Example:
-```
-/ip4/192.168.1.100/tcp/5001/p2p/12D3KooWBdmrNJr6jWGW6d4m7bP6xK5YmK3example1Q9Xw1XYvY5
-```
+### 2.5 AES-GCM-SIV（认证加密）
 
-### Connection with Timeout
+AES-GCM 是一个 AEAD（Authenticated Encryption with Associated Data）算法：
+- 加密：给定密钥 + 明文 + nonce → 密文
+- 认证：给定密文 + nonce + tag，验证没有被篡改
+- AAD（Additional Authenticated Data）：不需要加密，但要一起认证的数据
 
-`ConnectToPeer` uses a 30-second connection timeout.
+"GCM-SIV"是 GCM 的一个变种，对 nonce-misuse 更容忍。
+
+### 2.6 Double Ratchet（前向保密）
+
+**问题**：ECIES 用了临时密钥对，但这个临时密钥是"每次会话"新建，不是"每条消息"。如果攻击者在某次会话后偷到了你的私钥，所有会话都能被解密。
+
+**解决方案**：Signal Protocol（Double Ratchet）。核心思想：
+- 每条消息从一个 chain key 派生 message key
+- 发完一条消息后，chain key 就被删除（ratchet step）
+- 同时定期做 DH ratchet step，换新的 DH 密钥对
+- 这样即使泄露一条消息的密钥，其他消息的密钥依然安全
+
+### 2.7 URN（自证明身份）
+
+URN（Uniform Resource Name）格式：`urn:hermes:agent:<base58(SHA256(pubkey)[:16])>`
+
+原理：Ed25519 公钥的 SHA256 哈希前 16 字节用 base58 编码，就是你的 URN。知道 URN 就等于知道公钥（单向函数），用对应私钥签名就能证明身份。没有 CA，没有手机号，公钥即身份。
 
 ---
 
-## Crypto
-
-**Files:** `crypto/ecies.go`, `crypto/keys.go`
-
-### Overview
-
-The crypto package provides:
-- **ECIES encryption:** X25519 ECDH + HKDF-SHA256 + AES-256-GCM
-- **Key management:** Ed25519 identity keys + X25519 encryption keys
-- **Identity derivation:** URN and PeerID from Ed25519 public key
-
-### ECIES Encryption
-
-**File:** `crypto/ecies.go`
-
-#### Constants
-
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `NonceSize` | 12 bytes | AES-GCM nonce size |
-| `TagSize` | 16 bytes | GCM authentication tag size |
-| `KeySize` | 32 bytes | AES-256 key size |
-
-#### Key Generation
-
-```go
-func (e *ECIES) GenerateKeyPair() ([]byte, []byte, error)
-```
-
-Generates a new X25519 key pair (32-byte private key, 32-byte public key). Private key is clamped for X25519 compatibility.
-
-#### Shared Secret Computation
-
-```go
-func (e *ECIES) ComputeSharedSecret(privateKey, publicKey []byte) ([]byte, error)
-```
-
-Performs X25519 ECDH. Returns 32-byte shared secret. Checks for low-order point attack (shared secret == 0).
-
-#### Key Derivation
-
-```go
-func (e *ECIES) DeriveKeys(sharedSecret, info []byte) ([]byte, error)
-```
-
-HKDF-SHA256 key derivation. Derives a 32-byte encryption key from shared secret and info string.
-
-#### Encrypt/Decrypt with Shared Secret
-
-```go
-func (e *ECIES) EncryptWithSharedSecret(sharedSecret, plaintext, aad []byte) (
-    ephemeral, nonce, ciphertext, tag []byte, error)
-
-func (e *ECIES) DecryptWithSharedSecret(
-    sharedSecret, senderEphemeral, nonce, ciphertext, tag, aad []byte,
-) ([]byte, error)
-```
-
-- **Ephemeral** is derived deterministically from shared secret via `HKDF(sharedSecret, "agent-comm-ephemeral-v1")`
-- Recipient can re-derive ephemeral without it being transmitted
-- **AAD** (Additional Authenticated Data) provides authenticity guarantee
-
-#### Standard Encrypt/Decrypt
-
-```go
-func (e *ECIES) Encrypt(recipientStaticPublicKey, plaintext, aad []byte) (...)
-
-func (e *ECIES) Decrypt(staticPrivateKey, senderEphemeralPublicKey, nonce, ciphertext, tag, aad []byte) ([]byte, error)
-```
-
-Generates ephemeral key pair internally. Computes ECDH between ephemeral private and recipient static public key.
-
-#### Helper Functions
-
-```go
-func (e *ECIES) DeriveEphemeral(sharedSecret []byte) ([]byte, error)
-// Re-derives the same ephemeral that EncryptWithSharedSecret derives
-
-func EncodeToBase64(data []byte) string
-func DecodeFromBase64(s string) ([]byte, error)
-```
-
-### Identity Keys
-
-**File:** `crypto/keys.go`
-
-#### IdentityKeyPair
-
-```go
-type IdentityKeyPair struct {
-    PrivateKey ed25519.PrivateKey
-    PublicKey  ed25519.PublicKey
-}
-```
-
-| Method | Description |
-|--------|-------------|
-| `GenerateIdentityKeyPair()` | Creates new Ed25519 key pair |
-| `Fingerprint()` | Returns `base58(SHA256(pubkey)[:16])` |
-| `URN()` | Returns `urn:hermes:agent:<fingerprint>` |
-| `PeerID()` | Derives libp2p PeerID from Ed25519 public key |
-| `Sign(data)` | Signs data with Ed25519 private key |
-| `Verify(data, sig)` | Verifies Ed25519 signature |
-| `SavePrivatePEM(path)` | Saves private key as PEM file (mode 0600) |
-| `SavePublicPEM(path)` | Saves public key as PEM file (mode 0644) |
-
-#### IdentityKeys
-
-```go
-type IdentityKeys struct {
-    Ed25519    *IdentityKeyPair
-    X25519SK   []byte  // X25519 static private key (32 bytes)
-    X25519PK   []byte  // X25519 static public key (32 bytes)
-    KeysDir    string  // Directory where keys are stored
-}
-```
-
-| Function | Description |
-|----------|-------------|
-| `LoadOrCreateIdentity(keysDir)` | Loads existing keys or creates new ones |
-| `DefaultKeysDir()` | Returns `~/.hermes/agent-comm/contacts` |
-| `EnsureKeysDir()` | Creates keys directory if not exists |
-
-Key file names in `KeysDir`:
-- `identity_sk.pem` — Ed25519 private key
-- `identity_pk.pem` — Ed25519 public key
-- `identity_x25519_sk.pem` — X25519 private key
-- `identity_x25519_pk.pem` — X25519 public key
-
-### Key Loading
-
-```go
-LoadPrivatePEM(path string) (*IdentityKeyPair, error)
-LoadPublicPEM(path string) (ed25519.PublicKey, error)
-LoadX25519PrivatePEM(path string) ([]byte, error)
-LoadX25519PublicPEM(path string) ([]byte, error)
-```
-
-PEM files use `PRIVATE KEY` / `PUBLIC KEY` block type.
-
-### URN Format
+## 3. 项目架构
 
 ```
-urn:hermes:agent:<base58(SHA256(ed25519_pubkey)[:16])>
-```
-
-Examples:
-- Ed25519 pubkey fingerprint: `base58(SHA256(pubkey)[:16])` — 16 bytes → ~22 char base58 string
-- URN: `urn:hermes:agent:8jKk7xWk9Y7JpQr3nV6m`
-
-### Token
-
-```go
-type Token struct {
-    Value     string  // 256-bit random hex string
-    ExpiresAt int64   // Unix timestamp
-    Used      bool
-}
-
-func GenerateToken() (string, error)
-```
-
-One-time tokens for contact exchange (prevents contact reuse).
-
-### Message ID Generation
-
-```go
-func GenerateMessageID() string
-// Returns: "msg_" + uuid_v4
+┌──────────────────────────────────────────────────────────────┐
+│  Phase 1: libp2p 传输层                                        │
+│  TCP/QUIC + Relay v2（NAT 穿透）+ AutoNAT                     │
+├──────────────────────────────────────────────────────────────┤
+│  Phase 2: 身份与注册层                                         │
+│  Ed25519 身份密钥 → URN (自证明)                              │
+│  DHT 存储 URN → PeerID + X25519PK                            │
+│  Registry 协议：/hermes/agent-comm/registry/1.0.0            │
+├──────────────────────────────────────────────────────────────┤
+│  Phase 2: 加密会话层                                          │
+│  X25519 ECDH + HKDF + AES-GCM-SIV → ECIES                    │
+│  Session 协议：/hermes/agent-comm/session/1.0.0              │
+├──────────────────────────────────────────────────────────────┤
+│  Phase 4b: Double Ratchet（替代 ECIES 做消息加密）            │
+│  DR 协议：/agent/dr/1.0.0                                    │
+│  前向保密：每条消息用不同的 message key                       │
+├──────────────────────────────────────────────────────────────┤
+│  Phase 3: 离线存储层                                          │
+│  Relay 节点存储加密 blob，接收方上线后拉取                    │
+│  MQ 协议：/hermes/agent-comm/mq/1.0.0                        │
+├──────────────────────────────────────────────────────────────┤
+│  Phase 5: 存储层（Double Ratchet 状态持久化）                  │
+│  SQLite：每个 peer 一个 RatchetState                         │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Setup Guide
+## 4. Phase 详解
 
-### Prerequisites
+### Phase 1: 传输层（libp2p Host）
 
-- **Go 1.25.10** (binary: `~/.local/go/bin/go`)
-- **libp2p v0.36+**
-- **WSL/Linux** environment
+**目的**：让两个节点能互相发现并建立网络连接。
 
-### Project Location
+**做了什么**：
+- `libp2p.NewHost(cfg)` 创建一个 libp2p 节点
+- 同时监听 TCP 和 QUIC
+- 开启 Relay v2：让两个都在 NAT 后面的节点能通过 relay 中继建立连接
+- 开启 AutoNAT：让节点能判断自己是否可达
 
+**核心文件**：`libp2p/host.go`
+
+### Phase 2: 身份与注册（DHT + Registry）
+
+**身份密钥**（`crypto/keys.go`）：
+- Ed25519 密钥对：用于签名、PeerID 派生、URN 生成
+- X25519 密钥对：用于 ECIES 加密
+- 两种密钥分开：身份密钥几乎不用，ECIES 密钥频繁使用，分开减少暴露风险
+
+**URN 系统**：`urn:hermes:agent:<base58>`，从 Ed25519 公钥派生，自证明。
+
+**Registry 协议**（`registry/client.go`、`registry/server.go`）：
+- 注册：`URNRegistryRequest{register, urn, peer_id, addrs, x25519_pk}` → `URNRegistryResponse{ok}`
+- 解析：`URNRegistryRequest{resolve, urn}` → `URNRegistryResponse{peer_id, addrs, x25519_pk}`
+
+**DHT**（`dht/dht.go`）：只负责节点发现（peer routing），URN 到地址的映射由 Registry 协议处理。
+
+### Phase 3: 异步消息队列（Relay）
+
+**场景**：B 给 A 发消息，但 A 不在线。
+
+**解决方案**：B 把加密消息存到 relay 节点，A 之后上线去拉取。
+
+**为什么 relay 看不到内容**：B 在发往 relay 之前就已经用 ECIES 加密了，relay 只存加密 blob。
+
+**三个操作**：
+1. `Store`：B 把加密 envelope 发给 relay，relay 存入 SQLite
+2. `Retrieve`：A 上线后从 relay 拉取所有 pending 消息
+3. `Ack`：A 解密处理完后，告诉 relay 删除这些消息
+
+### Phase 4b: Double Ratchet
+
+**核心数据结构** `RatchetState`（`dr/ratchet.go`）：
+- `rootKey`：根密钥，用于派生 chain key
+- `sendChainKey` / `recvChainKey`：发送/接收链密钥
+- `DHKeyPair`：当前节点的 DH 密钥对（每轮 ratchet 换新）
+- `remoteDHPK`：对方最新的 DH 公钥
+- `sendMsgNum` / `recvMsgNum`：消息编号
+
+**消息密钥派生**：
 ```
-~/.hermes/agent-comm/
+chain_key → HKDF("DoubleRatchetMessage") → (message_key, next_chain_key)
 ```
 
-### 1. Clone / Update
-
-```bash
-cd ~/.hermes/agent-comm
-git pull  # if already cloned
+**DH Ratchet Step**（每收到对方的新 DH 公钥时）：
+```
+new_DH_KEY = generate_fresh_keypair()
+shared_secret = ECDH(new_DH_SK, remote_DH_PK)
+root_key, chain_key = HKDF(shared_secret, "DoubleRatchet")
 ```
 
-### 2. Dependencies
+**为什么有前向保密**：发完一条消息后，message key 从 chain key 派生，然后 chain key 就更新。泄露 message key 只能解密那一条；旧的消息密钥早已删除。
 
-```bash
-cd ~/.hermes/agent-comm
-~/.local/go/bin/go mod download
-```
+### Phase 5: 存储层（SQLite 持久化）
 
-Verified dependencies:
-```
-go-libp2p: v0.36.3
-go-libp2p-core: v0.20.1
-go-libp2p-kad-dht: v0.39.2
-quic-go: v0.45.2 (transitive)
-```
+**为什么需要**：`RatchetState` 是状态机，节点重启后状态丢失，重启后无法继续和对方的 ratchet 通信。所有 ratchet 状态必须持久化。
 
-### 3. Key Generation
+**存储内容**：`dr/store.go` —— 每个 peer 的 URN 对应一条序列化后的 `RatchetState`。
 
-Keys are auto-generated on first run in `~/.hermes/agent-comm/contacts/`:
+**序列化方法**：`dr/ratchet.go` 暴露了 `SerializeRatchetState()` / `DeserializeRatchetState()` 处理未导出字段。
 
-```
-contacts/
-├── identity_sk.pem        # Ed25519 private key
-├── identity_pk.pem        # Ed25519 public key
-├── identity_x25519_sk.pem # X25519 private key
-└── identity_x25519_pk.pem # X25519 public key
-```
+### Phase 6: 网络传输（E2E DR over libp2p）
 
-### 4. Build & Run Tests
+**怎么做**：在 libp2p stream 上跑 Double Ratchet 协议。
+- A 打开到 B 的 stream：`<长度 prefix><DR 密文>`
+- B 的 stream handler 收到后，用 responder session 解密
+-  simplex 模式：每条消息一个独立的 stream，不需要回复
+
+---
+
+## 5. 上手指南
+
+### 编译与运行
 
 ```bash
 cd ~/.hermes/agent-comm
 
-# Phase 1 — libp2p host
-~/.local/go/bin/go run ./cmd/test_host/
+# 编译所有模块
+~/.local/go/bin/go build ./...
 
-# Phase 2 — ECIES session (bidirectional)
-~/.local/go/bin/go run ./cmd/test_session/
-
-# Phase 3 — async MQ (Relay + Sender + Receiver)
-~/.local/go/bin/go run ./cmd/test_mq/
-
-# Phase 4b — Double Ratchet handshake
-~/.local/go/bin/go run ./cmd/test_dr/
-
-# Phase 5 — DR session persistence
-~/.local/go/bin/go run ./cmd/test_dr_persist/
-
-# Phase 6 — Bidirectional DR over libp2p
-~/.local/go/bin/go run ./cmd/test_dr_net/
+# 运行各个 Phase 测试
+~/.local/go/bin/go run ./cmd/test_host/        # Phase 1
+~/.local/go/bin/go run ./cmd/test_session/     # Phase 2
+~/.local/go/bin/go run ./cmd/test_mq/          # Phase 3
+~/.local/go/bin/go run ./cmd/test_dr/          # Phase 4b
+~/.local/go/bin/go run ./cmd/test_dr_persist/  # Phase 5
+~/.local/go/bin/go run ./cmd/test_dr_net/      # Phase 6
 ```
 
-### 5. Run Bootstrap Node (Registry + Relay)
-
-```bash
-cd ~/.hermes/agent-comm
-~/.local/go/bin/go run ./cmd/bootstrap/
-```
-
-The bootstrap node:
-- Creates a libp2p host with TCP/QUIC listeners
-- Enables Relay v2 and AutoNAT
-- Registers itself in the DHT
-- Starts the registry server (URN → PeerID resolution)
-- Starts the MQ relay server (offline message storage)
-
-### 6. Run Client Node
-
-```bash
-cd ~/.hermes/agent-comm
-~/.local/go/bin/go run ./cmd/client/
-```
-
-The client node:
-- Loads or generates identity keys
-- Connects to bootstrap node
-- Registers its URN with the bootstrap registry
-- Can send/receive encrypted messages
-
-### 7. Project Structure
+### 目录结构
 
 ```
 agent-comm/
-├── crypto/           # Ed25519/X25519 keys + ECIES
-│   ├── ecies.go     # ECIES encryption/decryption
-│   └── keys.go      # Identity key management
-├── libp2p/           # Host construction + utilities
-│   └── host.go      # libp2p.Host creation
-├── dht/              # Kad-DHT wrapper
-│   └── dht.go
-├── registry/         # URN registry client + server
-│   ├── client.go    # Resolve, Register
-│   └── server.go    # URN → PeerID handler
-├── session/          # ECIES session manager
-│   └── session.go   # Encrypted message exchange
-├── mq/               # Async message queue
-│   ├── client.go    # Store, Retrieve, Ack
-│   └── server.go    # SQLite-backed relay
-├── dr/               # Double Ratchet
-│   ├── ratchet.go   # RatchetState + DH steps
-│   ├── session.go   # DRSession encrypt/decrypt
-│   └── store.go     # SQLite persistence
-├── wot/              # Web of Trust (partial)
-├── proto/            # Protobuf definitions
-│   ├── registry.proto
-│   ├── mq.proto
-│   └── *.pb.go
-├── contacts/         # Identity keys (auto-created)
+├── crypto/          # Ed25519/X25519 密钥 + ECIES 加密
+├── libp2p/          # libp2p.Host 构造
+├── dht/             # Kad-DHT 封装
+├── registry/        # URN 注册/解析（client + server handler）
+├── session/         # ECIES 会话管理
+├── mq/              # 异步消息队列（client + relay server）
+├── dr/              # Double Ratchet（ratchet + session + store）
+├── wot/             # Web of Trust（⚠️ 未集成）
+├── proto/           # Protobuf 定义
+├── contacts/        # 身份密钥（自动生成）
 └── cmd/
-    ├── bootstrap/   # Bootstrap node (registry + relay)
-    ├── client/      # Client node
-    └── test_*/      # Phase verification tests
+    ├── bootstrap/  # Bootstrap 节点（DHT Server）
+    ├── client/      # 客户端节点
+    └── test_*/     # 各 Phase 验证测试
 ```
 
-### 8. Security Properties
+### Go 依赖版本（已验证）
 
-| Property | Mechanism |
-|----------|-----------|
-| Identity | Ed25519 for signing, self-certifying URN |
-| Key separation | X25519 separate from Ed25519 identity key |
-| Forward secrecy | Double Ratchet (Phase 4b) |
-| E2E encryption | ECIES: X25519 ECDH + HKDF + AES-256-GCM |
-| Relay privacy | Relay stores only encrypted blobs (cannot read) |
-| Contact exchange | One-time tokens prevent reuse |
+```
+Go: 1.25.10
+go-libp2p: v0.36.3
+go-libp2p-core: v0.20.1（用 core/ 子路径 import）
+go-libp2p-kad-dht: v0.39.2
+quic-go: v0.45.2
+```
 
-### 9. Default Ports
+---
 
-The bootstrap node listens on random TCP/QUIC ports (specified by `/ip4/0.0.0.0/tcp/0`). Client discovers the bootstrap's address via DHT or direct configuration.
+## 6. 代码导读
 
-### 10. Troubleshooting
+### 核心文件一览
 
-**"protocols not supported" error:**
-- Ensure both nodes have registered the same protocol ID
-- Each node must call `host.SetStreamHandler(ProtoID, handler)`
+| 文件 | 作用 |
+|------|------|
+| `crypto/keys.go` | Ed25519/X25519 密钥加载、URN 派生 |
+| `crypto/ecies.go` | ECIES 加密/解密、共享 secret 计算 |
+| `libp2p/host.go` | libp2p 主机创建（TCP+QUIC+Relay+AutoNAT） |
+| `dht/dht.go` | Kad-DHT 封装（节点发现、路由表） |
+| `registry/client.go` | URN 解析/注册（通过网络协议） |
+| `registry/server.go` | URN 注册服务器 handler |
+| `session/session.go` | ECIES 会话管理（SendMessage、BuildEnvelope） |
+| `mq/client.go` | MQ Store/Retrieve/Ack 客户端 |
+| `mq/server.go` | Relay 服务器（SQLite 存储） |
+| `dr/ratchet.go` | Double Ratchet 核心（RatchetState + 密钥派生） |
+| `dr/session.go` | DRSession（Initiator/Responder） |
+| `dr/store.go` | SQLite 持久化存储 |
 
-**DR responder fails to decrypt:**
-- Verify `SetPeerX25519PK` was called before DR handler fires
-- Check that sender's X25519 PK is correct
+### 调用关系
 
-**Connection fails:**
-- Verify bootstrap node is running and reachable
-- Check firewall allows TCP/QUIC on the bootstrap's listen addresses
-- Ensure Relay v2 is enabled on both nodes
+```
+发消息流程：
+  session.Manager.SendMessage()
+    → crypto.Ecies.Encrypt()  ← ECIES 加密
+    → registry.Resolve()      ← 查对方 URN → PeerID
+    → libp2p stream.Write()   ← 发送加密信封
 
-**Keys not loading:**
-- Check `~/.hermes/agent-comm/contacts/` directory exists
-- Verify PEM file format (must have `-----BEGIN PRIVATE KEY-----` header)
+收消息流程：
+  session.Manager.DecryptEnvelope()
+    → crypto.Ecies.Decrypt()  ← ECIES 解密
+
+Double Ratchet 替代 ECIES：
+  dr.DRSession.SendMessage()   ← DR 加密（Phase 4b）
+  dr.DRSession.Receive()      ← DR 解密
+
+离线消息：
+  mq.Client.Store()            ← 发到 relay
+  mq.Client.Retrieve()         ← 从 relay 拉取
+  mq.Client.Ack()             ← 确认删除
+```
+
+---
+
+## 7. 常见问题
+
+**Q: 为什么有两个密钥对（Ed25519 和 X25519）？**
+Ed25519 用于签名/身份，X25519 用于加密。分开使用意味着签名私钥几乎不触网，泄露风险更低。
+
+**Q: PeerID 和 URN 有什么区别？**
+PeerID 是 libp2p 内部的网络标识符（从 Ed25519 公钥派生）。URN 是人类可读的身份标识（从 Ed25519 公钥的哈希派生）。两者都基于同一个 Ed25519 密钥对。
+
+**Q: relay 能看到消息内容吗？**
+不能。消息在发给 relay 之前就已经加密了，relay 只知道"某人的加密 blob 要给某人"，不知道内容。
+
+**Q: Double Ratchet 为什么要比 ECIES 复杂这么多？**
+ECIES 的前向保密是"每次会话"换密钥，Double Ratchet 是"每条消息"换密钥。代价是状态机变得更复杂，但安全性高得多。
+
+**Q: 重启后 DR 会话怎么恢复？**
+Phase 5 的 `dr/store.go` 把每个 peer 的 `RatchetState` 存到 SQLite，重启后 `LoadSession()` 恢复，继续消息流。

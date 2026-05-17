@@ -1,315 +1,196 @@
-// Code Commentary — dr/ Package (Double Ratchet / Signal Protocol)
-//
-// This package implements the Double Ratchet Algorithm (Signal Protocol) for
-// forward-secret encrypted sessions between agents. It builds on the session.Manager's
-// ECIES key agreement but handles all subsequent messages via the Double Ratchet,
-// ensuring that compromise of one message key does not expose past or future messages.
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// ARCHITECTURE OVERVIEW
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// Three files divide responsibilities:
-//
-//   dr/store.go    — SQLite persistence for RatchetState (per-peer session state)
-//   dr/ratchet.go  — Core Double Ratchet algorithm (DH ratchet + symmetric ratchet)
-//   dr/session.go  — libp2p stream transport wrapper (DRSession)
-//
-// The typical flow:
-//
-//   Alice (initiator)                         Bob (responder)
-//   ─────────────────                         ─────────────────
-//   1. ECDH(X25519_SK, Bob_PK)          →     (Bob knows Alice's static PK)
-//      → shared secret (seed)
-//   2. InitAlice(sharedSecret)          →     (ratchet uninitialized)
-//   3. Send() → DR message              →     Receive() on stream
-//                                            InitBobWithSS() + ReceiveMsg1()
-//                                            FinishRatchet() after decrypt
-//   4. ... subsequent messages ...
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// dr/store.go — RatchetState Persistence (SQLite)
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// DRStore wraps an SQLite database (modernc.org/sqlite) and maps peer URNs to
-// serialized RatchetState blobs. WAL mode is enabled for concurrent reads.
-//
-// Schema:
-//
-//   CREATE TABLE dr_sessions (
-//     peer_urn  TEXT PRIMARY KEY,   -- peer's URN (e.g. urn:hermes:agent:...)
-//     peer_id   TEXT NOT NULL,       -- libp2p peer ID string
-//     state     BLOB NOT NULL,       -- RatchetState.Serialize() bytes (234 bytes)
-//     updated_at INTEGER NOT NULL    -- Unix timestamp
-//   )
-//
-// Key methods:
-//
-//   SaveSession(peerURN, peerID, state) — upsert; uses SQLite ON CONFLICT DO UPDATE
-//                                         so saves are idempotent per peer URN
-//   LoadSession(peerURN)                — returns (state, found, error); found=false
-//                                         means no prior session (first contact)
-//   DeleteSession(peerURN)              — removes session on logout or reset
-//   Close()                             — releases the DB connection
-//
-// The 234-byte serialized state layout (from ratchet.go Serialize):
-//   [0:32]   DHSecret
-//   [32:64]  DHPub
-//   [64:96]  TheirDHPub
-//   [96:128] RootKey
-//   [128:160] origRootKey
-//   [160:192] SendChainKey
-//   [192:224] ReceiveChainKey
-//   [224:228] SendCount   (big-endian uint32)
-//   [228:232] RecvCount   (big-endian uint32)
-//   [232]     Initialized  (0 or 1)
-//   [233]     firstDH      (0 or 1)
-//
-// The store is thread-safe via a sync.RWMutex (read-lock Load, write-lock Save/Delete).
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// dr/ratchet.go — Double Ratchet Algorithm
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// RatchetState is the central data structure. It is stateful — one per peer session.
-// All fields are unexported; access is only through the methods defined in the file.
-//
-// ── Key Fields ────────────────────────────────────────────────────────────────
-//
-//   DHSecret / DHPub       Our current X25519 key pair (rotated on each DH ratchet)
-//   TheirDHPub             The peer's current DH public key (from message header)
-//   RootKey [32]           HKDF master key from which chain keys are derived
-//   origRootKey [32]      Root key before the first DH ratchet. Used as the
-//                         base for both recv and send chains during the symmetric
-//                         ratchet step (Signal spec "symmetric ratchet").
-//   SendChainKey / SendCount    Outbound chain: each message advances the chain and
-//                               increments SendCount. ChaCha20-Poly1305 key.
-//   ReceiveChainKey / RecvCount Inbound chain: same structure, separate counters.
-//   Initialized bool           Whether the ratchet has been bootstrapped.
-//   firstDH bool               Tracks whether the first DH ratchet step has occurred.
-//                              During firstDH=true, origRootKey is used as the
-//                              KDF base for both chains (symmetric ratchet).
-//
-// ── Initialization ─────────────────────────────────────────────────────────────
-//
-// Alice (initiator):
-//   InitAlice(dhOutput) — called with ECDH(X25519_SK, peer_PK).
-//   Steps:
-//     1. GenerateDHKey() → new X25519 keypair (A1_SK, A1_PK)
-//     2. kdfRootChain(dhOutput, zero, nil) → RootKey, SendChainKey
-//     3. origRootKey = RootKey  (saved for symmetric ratchet)
-//     4. firstDH = true, Initialized = true
-//
-// Bob (responder):
-//   InitBobWithSS(staticSS) — called with ECDH(Bob_SK, Alice_PK).
-//   Derives initial RootKey and ReceiveChainKey WITHOUT generating a DH keypair
-//   or advancing the ratchet. The DH ratchet happens in FinishRatchet() AFTER
-//   the first message is decrypted.
-//   FinishRatchet(theirDHPub):
-//     1. ECDH(B1_SK, A1_PK) → recv chain DH output
-//     2. GenerateDHKey() → B2 keypair
-//     3. recv chain = kdfRootChain(ECDH(B1_SK, A1_PK), origRootKey)
-//     4. send chain = kdfRootChain(ECDH(B2_SK, A1_PK), origRootKey)  ← symmetric
-//
-// This ordering (decrypt first, then DH ratchet) is critical: Signal spec requires
-// the receiver to defer the DH ratchet until AFTER processing the first message
-// using the initial receive chain key.
-//
-// ── Send Flow ─────────────────────────────────────────────────────────────────
-//
-//   1. kdfMessageKey(SendChainKey) → msgKey, nextChainKey
-//      kdfMessageKey uses HKDF-SHA256 to derive a 32-byte message key,
-//      and HMAC-SHA256(chainKey, 0x01) for the next chain key (Signal spec).
-//   2. Build DrHeader{DHPub: DHPub, PN: 0, MsgNum: SendCount}
-//      DHPub is our current DH public key (changes after each DH ratchet).
-//      PN (Previous Chain Length) is used for out-of-order message recovery.
-//   3. encryptWithKey(msgKey, plaintext) → nonce || ciphertext  (ChaCha20-Poly1305 XAE)
-//   4. Advance: SendChainKey = nextChainKey, SendCount++
-//
-// ── Receive Flow ──────────────────────────────────────────────────────────────
-//
-// Subsequent messages (after initialization):
-//   Receive(m *DrMessage):
-//     1. If m.Header.DHPub != TheirDHPub → dhRatchet(theirDHPub) first
-//     2. Verify MsgNum == RecvCount (constant-time comparison via int check)
-//     3. kdfMessageKey(ReceiveChainKey) → msgKey, nextChainKey
-//     4. decryptWithKey(msgKey, ciphertext) → plaintext
-//     5. Advance: ReceiveChainKey = nextChainKey, RecvCount++
-//
-// First message (Bob only):
-//   ReceiveMsg1(msg):
-//     1. Extract theirDHPub from msg[:32]
-//     2. Verify MsgNum == RecvCount (0)
-//     3. kdfMessageKey(ReceiveChainKey) → msgKey, nextChainKey
-//     4. Decrypt msg[40:] (ciphertext after 40-byte header)
-//     5. Advance ReceiveChainKey and RecvCount
-//     6. Return (plaintext, theirDHPub) — caller invokes FinishRatchet
-//
-// ── DH Ratchet (dhRatchet) ───────────────────────────────────────────────────
-//
-// Triggered when the received message's DH public key differs from TheirDHPub.
-// Signal spec symmetric + DH ratchet:
-//
-//   For first DH ratchet (firstDH=true):
-//     rootKeyBase = origRootKey  (both chains use original seed)
-//
-//   For subsequent DH ratchets (firstDH=false):
-//     rootKeyBase = current RootKey
-//
-//   Step 1: recv chain = kdfRootChain(ECDH(cur_SK, theirNewPub), rootKeyBase)
-//   Step 2: GenerateDHKey() → new DH keypair (advances our side)
-//   Step 3: send chain = kdfRootChain(ECDH(new_SK, theirNewPub), rootKeyBase)
-//
-// Due to curve25519 commutativity, ECDH(A_SK, B_PK) = ECDH(B_SK, A_PK),
-// so both sides derive the same DH output for each chain.
-//
-// ── Key Derivation Functions ───────────────────────────────────────────────────
-//
-// kdfRootChain(dhOutput, currentRootKey, info):
-//   IKM = currentRootKey || dhOutput  (64 bytes)
-//   HKDF-SHA256 with info = "DoubleRatchet" || info
-//   Output: [0:32] = new RootKey, [32:64] = new ChainKey
-//
-// kdfMessageKey(chainKey):
-//   HKDF-SHA256(chainKey, nil, "DoubleRatchetMessage") → msgKey[0:32]
-//   HMAC-SHA256(chainKey, 0x01) → nextChainKey[0:32]
-//
-// ── Serialization ──────────────────────────────────────────────────────────────
-//
-// Serialize() — 234-byte binary layout (documented above in store section).
-// DeserializeRatchetState(data) — reverses the layout.
-//
-// SerializeHeader / DeserializeHeader — 40-byte header format:
-//   [0:32]   DHPub   (sender's current DH public key)
-//   [32:36]  PN      (previous chain length, big-endian)
-//   [36:40]  MsgNum  (message number in current chain, big-endian)
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// dr/session.go — DRSession: libp2p Transport Wrapper
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// DRSession wraps RatchetState with libp2p stream I/O for use in the agent-comm
-// protocol stack. It is instantiated by either NewDRSessionInitiator (Alice) or
-// NewDRSessionResponder (Bob).
-//
-// Protocol ID: /agent/dr/1.0.0 (libp2p protocol negotiation)
-//
-// Message format on wire (length-prefixed):
-//   [4 bytes: big-endian size][40 bytes: DR header][N bytes: ciphertext]
-//
-// ── DRSession Fields ───────────────────────────────────────────────────────────
-//
-//   peerURN  string        — peer's URN (used as store key)
-//   peerID   peer.ID       — libp2p peer ID for stream dialing
-//   manager  *session.Manager — provides Host(), Ecies(), PeerStaticX25519PK()
-//   keys     *crypto.IdentityKeys — our identity keys (X25519_SK for ECDH)
-//   ratchet  RatchetState  — the actual DR state (mutx-protected)
-//   mu       sync.RWMutex  — protects ratchet field
-//
-// ── Initiator (Alice) Setup ───────────────────────────────────────────────────
-//
-// NewDRSessionInitiator(ctx, mgr, keys, peerID, peerX25519PK, peerURN):
-//   1. Compute ECDH(X25519_SK, peerX25519PK) → sharedSecret  (session.Manager.Ecies)
-//      This is the "IK" (Identity Key) agreement from X3DH (our ECIES bootstrap).
-//   2. Hash sharedSecret → 32 bytes (HashSharedSecret = SHA-256)
-//   3. ratchet.InitAlice(array32(seed)) → bootstraps the ratchet
-//   4. Alice immediately has SendCount=0, RecvCount=0
-//
-// Alice's first Send() includes her initial DH public key in the header.
-// Bob receives this, runs InitBobWithSS + ReceiveMsg1, then FinishRatchet.
-//
-// ── Responder (Bob) Setup ──────────────────────────────────────────────────────
-//
-// NewDRSessionResponder() — creates an uninitialized DRSession.
-// The ratchet is only initialized when the first message arrives in Receive():
-//   1. ECDH(Bob_SK, Alice_static_PK) → staticSS
-//   2. ratchet.InitBobWithSS(staticSS)
-//   3. ratchet.ReceiveMsg1(msgBytes) → plaintext, theirDHPub
-//   4. ratchet.FinishRatchet(theirDHPub) → completes the symmetric ratchet
-//
-// The ordering (decrypt before DH ratchet) matches Signal spec requirement.
-//
-// ── Send() / Receive() Semantics ───────────────────────────────────────────────
-//
-// DRSession.Send(ctx, plaintext):
-//   1. ratchet.Send(plaintext) → DrMessage{Hdr, Ct}
-//   2. Serialize header (40 bytes) + append ciphertext
-//   3. Open new libp2p stream to peerID with protocol ProtoID
-//   4. Write: [4-byte size][msgBytes]
-//   5. stream.CloseWrite() — half-close to signal message complete
-//   6. Read encrypted response (DR is symmetric: every Send gets a Receive)
-//   7. DeserializeResponse → ratchet.Receive() to advance the ratchet
-//      and decrypt the reply (using now-advanced receive chain)
-//   8. Return (response plaintext is not returned to caller in current impl)
-//
-// DRSession.Receive(ctx, stream):
-//   1. Read [4-byte size][msgBytes] from stream
-//   2. If not initialized: InitBobWithSS + ReceiveMsg1 + FinishRatchet
-//   3. Otherwise: DeserializeHeader + ratchet.Receive()
-//   4. Return plaintext payload
-//
-// ── Symmetric vs DH Ratchet ───────────────────────────────────────────────────
-//
-// Symmetric Ratchet (every message):
-//   chain_key → message_key + next_chain_key
-//   Used for both send and receive chains independently.
-//   Provides forward secrecy: old message keys are erased when chain advances.
-//
-// DH Ratchet (on new peer DH public key):
-//   DH output → new root key + new chain keys
-//   Provides break-in recovery: compromising old keys doesn't expose future
-//   keys unless the attacker also performs the DH ratchet with the compromised key.
-//
-// The combination means: forward secrecy + break-in recovery + message key unlinkability.
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// RELATIONSHIP TO session/session.go
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// session.Manager (session.go) provides:
-//   - ECIES-only encryption for initial key agreement (static ECDH)
-//   - EncryptedEnvelope protobuf with ephemeral DH key for each message
-//   - Used for: contact discovery tokens, initial handshake, non-DR messages
-//
-// dr/ package replaces ECIES with Double Ratchet for:
-//   - Long-running encrypted message sessions
-//   - Any use case requiring forward secrecy and break-in recovery
-//
-// Integration:
-//   - DRSession uses session.Manager only for Host(), Ecies(), and PeerStaticX25519PK()
-//   - Once initialized, all encryption goes through RatchetState (ChaCha20-Poly1305)
-//   - DRStore persists RatchetState across restarts
-//   - Both use the same crypto.IdentityKeys for identity and X25519 static keys
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// SECURITY PROPERTIES
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// Forward Secrecy:       Each message uses a one-time message key derived from the
-//                        chain key. Compromise of a message key does NOT expose
-//                        past messages (chain key was already advanced).
-//
-// Break-in Recovery:     After a compromise, the next DH ratchet step produces
-//                        a new DH keypair that the attacker doesn't know,
-//                        restoring security for subsequent messages.
-//
-// Message Key Unlinkability: Each message key is cryptographically unlinkable to
-//                        any other message key — ciphertexts cannot be attributed
-//                        to the same chain without knowing the chain key.
-//
-// Constant-time Counters: Message number checks use direct integer comparison,
-//                        not constant-time. For high-security contexts, consider
-//                        adding constant-time comparison for MsgNum checks.
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// LIMITATIONS & NOTES
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// - Message numbers are not encrypted (PN and MsgNum are plaintext in header).
-// - No out-of-order message buffering; RecvCount must match exactly.
-// - Skipped message numbers (gap) cause decryption failure — suitable for
-//   in-order transport (libp2p streams) but not for UDP/datagram use cases.
-// - The firstDH flag is cleared after the first DH ratchet but not persisted.
-//   AfterDeserialize, firstDH is assumed true until the next dhRatchet call.
-// - RatchetState.Serialize() is NOT encrypted — store.go relies on filesystem
-//   permissions. For untrusted storage, encrypt the serialized blob.
+# Double Ratchet 代码详解
+
+> 配合 [SPEC.md](../SPEC.md) Phase 4b 节阅读效果更佳。
+
+## 包概述
+
+`dr/` 实现 Double Ratchet（Signal Protocol），三个文件分工：
+
+| 文件 | 职责 |
+|------|------|
+| `dr/ratchet.go` | 核心算法：`RatchetState`、DH ratchet、symmetric ratchet、密钥派生 |
+| `dr/session.go` | libp2p stream 封装：`DRSession`（Initiator/Responder）、消息格式 |
+| `dr/store.go` | SQLite 持久化：每个 peer 的 `RatchetState` 存储 |
+
+典型流程：
+
+```
+Alice (initiator)                        Bob (responder)
+─────────────────                        ─────────────────
+1. ECDH(Alice_SK, Bob_PK) → 共享 secret
+2. InitAlice(sharedSecret)               InitBobWithSS(sharedSecret)
+3. Send() → DR message    → stream →   Receive() → decrypt
+                                        FinishRatchet() after decrypt
+4. ... subsequent messages ...
+```
+
+---
+
+## dr/ratchet.go — 核心 Double Ratchet
+
+### RatchetState 结构
+
+```go
+type RatchetState struct {
+    rootKey        [32]byte    // 根密钥，派生 chain key
+    sendChainKey   [32]byte    // 发送链密钥
+    recvChainKey   [32]byte    // 接收链密钥
+    DHKeyPair                   // 当前节点的 DH 密钥对（每轮 ratchet 换新）
+    remoteDHPK    [32]byte      // 对方最新的 DH 公钥（用于下一轮 ECDH）
+    origRootKey   [32]byte      // 最初的 root key（用于 firstDH 特殊处理）
+    firstDH       bool          // 是否是第一个 DH ratchet step
+    sendMsgNum    int           // 已发送消息数
+    recvMsgNum    int           // 已接收消息数
+}
+```
+
+### Symmetric Ratchet（发消息）
+
+每发一条消息，从 chain key 派生 message key，然后 chain key 更新：
+
+```
+chain_key
+  → HKDF("DoubleRatchetMessage") → (message_key, next_chain_key)
+  → 用 message_key 加密明文
+  → 更新 chain_key = next_chain_key
+```
+
+关键：message key 用完即删，chain key 泄露也只能推出后续 chain key，无法反推历史 message key。
+
+### DH Ratchet Step（收到对方新公钥时）
+
+当收到对方的 DH 公钥时，需要做一次 DH ratchet step：
+
+```
+new_DH_KEY = generate_fresh_keypair()
+shared = ECDH(new_DH_SK, remote_DH_PK)
+root_key, chain_key = HKDF(shared, "DoubleRatchet")
+```
+
+同时更新 `remoteDHPK = 对方的新公钥`，这样下一轮 ECDH 用新的共享 secret。
+
+### First DH Step 的特殊处理
+
+第一个 DH step 之前没有"旧"的 ratchet 状态，直接用 ECDH 共享 secret 作为初始 root key。代码中 `firstDH` flag 和 `origRootKey` 记录这个初始状态，用于对称 ratchet。
+
+### 序列化
+
+未导出字段不能直接序列化。`SerializeRatchetState()` 和 `DeserializeRatchetState()` 手动处理：
+
+```go
+// serialize: 按顺序写入所有字段（全部是固定长度 [32]byte 或 int）
+// deserialize: 按顺序读出，构造回结构体
+```
+
+---
+
+## dr/session.go — DRSession 与 Stream 协议
+
+### DRSession 结构
+
+```go
+type DRSession struct {
+    isInitiator   bool
+    ratchetState  *RatchetState
+    peerX25519PK  []byte                 // 对方的 X25519 公钥
+    sharedSecret  []byte                 // 初始 ECDH 共享密钥
+}
+```
+
+Initiator 和 Responder 区别：
+- **Initiator**：主动发起，先调用 `InitAlice(sharedSecret)`
+- **Responder**：被动响应，收到第一条消息后才初始化 `InitBobWithSS(sharedSecret)`
+
+### 消息格式（wire format）
+
+每条 DR 消息是 length-prefixed 二进制：
+
+```
+[4字节: 长度][40字节: header][变长: ciphertext][16字节: tag]
+```
+
+Header 40 字节：
+```
+[32字节: 对方的 DH 公钥] [4字节: 消息编号] [4字节: 上一条消息的 PN (previous chain length)]
+```
+
+### SendMessage 流程
+
+```go
+func (s *DRSession) SendMessage(plaintext []byte) error
+```
+
+1. `s.ratchetState.MakeMessageKey()` → 派生 message key
+2. `s.ratchetState.Encrypt(plaintext, message_key)` → ChaCha20-Poly1305
+3. 序列化 header（含当前 DH 公钥、消息编号）
+4. 写流：`<长度><header><密文><tag>`
+5. 更新 `sendMsgNum`，删除用过的 message key
+
+### Receive 流程
+
+```go
+func (s *DRSession) Receive() ([]byte, error)
+```
+
+1. 读流：`<长度><header><密文><tag>`
+2. 反序列化 header，取出 `dh_pubkey`、`msg_num`
+3. 如果 `dh_pubkey != s.ratchetState.remoteDHPK` → 做 DH ratchet step
+4. `s.ratchetState.MakeMessageKey()` → 派生 message key
+5. `s.ratchetState.Decrypt(ciphertext, tag, message_key)` → 解密
+6. 更新状态
+
+### 协议 ID
+
+DR 消息通过 libp2p stream 传输，协议 ID：`/agent/dr/1.0.0`
+
+### 与 session.Manager 的关系
+
+`sessions/session.go` 的 `Manager` 是 ECIES 层，负责初始 ECDH 密钥交换。DR 在此基础上继续——初始共享 secret 作为 DR 的 seed，后续全部用 Double Ratchet。
+
+---
+
+## dr/store.go — SQLite 持久化
+
+### 存储 schema
+
+```sql
+CREATE TABLE dr_sessions (
+    peer_urn   TEXT PRIMARY KEY,   -- peer's URN
+    state      BLOB NOT NULL,       -- 序列化的 RatchetState
+    updated_at INTEGER NOT NULL     -- Unix 时间戳
+);
+```
+
+WAL mode：写入不阻塞读。
+
+### 接口
+
+```go
+type DRStore struct { db *sql.DB }
+
+func (s *DRStore) SaveSession(peerURN string, state []byte) error  // upsert
+func (s *DRStore) LoadSession(peerURN string) ([]byte, error)      // 返回序列化数据
+func (s *DRStore) DeleteSession(peerURN string) error
+```
+
+### 调用时机
+
+- **发消息前**：SaveSession（保存当前 ratchet 状态）
+- **收到消息后**：SaveSession（更新 ratchet 状态）
+- **节点重启**：LoadSession（恢复所有 peer 的 ratchet 状态）
+- **删除会话**：DeleteSession
+
+### 为什么每条消息都要存？
+
+如果只发不存，重启后就丢失了 ratchet 状态——对方发来的下一条消息无法解密（chain key 不连续）。所以每条消息处理完后立即持久化。
+
+---
+
+## 安全属性
+
+| 属性 | 实现方式 |
+|------|---------|
+| 前向保密 | message key 用完即删；旧 chain key 发送后删除 |
+| 泄露隔离 | 一条消息的 key 泄露只影响一条 |
+| DH ratchet | 定期换 DH 密钥对，阻止长时效的主动攻击 |
+| 状态分离 | 发起方和接收方各自维护独立的 ratchet 状态 |

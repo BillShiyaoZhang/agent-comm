@@ -35,11 +35,12 @@ A peer-to-peer encrypted messaging protocol for AI agents, built on libp2p. Each
 
 ## Phase 1 — Transport Layer
 
-**Done.** libp2p v0.36+ with:
-- TCP + QUIC listen
-- Relay v2 (connection relay for NAT traversal)
+**完成。** libp2p v0.36+，包含：
+
+- TCP + QUIC 监听
+- Relay v2（NAT 穿透连接中继）
 - AutoNAT
-- gossipsub (future use)
+- gossipsub（未来扩展用）
 
 ---
 
@@ -47,19 +48,19 @@ A peer-to-peer encrypted messaging protocol for AI agents, built on libp2p. Each
 
 ### Identity
 
-Each node has an `IdentityKeys` persisted to disk:
-- **Ed25519**: used for `libp2p.Identity()` — stable PeerID, URN derivation
-- **X25519**: used for ECIES encryption — separate from Ed25519 for forward secrecy separation
+每个节点有一对 `IdentityKeys`（持久化到磁盘）：
+- **Ed25519**：用于 `libp2p.Identity()` — 稳定 PeerID，URN 推导
+- **X25519**：用于 ECIES 加密 — 与 Ed25519 分离，保证前向保密
 
-URN format: `urn:hermes:agent:<base58(random16bytes)>`
+URN 格式：`urn:hermes:agent:<base58(random16bytes)>`
 
-URN is derived from Ed25519 public key, so it's self-certifying.
+URN 从 Ed25519 公钥派生，因此是自证明的。
 
 ### Registry
 
-URN → PeerID/addrs/X25519PubKey resolution via libp2p streams.
+URN → PeerID/addrs/X25519PubKey 通过 libp2p stream 解析。
 
-**Protocol:** `/hermes/agent-comm/registry/1.0.0`
+**协议：** `/hermes/agent-comm/registry/1.0.0`
 
 ```
 Client                              Server
@@ -73,9 +74,9 @@ Client                              Server
 
 ### Encrypted Session
 
-**Protocol:** `/hermes/agent-comm/session/1.0.0`
+**协议：** `/hermes/agent-comm/session/1.0.0`
 
-Stream-based request/response using `EncryptedEnvelope`:
+基于 stream 的请求/响应，使用 `EncryptedEnvelope`：
 
 ```
 Sender                                  Recipient
@@ -90,16 +91,23 @@ Sender                                  Recipient
   │─ decrypt reply                         │
 ```
 
-**Envelope fields:**
-- `sender_urn` — sender's URN
-- `sender_static_pubkey` — X25519 static public key (for ECDH reply)
-- `ephemeral_pubkey` — HKDF-derived 32-byte value (deterministic from shared secret)
-- `nonce` — random 12-byte AES-GCM nonce
-- `ciphertext` — encrypted payload
-- `tag` — GCM auth tag (16 bytes)
-- `message_id` — unique ID for deduplication
+**Envelope 字段：**
+- `sender_urn` — 发送者 URN
+- `sender_static_pubkey` — X25519 静态公钥（用于 ECDH 回复）
+- `ephemeral_pubkey` — HKDF 导出的 32 字节值
+- `nonce` — 随机 12 字节 AES-GCM nonce
+- `ciphertext` — 加密载荷
+- `tag` — GCM 认证标签（16 字节）
+- `message_id` — 唯一 ID，用于去重
 
-**AAD:** `SHA256("agent-comm-v1")` — protocol constant, same for both directions.
+**AAD：** `SHA256("agent-comm-v1")` — 协议常量，双向相同。
+
+**实现：** `session/session.go` — `Manager` 结构体
+
+- `SendMessage()` — 发送消息并等待加密回复
+- `SendReply()` — 在已有 stream 上发送加密回复
+- `BuildEnvelope()` — 构建加密信封（用于 MQ 存储）
+- `DecryptEnvelope()` — 解密收到的信封
 
 ---
 
@@ -107,11 +115,11 @@ Sender                                  Recipient
 
 ### Problem
 
-When recipient is offline, message is lost. Need persistent offline storage.
+接收方离线时消息会丢失，需要持久的离线存储。
 
 ### Design
 
-A **relay node** (bootstrap) acts as a mailbox: it stores encrypted messages for offline recipients. Relay cannot read message contents (encrypted blob).
+**relay 节点**（bootstrap 节点）充当信箱：存储离线接收者的加密消息。Relay 无法读取消息内容（加密 blob）。
 
 ### Architecture
 
@@ -125,7 +133,7 @@ Recipient ──→ Relay (ack)  ──→ Delete read messages
 
 ### Protocol: `/hermes/agent-comm/mq/1.0.0`
 
-**Messages (protobuf, same framing as registry):**
+**Proto 文件：** `proto/mq.proto`（引用 `proto/envelope.proto` 中的 `EncryptedEnvelope`）
 
 ```proto
 message MQRequest {
@@ -138,8 +146,8 @@ message MQRequest {
 
 message StoreRequest {
   string recipient_urn = 1;
-  bytes encrypted_payload = 2;  // EncryptedEnvelope bytes
-  int64 expiry_unix = 3;         // TTL, relay deletes after
+  EncryptedEnvelope payload = 2;  // 加密消息 blob（relay 无法读取）
+  int64 expiry_unix = 3;          // TTL：relay 在此时间戳后删除（0 = 永不过期）
 }
 
 message RetrieveRequest {
@@ -147,7 +155,7 @@ message RetrieveRequest {
 }
 
 message AckRequest {
-  repeated string message_ids = 1;
+  repeated string message_ids = 1;  // 客户端处理完成后删除
 }
 
 message MQResponse {
@@ -161,11 +169,11 @@ message MQResponse {
 
 message StoreResponse {
   bool ok = 1;
-  string message_id = 2;
+  string message_id = 2;  // relay 分配
 }
 
 message RetrieveResponse {
-  repeated EncryptedEnvelope payloads = 1;  // raw envelope bytes
+  repeated EncryptedEnvelope payloads = 1;  // 按时间顺序
 }
 
 message AckResponse {
@@ -180,66 +188,200 @@ message ErrorResponse {
 
 ### Storage (Relay Side)
 
-SQLite table:
+**实现：** `mq/server.go` — `Server` 结构体，SQLite 持久化
+
 ```sql
 CREATE TABLE messages (
-  id          TEXT PRIMARY KEY,
-  recipient   TEXT NOT NULL,          -- URN
-  payload     BLOB NOT NULL,           -- EncryptedEnvelope bytes
-  expiry      INTEGER NOT NULL,         -- Unix timestamp
-  stored_at   INTEGER NOT NULL         -- Unix timestamp
+  id         TEXT PRIMARY KEY,
+  recipient  TEXT NOT NULL,          -- URN
+  payload    BLOB NOT NULL,           -- EncryptedEnvelope 字节
+  expiry     INTEGER NOT NULL,        -- Unix 时间戳
+  stored_at  INTEGER NOT NULL         -- Unix 时间戳
 );
 CREATE INDEX idx_recipient ON messages(recipient);
 CREATE INDEX idx_expiry ON messages(expiry);
 ```
 
-Relay deletes expired messages on startup and periodically (every 5 min).
+Relay 在启动时和每 5 分钟定期删除过期消息。
 
 ### Client Behavior
 
-**Sending a message:**
-1. Resolve recipient's PeerID via Registry
-2. Attempt direct session (`SendMessage`)
-3. If recipient online → done
-4. If recipient offline / connection failed → try MQ store:
-   a. Find relay(s) — use bootstrap node as default relay
-   b. `MQStoreRequest` with encrypted payload
-   c. Relay returns `message_id`
+**实现：** `mq/client.go` — `Client` 结构体
 
-**Receiving messages:**
-1. On startup: `MQRetrieveRequest` to pull all pending messages
-2. Decrypt each message normally via Session
-3. After processing: `MQAckRequest` to delete from relay
+- `Store(ctx, relay, recipientURN, envelope, ttlDays)` — 发送到 relay
+- `Retrieve(ctx, relay, myURN)` — 拉取所有待处理消息
+- `Ack(ctx, relay, messageIDs)` — 读取后删除
+
+**发送流程：**
+1. 通过 Registry 解析接收者 PeerID
+2. 尝试直接会话（`SendMessage`）
+3. 接收者在线 → 完成
+4. 接收者离线 / 连接失败 → 尝试 MQ store：
+   a. 找到 relay（默认使用 bootstrap 节点）
+   b. `MQStoreRequest` + 加密载荷
+   c. Relay 返回 `message_id`
+
+**接收流程：**
+1. 启动时：`MQRetrieveRequest` 拉取所有待处理消息
+2. 解密每条消息（正常通过 Session 解密）
+3. 处理完成后：`MQAckRequest` 从 relay 删除
 
 ### Relay Discovery
 
-Each node can specify a relay URN. If not set, defaults to the bootstrap node's URN (registered in the DHT bootstrap process).
+每个节点可指定一个 relay URN。未设置则默认使用 bootstrap 节点的 URN（在 DHT bootstrap 过程中注册）。
 
-The relay's registry entry is reused: the same node that handles URN registry also handles MQ.
+同一节点同时处理 URN registry 和 MQ。
+
+### Test
+
+```bash
+go run ./cmd/test_mq/    # 三节点测试：Relay + Sender + Receiver（离线后上线）
+```
+
+---
+
+## Phase 4a — Web of Trust
+
+### Problem
+
+当 Bob 第一次向 Alice 发送消息时，Bob 如何确认 `urn:hermes:agent:Alice` 属于真实的 Alice 而不是冒充者？Registry 只提供 URN→PeerID→pubkey 映射，不做身份认证。
+
+### Solution
+
+签名信任声明。如果 Charlie 说"我信任 `urn:hermes:agent:Alice`（key=X, peer=12D3...）"，且 Bob 已信任 Charlie，则 Bob 可以推导对 Alice 的传递信任。
+
+### Trust Claim
+
+**Proto 文件：** `proto/wot.proto`
+
+```proto
+enum TrustLevel {
+  UNKNOWN = 0;
+  TRUSTED = 1;
+  UNTRUSTED = 2;
+}
+
+message TrustClaim {
+  string issuer_urn = 1;          // 声明者（如 "urn:hermes:agent:Charlie"）
+  string subject_urn = 2;          // 被声明者（如 "urn:hermes:agent:Alice"）
+  string subject_peer_id = 3;      // Subject 的 libp2p PeerID
+  bytes  subject_x25519_pk = 4;   // Subject 的 X25519 静态公钥（32 字节）
+  TrustLevel level = 5;            // TRUSTED / UNTRUSTED / UNKNOWN
+  bytes  issuer_signature = 6;     // Ed25519 签名
+  int64  issued_at_unix = 7;       // Unix 时间戳
+}
+```
+
+**Trust Levels：**
+- `TRUSTED` — 声明者明确为 subject 的身份担保
+- `UNTRUSTED` — 声明者明确不信任（撤销用例）
+- `UNKNOWN` — 中性陈述（知情但不做判断）
+
+**签名内容：** `SHA256(issuer_urn || subject_urn || subject_peer_id || subject_x25519_pk || level || issued_at)`
+
+### Implementation
+
+- `wot/claim.go` — `TrustClaim` 结构体，`NewTrustClaim()` 创建声明，`Verify()` 验证签名
+- `wot/store.go` — `Store` 结构体，SQLite 持久化所有已知声明（本地声明 + 网络获取的）
+- `wot/resolver.go` — `Resolver` 结构体，BFS 信任路径搜索
+
+**Store Schema：**
+```sql
+CREATE TABLE claims (
+  id          TEXT PRIMARY KEY,      -- SHA256(issuer||subject||issued_at)[:16]
+  issuer_urn  TEXT NOT NULL,
+  subject_urn TEXT NOT NULL,
+  peer_id     TEXT NOT NULL,
+  x25519_pk   BLOB NOT NULL,
+  level       INTEGER NOT NULL,
+  signature   BLOB NOT NULL,
+  issued_at   INTEGER NOT NULL,
+  fetched_at  INTEGER NOT NULL
+);
+CREATE INDEX idx_subject ON claims(subject_urn);
+CREATE INDEX idx_issuer  ON claims(issuer_urn);
+
+CREATE TABLE known_peers (
+  urn         TEXT PRIMARY KEY,
+  peer_id     TEXT NOT NULL,
+  x25519_pk   BLOB NOT NULL,
+  ed25519_pk  BLOB NOT NULL,
+  first_seen  INTEGER NOT NULL,
+  last_seen   INTEGER NOT NULL
+);
+```
+
+**Trust Path Resolution：**
+- BFS 从 `myURN` 出发，找任意发出了 `TRUSTED` 声明的节点关于目标 URN 的路径
+- 找到路径 → 验证签名链 → 接受 pubkey
+- 无路径 → 警告："Untrusted peer, proceed manually?"
+
+**网络查询：** `Resolver.FetchClaimsAbout(ctx, subjectURN)` — 通过 `/hermes/agent-comm/wot/1.0.0` 协议查询远端节点关于某 URN 的所有声明
+
+**Bootstrap trust：** 首次运行需要手动输入一个已知 URN 作为直接信任对象。之后 WoT 网络通过传递声明增长。
+
+---
+
+## Phase 4b — Double Ratchet
+
+### Problem
+
+如果 Bob 的静态密钥明天被泄露，所有过去与 Alice 的消息都会被解密（静态-静态 ECDH 无前向保密）。
+
+### Solution
+
+Double Ratchet（Signal Protocol）。每条消息使用从 ratchet state 派生的新临时密钥。一把密钥泄露只暴露有限窗口的消息。
+
+### Architecture
+
+```
+dr/
+├── ratchet.go   # RatchetState: root key, chain keys, DH ratchet step
+├── session.go   # DRSession: encrypt/decrypt with ratchet, ECIES for initial key exchange
+└── store.go     # Persistent session state (per-peer URN, SQLite)
+```
+
+### Key Derivation Chain
+
+```
+初始：ECDH(our_DH_SK, their_DH_PK) → SKR
+SKR → HKDF → root_key + chain_key_0
+
+发送消息 (k=0)：
+  chain_key_0 → HKDF → message_key_0 + chain_key_1
+  encrypt(message_key_0, plaintext) → ciphertext
+
+DH Ratchet step（收到对方新 DH 公钥后）：
+  ECDH(our_new_DH_SK, their_DH_PK) → SKR2
+  SKR2 → HKDF → root_key_2 + chain_key_2
+```
+
+### Integration with ECIES Session
+
+- `session/session.go` 已实现 ECDH + ECIES 初始密钥交换
+- Double Ratchet 用初始 ECDH 握手替换静态-静态 ECDH
+- `dr/session.go` 提供 `DRSendMessage` / `DRReceiveMessage` 作为 `SendMessage` / stream handler 的替代
+- 前向保密：N 条消息后旧 chain key 被删除
+
+**注意：** Double Ratchet 需要每对等节点的有状态会话（不同于当前无状态的 ECIES）。复杂度增加 — 保留当前 `session/session.go` 作为 DR state 不可用时的降级方案。
 
 ---
 
 ## Phase 5 — Storage Layer (DRSession Persistence)
 
-**Done.** `dr/store.go` — SQLite-backed persistent DR session store.
+**完成。** `dr/store.go` — SQLite 持久化 DR 会话存储。
 
 ### Problem
 
-Double Ratchet is stateful. Each peer must persist `RatchetState` (root key, chain keys, DH key pairs, message numbers) to survive restarts. Without persistence, every restart resets the ratchet and breaks forward secrecy.
-
-### Implementation
-
-- `dr/store.go` — `DRStore` struct with `SaveSession`, `LoadSession`, `DeleteSession`
-- `dr/ratchet.go` — `SerializeRatchetState()` / `DeserializeRatchetState()` for unexported field handling
-- `cmd/test_dr_persist/main.go` — persistence test: create session → send/receive → simulate restart → recover → continue
+Double Ratchet 是有状态的。每个对等方必须持久化 `RatchetState`（root key, chain keys, DH key pairs, message numbers）以在重启后存活。无持久化情况下，每次重启重置 ratchet，破坏前向保密。
 
 ### Storage Schema
 
 ```sql
 CREATE TABLE dr_sessions (
-    peer_urn    TEXT PRIMARY KEY,   -- peer's URN
-    state       BLOB NOT NULL,      -- serialized RatchetState
-    updated_at  INTEGER NOT NULL    -- Unix timestamp
+    peer_urn    TEXT PRIMARY KEY,   -- 对等方 URN
+    state       BLOB NOT NULL,      -- 序列化的 RatchetState
+    updated_at  INTEGER NOT NULL    -- Unix 时间戳
 );
 ```
 
@@ -249,19 +391,21 @@ CREATE TABLE dr_sessions (
 go run ./cmd/test_dr_persist/
 ```
 
+测试流程：创建会话 → 发送/接收 → 模拟重启 → 恢复 → 继续通信。
+
 ---
 
 ## Phase 6 — Network Transport (E2E DR over libp2p)
 
-**Done.** `cmd/test_dr_net/main.go` — two-node bidirectional DR message exchange over real libp2p.
+**完成。** `cmd/test_dr_net/main.go` — 两节点双向 DR 消息交换，通过真实 libp2p。
 
-### What works
+### What Works
 
-- **B → A**: B (initiator) opens DR stream to A, A's responder handler receives and decrypts
-- **A → B**: A (initiator) opens DR stream to B, B's responder handler receives and decrypts
-- Both directions use independent DRSession initiator sessions
-- Simplex mode: each message is a new stream; EOF on read side is acceptable
-- X25519 PK caching: `session.Manager.SetPeerX25519PK()` + `mgr.PeerStaticX25519PK()` for in-band peer key lookup
+- **B → A**：B（initiator）打开 DR stream 到 A，A 的 responder handler 接收并解密
+- **A → B**：A（initiator）打开 DR stream 到 B，B 的 responder handler 接收并解密
+- 双向使用独立的 DRSession initiator 会话
+- Simplex 模式：每条消息一个新 stream；读端 EOF 可接受
+- X25519 PK 缓存：`session.Manager.SetPeerX25519PK()` + `mgr.PeerStaticX25519PK()` 用于带内对等方密钥查找
 
 ### Architecture
 
@@ -281,10 +425,10 @@ A (initiator)                         B (responder)
 
 ### Key Design Decisions
 
-- **Responder ratchet initialization**: `NewDRSessionResponder` creates an empty ratchet; first incoming message's header is used to initialize it (X3DH-style agreement embedded in DR header)
-- **Peer X25519 PK lookup**: `session.Manager` has a local `peerX25519PK map[peer.ID][]byte` cache. Callers must `SetPeerX25519PK()` before DR sessions can look up a peer's static key during `Receive()`
-- **Simplex streams**: `DRSession.Send()` reads response size with `io.EOF` tolerance — in simplex mode the peer closes the stream after sending
-- **Protocol IDs**: ECIES session uses `/hermes/agent-comm/session/1.0.0`, DR uses `/agent/dr/1.0.0` (separate协议协商)
+- **Responder ratchet 初始化**：`NewDRSessionResponder` 创建空 ratchet；第一条入站消息的 header 用于初始化（X3DH-style agreement 嵌入 DR header）
+- **Peer X25519 PK 查找**：`session.Manager` 有本地 `peerX25519PK map[peer.ID][]byte` 缓存。调用者必须在 `Receive()` 前通过 `SetPeerX25519PK()` 设置对等方静态密钥
+- **Simplex streams**：`DRSession.Send()` 用 `io.EOF` 容限读取响应大小 — simplex 模式下对等方发送后关闭 stream
+- **Protocol IDs**：ECIES session 使用 `/hermes/agent-comm/session/1.0.0`，DR 使用 `/agent/dr/1.0.0`（独立协议协商）
 
 ### Test
 
@@ -292,7 +436,7 @@ A (initiator)                         B (responder)
 go run ./cmd/test_dr_net/
 ```
 
-Expected output:
+预期输出：
 ```
 --- B sends 'Message 1 from B' to A ---
 [OK] B: Message 1 sent
@@ -305,240 +449,90 @@ Expected output:
 
 ---
 
-## Future Phases (Not Implemented)
-
-### Phase 4 — Web of Trust
-
-Contact list with trust levels, introduction certificates, and path-based trust resolution.
-
-**Current state**: `wot/` package exists and compiles but is not integrated into the main client. `wot/store.go`, `wot/claim.go`, `wot/resolver.go` provide the core logic. A stream handler on `/hermes/agent-comm/wot/1.0.0` and network test (`cmd/test_wot/`) remain to be built.
-
-## Phase 3 — Async Message Queue (Offline Support)
-
-**Done.** Relay-based offline message storage and retrieval.
-
-### Problem
-
-Agent A is offline. Agent B sends a message. Without MQ, the message fails or is discarded. With MQ, B stores an encrypted blob on a relay node; A retrieves it when online.
-
-### Architecture
-
-```
-B (sender) ──→ [Direct session to A?] ──→ SUCCESS (A online)
-                                 └─→ [Store via relay] ──→ SUCCESS (relay stores blob)
-
-A (receiver) ──→ [Pull from relay] ──→ Decrypt ──→ Read
-```
-
-### Protocol (proto/mq.proto)
-
-```
-MQRequest = StoreRequest | RetrieveRequest | AckRequest
-MQResponse = StoreResponse | RetrieveResponse | AckResponse
-
-StoreRequest:
-  recipient_urn: string        # who this message is for
-  payload: bytes               # EncryptedEnvelope bytes (relay can't read)
-  ttl_seconds: int64           # expiry
-
-RetrieveRequest:
-  recipient_urn: string       # client's own URN
-
-RetrieveResponse:
-  envelopes: [EncryptedEnvelope]
-
-AckRequest:
-  message_ids: [string]      # delete after successful read
-
-StoreResponse:
-  message_id: string          # assigned by relay for ack
-
-AckResponse:
-  deleted_count: int32
-```
-
-### Relay Server (mq/server.go)
-
-- SQLite-backed (`store/relay/mq.db`)
-- Per-recipientURN index on `recipient_urn`
-- Auto-deletes expired messages on retrieve and on startup
-- Message IDs: SHA256(envelope+SENDER_URN+timestamp)[:16] hex
-- No read access to envelope content — only stores/deletes/returns blobs
-
-### Client (mq/client.go)
-
-- `Store(ctx, relay, recipientURN, envelope, ttl)` — send to relay
-- `Retrieve(ctx, relay, myURN)` — pull all pending messages
-- `Ack(ctx, relay, messageIDs)` — delete after read
-- On startup: pull → decrypt → display → ack
-
-### End-to-End Flow
-
-1. **B → A (A online):** Direct session via libp2p stream, ECIES encrypted, reply encrypted
-2. **B → A (A offline):** B builds `EncryptedEnvelope`, calls `MQ.Store`, relay stores blob
-3. **A comes online:** A calls `MQ.Retrieve`, decrypts each envelope, acks deletion
-
-### Test
-
-```bash
-go run ./cmd/test_mq/    # Three-node test: Relay + Sender + Receiver (offline then online)
-```
-
----
-
-## Phase 4 — WoT (Web of Trust) + Double Ratchet
-
-### 4a — Web of Trust
-
-**Problem:** When Bob sends a message to Alice for the first time, how does Bob know `urn:hermes:agent:Alice` actually belongs to the real Alice and not an imposter? The registry only maps URN→PeerID→pubkey, it does not authenticate identity.
-
-**Solution:** Signed trust claims. If Charlie says "I trust urn:hermes:agent:Alice (key=X, peer=12D3...)", and Bob already trusts Charlie, then Bob can derive transitive trust for Alice.
-
-**Trust Claim (wot.proto):**
-
-```proto
-message TrustClaim {
-  string issuer_urn          // Charlie (who made the claim)
-  string subject_urn          // Alice (who is being claimed about)
-  string subject_peer_id      // Alice's libp2p PeerID
-  bytes  subject_x25519_pk    // Alice's X25519 static pubkey
-  TrustLevel level            // TRUSTED / UNTRUSTED / UNKNOWN
-  bytes  issuer_signature     // Ed25519 signature over SHA256(issuer||subject||peer||pk||level)
-  int64  issued_at_unix
-}
-```
-
-**Trust Levels:**
-- `TRUSTED` — issuer explicitly vouches for subject's identity
-- `UNTRUSTED` — issuer explicitly distrusts (revocation use case)
-- `UNKNOWN` — neutral statement (awareness without judgment)
-
-**Trust Path Resolution (BFS):**
-- Local store: `wot/store.go` — SQLite of all known claims (from self or fetched from network)
-- Resolver: BFS from `myURN` → any node that issued a `TRUSTED` claim about target
-- Path found → verify signatures chain → accept pubkey
-- No path → warn: "Untrusted peer, proceed manually?"
-
-**Fetching claims from network:**
-- New stream handler on `/hermes/agent-comm/wot/1.0.0`
-- `WOTQuery`: given a target URN, return all claims about it known by the peer
-- Peers gossip claims lazily (only fetch when needed for trust resolution)
-
-**Bootstrap trust:** First-run setup requires manual bootstrap trust — user inputs a known URN they want to trust directly. After that, WoT network grows via transitive claims.
-
----
-
-### 4b — Double Ratchet
-
-**Problem:** If Bob's static key is compromised tomorrow, all past messages between Bob and Alice can be decrypted (static-static ECDH has no forward secrecy).
-
-**Solution:** Double Ratchet (Signal Protocol). Each message uses a new ephemeral key derived from a ratchet state. Compromise of one key only exposes a bounded window of messages.
-
-**Architecture:**
-
-```
-dr/
-├── ratchet.go   # RatchetState: root key, chain keys, DH ratchet step
-├── session.go   # DRSession: encrypt/decrypt with ratchet, ECIES for initial key exchange
-└── store.go     # Persistent session state (per-peer URN)
-```
-
-**Key derivation chain:**
-
-```
-Initial: ECDH(our_DH_SK, their_DH_PK) → SKR
-SKR → HKDF → root_key + chain_key_0
-
-Message send (k=0):
-  chain_key_0 → HKDF → message_key_0 + chain_key_1
-  encrypt(message_key_0, plaintext) → ciphertext
-
-DH Ratchet step (after receiving their new DH pubkey):
-  ECDH(our_new_DH_SK, their_DH_PK) → SKR2
-  SKR2 → HKDF → root_key_2 + chain_key_2
-```
-
-**Integration with existing ECIES session:**
-- `session/session.go` already does ECDH + ECIES for the initial key exchange
-- Replace the static-static ECDH with an initial Double Ratchet handshake
-- `dr/session.go` provides `DRSendMessage` / `DRReceiveMessage` as a drop-in for `SendMessage` / stream handler
-- Forward secrecy: after N messages, old chain keys are deleted
-
-**Note:** Double Ratchet requires stateful session per peer (unlike current stateless ECIES). This adds complexity — keep current `session/session.go` as fallback for cases where DR state is not available.
-
----
-
 ## Project Structure
 
 ```
 agent-comm/
 ├── crypto/
-│   ├── keys.go       # Identity key loading/creation (Ed25519 + X25519)
-│   └── ecies.go      # ECIES encryption/decryption
+│   ├── keys.go       # Identity key 加载/创建（Ed25519 + X25519）
+│   └── ecies.go      # ECIES 加密/解密
 ├── dht/
-│   └── dht.go        # Kad-DHT wrapper
+│   └── dht.go        # Kad-DHT 封装
 ├── libp2p/
-│   └── host.go       # libp2p.Host construction
+│   └── host.go       # libp2p.Host 构建
 ├── proto/
 │   ├── registry.proto
-│   ├── agentcomm.proto   # legacy Envelope (not currently used)
+│   ├── envelope.proto    # EncryptedEnvelope, ChatMessage
 │   ├── mq.proto          # Phase 3: async queue
+│   ├── wot.proto         # Phase 4a: trust claims
 │   └── *.pb.go
 ├── registry/
 │   ├── client.go     # URN resolve/register via libp2p stream
 │   └── server.go     # URN registry server handler
 ├── session/
-│   └── session.go    # Encrypted session send/receive
+│   └── session.go    # Encrypted session send/receive (Phase 2)
 ├── mq/               # Phase 3: async message queue
 │   ├── server.go     # Relay: store/retrieve/ack (SQLite)
 │   └── client.go     # Client: store via relay, retrieve on startup
-├── store/
-│   └── relay/        # (legacy, see mq/server.go)
 ├── contacts/         # Phase 4a: contact management + trusted pubkey cache
-├── wot/               # Phase 4a: web of trust (claim, store, resolver)
-├── dr/                # Phase 4b: double ratchet (ratchet, session, store)
-└── cmd
-    ├── bootstrap/    # Bootstrap/relay node (registry + MQ server)
-    ├── client/       # Regular client node
-    ├── test_session/ # Two-node encrypted session test
-    └── test_mq/       # Three-node offline message test
+├── wot/              # Phase 4a: web of trust
+│   ├── claim.go      # TrustClaim 创建和验证
+│   ├── store.go      # SQLite persistence
+│   └── resolver.go   # BFS trust path resolution
+├── dr/               # Phase 4b: double ratchet
+│   ├── ratchet.go    # RatchetState: root/chain keys, DH step
+│   ├── session.go    # DRSession: encrypt/decrypt
+│   └── store.go      # DRSession persistence (SQLite)
+├── store/
+│   └── relay/        # (空目录，relay 功能由 mq/server.go 实现)
+├── cmd/
+│   ├── bootstrap/    # Bootstrap/relay 节点（registry + MQ server）
+│   ├── client/       # 常规客户端节点
+│   ├── test_session/  # Phase 2: 两节点 ECIES 加密会话测试
+│   ├── test_mq/       # Phase 3: 三节点离线消息测试（relay + sender + receiver）
+│   ├── test_dr_persist/  # Phase 5: DR 会话持久化测试
+│   ├── test_dr_net/     # Phase 6: 两节点 libp2p 双向 DR 测试
+│   ├── test_hkdf_check/
+│   ├── test_kdf/
+│   ├── test_debug/
+│   └── debug_dh/
+└── docs/
+    ├── TUTORIAL.md
+    └── DR-CODE-COMMENTARY.md
 ```
 
 ---
 
 ## Security Notes
 
-- Relay stores encrypted blobs — cannot read message content
-- Relay can be removed without compromising message confidentiality
-- AAD = protocol constant (not peer-specific) — avoids URN↔PeerID derivation issues
-- WoT (Phase 4a): trust claims are Ed25519 signed; trust path is verified before accepting a new peer's pubkey
-- Double Ratchet (Phase 4b): forward secrecy — old chain keys are deleted after use
-- No WoT → first-contact identity relies on registry alone (MITM possible)
-- No Double Ratchet (current) → static-static ECDH; key compromise exposes all history
+- Relay 存储加密 blob — 无法读取消息内容
+- Relay 可移除而不影响消息机密性
+- AAD = 协议常量（非对等方特定）— 避免 URN↔PeerID 推导问题
+- WoT（Phase 4a）：信任声明使用 Ed25519 签名；接受新对等方 pubkey 前验证信任路径
+- Double Ratchet（Phase 4b）：前向保密 — 旧 chain key 使用后删除
+- 无 WoT → 首次联系身份仅依赖 registry（MITM 可能）
+- 无 Double Ratchet（当前）→ 静态-静态 ECDH；密钥泄露暴露所有历史
 
 ---
 
 ## Test Commands
 
 ```bash
-# Phase 2: Two-node ECIES encrypted session
+# Phase 2: 两节点 ECIES 加密会话
 go run ./cmd/test_session/
 
-# Phase 3: Three-node offline message test (relay + sender + receiver)
+# Phase 3: 三节点离线消息测试（relay + sender + receiver）
 go run ./cmd/test_mq/
 
-# Phase 5: DR session persistence (SQLite round-trip)
+# Phase 5: DR 会话持久化（SQLite 往返）
 go run ./cmd/test_dr_persist/
 
-# Phase 6: Two-node bidirectional DR over libp2p
+# Phase 6: 两节点 libp2p 双向 DR
 go run ./cmd/test_dr_net/
 
-# Bootstrap node (registry + MQ server)
+# Bootstrap 节点（registry + MQ server）
 go run ./cmd/bootstrap/
 
-# Client node (interactive: send/pull/quit)
+# 客户端节点（交互式：send/pull/quit）
 BOOTSTRAP_ADDR=/ip4/127.0.0.1/tcp/45041/p2p/... go run ./cmd/client/
-
-# Phase 4a: WoT trust path test (planned)
-go run ./cmd/test_wot/
 ```
