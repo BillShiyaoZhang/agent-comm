@@ -148,6 +148,8 @@ func main() {
 	theirDHPub1 := alice.DHPub
 
 	// Bob FinishRatchet(alice.DHPub)
+	// FIX: Use origRootKey as base for BOTH recv and send chains (symmetric ratchet).
+	// Bug was: send chain used bob.RootKey (newly updated) instead of bob.origRootKey.
 	fmt.Println("=== Bob FinishRatchet ===")
 	bobSK2, bobPK2 := GenerateDHKey()
 	bob.DHSecret = bobSK2
@@ -155,6 +157,7 @@ func main() {
 	dh1, _ := curve25519.X25519(bob.DHSecret[:], theirDHPub1[:])
 	var dh1b [32]byte
 	copy(dh1b[:], dh1)
+	// Recv chain: kdfRootChain(dh1, origRootKey)
 	rk2, ck2, _, _ := kdfRootChain(dh1b, bob.origRootKey, nil)
 	bob.RootKey = rk2
 	bob.ReceiveChainKey = ck2
@@ -164,24 +167,17 @@ func main() {
 	fmt.Printf("  Bob new RootKey: %x, RecvChainKey: %x\n", bob.RootKey[:4], bob.ReceiveChainKey[:4])
 
 	// Bob sends reply1
+	// Symmetric ratchet: send chain uses SAME dh output and origRootKey (matching Alice's recv chain)
 	fmt.Println("=== Bob sends reply1 ===")
-	// Step 1-6 of bob's send: DH output from current secret
 	dhSend1, _ := curve25519.X25519(bob.DHSecret[:], bob.TheirDHPub[:])
 	var dhSend1b [32]byte
 	copy(dhSend1b[:], dhSend1)
-	// Bob step 7: new RootKey = bob.RootKey (from FinishRatchet), SendChainKey = kdfRootChain(dhSend1, newRK)
-	fmt.Printf("  Bob step7: dhSend1=%x newRK=%x (bob.RootKey)\n", dhSend1[:4], bob.RootKey[:4])
-	// CRITICAL CHECK: dhSend1 should equal dh1 (from FinishRatchet step 2)
-	fmt.Printf("  CRITICAL: dhSend1=%x dh1=%x equal=%v\n", dhSend1[:4], dh1[:4], string(dhSend1) == string(dh1))
-	// What Bob's send chain key will be
-	fmt.Printf("  Bob will compute: kdfRootChain(dhSend1=%x, RK=%x)\n", dhSend1[:4], bob.RootKey[:4])
-	rk3, ckSend1, _, _ := kdfRootChain(dhSend1b, bob.RootKey, nil)
-	fmt.Printf("  Bob send chain result: newRK=%x sendCK=%x\n", rk3[:4], ckSend1[:4])
+	// Send chain: kdfRootChain(dhSend1, origRootKey) — same base as recv chain
+	rk3, ckSend1, _, _ := kdfRootChain(dhSend1b, bob.origRootKey, nil)
 	bob.RootKey = rk3
 	bob.SendChainKey = ckSend1
 	bob.SendCount = 0
-	fmt.Printf("  Bob send DH: %x\n", dhSend1[:4])
-	fmt.Printf("  Bob new SendChainKey: %x, RootKey: %x\n", bob.SendChainKey[:4], bob.RootKey[:4])
+	fmt.Printf("  Bob send chain DH: %x, new RK: %x, sendCK: %x\n", dhSend1[:4], bob.RootKey[:4], bob.SendChainKey[:4])
 
 	msgKeyR1, nextCKR1, _ := kdfMessageKey(bob.SendChainKey)
 	ctR1 := encryptWithKey(msgKeyR1, []byte("Hi Alice!"))

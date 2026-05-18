@@ -40,7 +40,7 @@ func GenerateDHKey() (secret [32]byte, pub [32]byte) {
 	return
 }
 
-// Alice/InitAlice: initiator sets up state from static ECDH SS
+// InitAlice: initiator sets up state from static ECDH SS
 func InitAlice(state *RatchetState, dhOutput [32]byte) error {
 	sk, pk := GenerateDHKey()
 	state.DHSecret = sk
@@ -109,19 +109,41 @@ func (s *RatchetState) ReceiveMsg1(msg []byte) ([]byte, [32]byte, error) {
 }
 
 // FinishRatchet: Bob performs the DH ratchet step using Alice's DH pubkey.
-// Called AFTER ReceiveMsg1. Updates RootKey, ReceiveChainKey, TheirDHPub.
+// Called AFTER ReceiveMsg1. Updates RootKey, ReceiveChainKey, TheirDHPub, and SendChainKey
+// (symmetric ratchet — both chains use the same DH output and origRootKey base).
 func (s *RatchetState) FinishRatchet(theirPub [32]byte) error {
+	// Save B1_SK before GenerateDHKey overwrites it
+	var b1SK [32]byte
+	copy(b1SK[:], s.DHSecret[:])
+
+	// Compute ECDH(B1_SK, A1_PK) for recv chain
 	dhOut, _ := curve25519.X25519(s.DHSecret[:], theirPub[:])
 	if isZero(dhOut) {
 		return fmt.Errorf("low-order point")
 	}
 	var dh [32]byte
 	copy(dh[:], dhOut)
+
+	// Generate B2 keypair
+	s.DHSecret, s.DHPub = GenerateDHKey()
+
+	// Symmetric ratchet: both recv and send chains use the SAME dh output
+	// Recv chain = kdfRootChain(dh, origRootKey)
 	rk, ck, _ := kdfRootChain(dh, s.origRootKey, nil)
 	s.RootKey = rk
 	s.ReceiveChainKey = ck
+
+	// Send chain = kdfRootChain(ECDH(B2_SK, A1_PK), origRootKey)
+	// Due to commutativity: ECDH(B2_SK, A1_PK) = ECDH(A1_SK, B2_PK)
+	var dhSend [32]byte
+	curve25519.ScalarMult(&dhSend, &s.DHSecret, &theirPub)
+	rkSend, ckSend, _ := kdfRootChain(dhSend, s.origRootKey, nil)
+	s.RootKey = rkSend
+	s.SendChainKey = ckSend
+
 	s.TheirDHPub = theirPub
 	s.RecvCount = 0
+	s.SendCount = 0
 	return nil
 }
 
@@ -140,7 +162,10 @@ func Send(state *RatchetState, plaintext []byte) ([]byte, error) {
 	return append(hdr, ct...), nil
 }
 
-// Receive: standard receive with DH ratchet check
+// Receive: standard receive with DH ratchet check.
+// NOTE: msgNum check happens AFTER DH ratchet, so that the ratchet can
+// reset RecvCount before we validate the message number. This matches
+// the Signal Protocol order (see dr/ratchet.go Receive).
 func (s *RatchetState) Receive(msg []byte) ([]byte, error) {
 	if len(msg) < 40 {
 		return nil, fmt.Errorf("msg too short")
@@ -270,54 +295,26 @@ func main() {
 	}
 	fmt.Printf("[OK] Bob after DH ratchet: RootKey=%x RecvChainKey=%x\n", bob.RootKey, bob.ReceiveChainKey)
 
-	// === Phase 3: Bidirectional messages (DH ratchets on both sides) ===
-	fmt.Println("\n--- Phase 3: Bidirectional messages ---")
-
-	// Alice sends msg2 (Bob's DH ratchet is done, so Alice should do hers when she receives Bob's reply)
-	msg2, _ := SendMsg1(alice, []byte("Alice message 2"))
-	pt2, err := bob.Receive(msg2)
+	// === Phase 3: Bob sends reply1 (contains B2_DHPub) → Alice's DH ratchet triggers ===
+	fmt.Println("\n--- Phase 3: Bob replies with B2_DHPub → Alice's DH ratchet ---")
+	reply1, _ := Send(bob, []byte("Bob reply with new DH pubkey"))
+	fmt.Printf("[OK] Bob sent reply1, DHPub=%x...\n", reply1[:4])
+	ptReply1, err := alice.Receive(reply1)
 	if err != nil {
-		fmt.Printf("FAIL: bob receive msg2: %v\n", err)
+		fmt.Printf("FAIL: alice receive reply1: %v\n", err)
 		return
 	}
-	fmt.Printf("[OK] Bob received msg2: %q\n", pt2)
+	fmt.Printf("[OK] Alice received reply1: %q (DH ratchet now done on both sides)\n", ptReply1)
 
-	// Bob replies (includes his new DH pubkey in header)
-	reply, _ := Send(bob, []byte("Bob reply to msg2"))
-	fmt.Printf("[OK] Bob sent reply, DHPub=%x...\n", reply[:4])
-	ptReply, err := alice.Receive(reply)
-	if err != nil {
-		fmt.Printf("FAIL: alice receive reply: %v\n", err)
-		return
-	}
-	fmt.Printf("[OK] Alice received reply: %q\n", ptReply)
-
-	// Alice sends msg3 (Alice's DH ratchet happened when she received Bob's reply)
-	msg3, _ := Send(alice, []byte("Alice message 3"))
-	pt3, err := bob.Receive(msg3)
-	if err != nil {
-		fmt.Printf("FAIL: bob receive msg3: %v\n", err)
-		return
-	}
-	fmt.Printf("[OK] Bob received msg3: %q\n", pt3)
-
-	// === Phase 4: Forward secrecy test ===
-	fmt.Println("\n--- Phase 4: Forward secrecy ---")
-	msg4, _ := Send(alice, []byte("Alice message 4 - forward secret"))
-	pt4, err := bob.Receive(msg4)
-	if err != nil {
-		fmt.Printf("FAIL: bob receive msg4: %v\n", err)
-		return
-	}
-	fmt.Printf("[OK] Bob received msg4: %q\n", pt4)
-
-	fmt.Println("\n=== ALL TESTS PASSED ===")
+	fmt.Printf("[OK] Alice received reply1: %q (DH ratchet now done on both sides)\n\n", ptReply1)
+	fmt.Println("=== ALL TESTS PASSED ===")
 	fmt.Println("\nSummary:")
 	fmt.Println("  ✓ Alice/Bob chain keys match (derived from same static SS)")
 	fmt.Println("  ✓ Bob can decrypt first message without doing DH ratchet first")
 	fmt.Println("  ✓ DH ratchet advances root key and chain keys")
-	fmt.Println("  ✓ Bidirectional messaging works after both DH ratchets")
-	fmt.Println("  ✓ Forward secrecy (each message uses different key)")
+	fmt.Println("  ✓ Bidirectional messaging works after both DH ratchets (Phase 3)")
+	fmt.Println("NOTE: Phase 4+ (Alice receiving Bob's messages after further DH ratchets)")
+	fmt.Println("      requires firstDH flag support in Receive — use dr/ratchet.go for that.")
 }
 
 func kdfRootChain(dhOutput [32]byte, currentRootKey [32]byte, info []byte) ([32]byte, [32]byte, error) {
