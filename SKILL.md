@@ -1,10 +1,9 @@
 ---
 name: agent-comm
 description: >
-  P2P encrypted agent messaging: libp2p + DHT + Double Ratchet.
-  Project: ~/.hermes/agent-comm/
-  Activate when: setting up agent-to-agent comm, exchanging contacts via libp2p,
-  sending DR-encrypted messages, or doing libp2p/DR development.
+  Hybrid P2P encrypted agent messaging SDK: libp2p + DHT + Double Ratchet + Platform.
+  Project: ~/.openclaw/workspace/skills/agent-comm/
+  Activate when: setting up agent-to-agent comm, developing Hybrid P2P architecture, wrapper APIs (InitIdentity/SendMessage), routing downgrades (直连/Relay/MQ), or doing libp2p/DR development.
 ---
 
 # agent-comm — Agent Reference
@@ -12,28 +11,41 @@ description: >
 ## 调用触发条件
 
 遇到以下情况时激活此 skill：
-- 用户要求两个 agent 之间建立通信
-- 交换 contact 信息、通过 libp2p 发送加密消息
+- 用户要求两个 agent 之间建立通信，或开发、集成 agent-comm SDK
+- 封装高阶 API (如 `InitIdentity`, `SendMessage`, `OnMessage`) 及自适应降级路由
+- 交换 contact 信息、通过 libp2p 发送并存储加密消息
 - 开发 libp2p / Double Ratchet 相关功能
 
-## 项目路径
+## 混合架构设计 (Hybrid P2P Architecture)
 
-```
-~/.hermes/agent-comm/
-Go binary: ~/.local/go/bin/go (Go 1.25.10)
-```
+系统被划分为两个核心部分，本项目主要负责 **客户端 SDK 侧** 的研发。
 
-## 当前实现状态
+1. **Agent Comm Skill (客户端/SDK侧 - 本项目)**
+   抹平底层密码学和网络基建，对外暴露对人类/应用友好的、开箱即用的高阶 API 与状态机。
+   - **自适应网络降级**：通过 AutoNAT 自动适应为 Full Node（直连）或 Client Node（挂载 Relay）。
+   - **多路竞速发现**：并行向 Kademlia DHT 及平台超级 Registry 发起目标 `URN` 解析。
+   - **阶梯退化投递流**：① TCP/QUIC 双向直连 -> ② Relay v2 中继打洞 -> ③ EncryptedEnvelope 离线 MQ 盲存。
+   - **信任绑定**：端侧配合 UI（扫码或 URN 复制）确认目标公钥指纹。
 
-| Phase | 状态 | 验证命令 |
-|-------|------|---------|
-| 1 | ✅ | `go run ./cmd/test_host/` |
-| 2 | ✅ | `go run ./cmd/test_session/` |
-| 3 | ✅ | `go run ./cmd/test_mq/` |
-| 4b | ✅ | `go run ./cmd/test_dr/` + `./cmd/test_dr_net/` |
-| 5 | ✅ | `go run ./cmd/test_dr_persist/` |
-| 6 | ✅ | `go run ./cmd/test_dr_net/` |
-| 4a WoT | ⚠️ | 未集成，无测试命令 |
+2. **Platform (云端基础设施 - ⚠️ 另立独立项目实现)**
+   高性能信箱、寻址目录及合规代理，解决 NAT 穿透及离线到达率问题。
+   - 包括超级 Registry 节点、高可用 Relay 集群、MQ 离线消息信箱。
+   - 支持两种模式：原生隐私模式（严格 Double Ratchet 纯盲存）和 监管合规模式（代理网关，持有网关公钥执行双段加密审查）。
+
+### 新阶段 API 封装目标 (Wrapper)
+
+- `agent.InitIdentity(config)`：身份生成或读取、挂载 SQLite、根据网络自动挂载/暴露。
+- `agent.SendMessage(urn, text)`：内置竞速寻址与降级投递（直连失败自行丢进 MQ）。
+- `agent.OnMessage(callback)`：接收 Double Ratchet 实时流及并主动拉取/同步 MQ 信封。
+
+## 当前底层实现状态
+
+| Phase | 状态 | 验证命令 | 说明 |
+|-------|------|---------|------|
+| 1-3 | ✅ | `go run ./cmd/test_mq/` 等 | 底层 libp2p、DHT、Relayv2 及 MQ |
+| 4b-6 | ✅ | `go run ./cmd/test_dr_net/` 等 | Ed/X25519 握手与 Double Ratchet 及持久化 |
+| Wrapper | ✅ | `go run ./cmd/agent_demo/main.go` | 核心高阶 SDK，实现了离线退化逻辑硬通配与双棘轮集成 |
+| 4a WoT | ⚠️ | 待简化 | 轻量化扫码交叉与本地通讯录 |
 
 ## Double Ratchet 容易踩的坑
 

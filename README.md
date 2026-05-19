@@ -92,6 +92,37 @@ docs/
 
 ---
 
+## Hybrid P2P 架构与高层 SDK 封装
+
+本项目在底层 P2P (DHT + Double Ratchet) 跑通的基础上，新增了**客户端 SDK (Agent Comm Skill)** 的高级封装（位于 `agent/` 目录），并设计了**Hybrid P2P (混合降级通讯)** 架构：
+
+- **自适应网络降级**：通过多路竞速发现（并发查询 Kademlia DHT 及中心 Registry），并按照阶梯退化策略投递消息（① TCP/QUIC 直连拨号 -> ② Relay 中继打洞 -> ③ 离线加密信封盲投 MQ）。
+- **SDK Wrapper (`agent.Agent`)**：对外抹平了底层密码学与连接逻辑的复杂性，仅暴露了极其友好的业务级 API。
+- **Platform (另立项目)**：包括中心化 Registry 寻址、MQ 高性能大并发盲存集群、离线代持合规网关，作为该去中心化项目的全天候兜底“信箱云”。
+
+### 极速上手 Demo
+
+只需创建一个 Config 并调用三行核心 API 即可拉起包含双棘轮状态引擎的 AI Agent 端点：
+
+```go
+// 1. 一键读取身份并开启混合 P2P 网络 (挂载 SQLite DR持久化)
+a, _ := agent.InitIdentity(ctx, agent.Config{
+    KeysDir: "./demo_keys",
+    DBPath: "./demo_dr.db",
+    // BootstrapNodes...
+})
+
+// 2. 异步接收打洞与离线缓存 MQ 的消息
+a.OnMessage(ctx, func(senderURN string, msg string) {
+    fmt.Printf("<<< Received from %s: %s\n", senderURN, msg)
+})
+
+// 3. 多路寻址竞速发送（支持离线兜底 Double Ratchet 盲存）
+a.SendMessage(ctx, targetURN, "Hello!")
+```
+
+详见 `cmd/agent_demo/main.go`。
+
 ## 测试命令
 
 ```bash
