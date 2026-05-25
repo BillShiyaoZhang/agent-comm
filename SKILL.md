@@ -166,9 +166,9 @@ cd ~/.hermes/agent-comm
 1. **查阅参考代码**：
    - 核心连通实例在 [cmd/platform_test/main.go](file:///c:/Users/zhang/Developer/agent-comm/cmd/platform_test/main.go)。该文件包含了完整的 libp2p P2P 拨号连接、注册本节点 URN、解析 URN、通过 MQ client 盲存 ECIES/Double Ratchet 信封、拉取信封与 Ack 销毁流程。
 2. **P2P 引导与注册地址**：
-   - 平台的公网 IP 为 `8.130.40.38`，PeerID 为 `12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`。
-   - **推荐 UDP/QUIC 协议连接**：使用引导 Multiaddr `/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`。
-   - **TCP 备用协议连接**：使用引导 Multiaddr `/ip4/8.130.40.38/tcp/45041/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`。
+    - 平台的公网域名为 `agent-communication.online`，PeerID 为 `12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`。
+    - **推荐 UDP/QUIC 协议连接**：使用引导 Multiaddr `/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`。
+    - **TCP 备用协议连接**：使用引导 Multiaddr `/dns4/agent-communication.online/tcp/45041/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`。
 3. **重要开发 Gotchas (Agent 必看)**：
    - **不要使用 `patch.go`**：这个文件已被废弃并删除，直接使用 [agent/agent.go](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go) 所包装的 API 进行消息发送。
    - **MQ 存取与 Ack 方法**：

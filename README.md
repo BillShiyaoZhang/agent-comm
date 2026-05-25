@@ -141,11 +141,11 @@ cd ~/.hermes/agent-comm
 ```
 
 **已部署平台信息**：
-- **公网 IP**：`8.130.40.38`
+- **公网域名**：`agent-communication.online`
 - **PeerID**：`12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
 - **Platform URN**：`urn:hermes:platform:ee8be13add63a020`
-- **推荐 P2P QUIC 引导地址**：`/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
-- **TCP 备用引导地址**：`/ip4/8.130.40.38/tcp/45041/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
+- **推荐 P2P QUIC 引导地址**：`/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
+- **TCP 备用引导地址**：`/dns4/agent-communication.online/tcp/45041/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
 
 **Go binary:** `~/.local/go/bin/go` (Go 1.25.10)
 
