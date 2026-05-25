@@ -1,183 +1,142 @@
 ---
 name: agent-comm
 description: >
-  Hybrid P2P encrypted agent messaging SDK: libp2p + DHT + Double Ratchet + Platform.
-  Project: ~/.openclaw/workspace/skills/agent-comm/
-  Activate when: setting up agent-to-agent comm, developing Hybrid P2P architecture, wrapper APIs (InitIdentity/SendMessage), routing downgrades (直连/Relay/MQ), or doing libp2p/DR development.
+  混合 P2P 加密智能体消息 SDK：libp2p + DHT + 双棘轮 + 平台。
+  项目路径: ~/.openclaw/workspace/skills/agent-comm/
+  激活时机: 当需要建立安全智能体间通信、导入/导出联系人卡片、发送加密消息或通过 Go agent-comm SDK 监听消息时激活。
 ---
 
-# agent-comm — Agent Reference
+# agent-comm — 智能体参考手册 (Agent Reference Manual) 🤖
 
-## 调用触发条件
+本手册专为使用 `agent-comm` 技能的 **AI 智能体**（例如你自己）编写。它提供了可直接操作的指令、API 指南以及代码模板，以帮助你顺利实现安全通信。
 
-遇到以下情况时激活此 skill：
-- 用户要求两个 agent 之间建立通信，或开发、集成 agent-comm SDK
-- 封装高阶 API (如 `InitIdentity`, `SendMessage`, `OnMessage`) 及自适应降级路由
-- 交换 contact 信息、通过 libp2p 发送并存储加密消息
-- 开发 libp2p / Double Ratchet 相关功能
+在使用这些能力时，请注意区分 **纯 Skill (SDK) 本地运行模式** 与 **搭配 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform) 配套云服务模式** 的功能差异。
 
-## 混合架构设计 (Hybrid P2P Architecture)
+---
 
-系统被划分为两个核心部分，本项目主要负责 **客户端 SDK 侧** 的研发。
+## 🎯 技能激活时机
 
-1. **Agent Comm Skill (客户端/SDK侧 - 本项目)**
-   抹平底层密码学和网络基建，对外暴露对人类/应用友好的、开箱即用的高阶 API 与状态机。
-   - **自适应网络降级**：通过 AutoNAT 自动适应为 Full Node（直连）或 Client Node（挂载 Relay）。
-   - **多路竞速发现**：并行向 Kademlia DHT 及平台超级 Registry 发起目标 `URN` 解析。
-   - **阶梯退化投递流**：① TCP/QUIC 双向直连 -> ② Relay v2 中继打洞 -> ③ EncryptedEnvelope 离线 MQ 盲存。
-   - **信任绑定**：端侧配合 UI（扫码或 URN 复制）确认目标公钥指纹。
+在以下情况下，你应该自主激活此技能：
+- 用户要求你（智能体实例）与另一个智能体建立安全通信连接。
+- 你需要生成自己本机的网络连接元数据（联系人名片卡片）分享给对方。
+- 你需要将对方智能体添加为联系人，并启动安全加密对话。
+- 你需要发送加密消息，或者持续接收来自其他智能体的消息（包括实时消息与离线暂存信封）。
 
-2. **Platform (云端基础设施 - ⚠️ 另立独立项目实现)**
-   高性能信箱、寻址目录及合规代理，解决 NAT 穿透及离线到达率问题。
-   - 包括超级 Registry 节点、高可用 Relay 集群、MQ 离线消息信箱。
-   - 支持两种模式：原生隐私模式（严格 Double Ratchet 纯盲存）和 监管合规模式（代理网关，持有网关公钥执行双段加密审查）。
+---
 
-### 新阶段 API 封装目标 (Wrapper)
+## 🛠️ 智能体目标操作指南 (Action Guide)
 
-- `agent.InitIdentity(config)`：身份生成或读取、挂载 SQLite、根据网络自动挂载/暴露。
-- `agent.SendMessage(urn, text)`：内置竞速寻址与降级投递（直连失败自行丢进 MQ）。
-- `agent.OnMessage(callback)`：接收 Double Ratchet 实时流及并主动拉取/同步 MQ 信封。
+### 目标 1：初始化你的智能体实例 (纯 Skill 本地功能)
+在发送或接收任何消息之前，你必须先初始化你的身份密钥对、SQLite 状态持久化数据库以及 libp2p 网络栈。
+* **操作方式**：定义 [Config](file:///c:/Users/zhang/Developer/agent-comm/agent/config.go) 结构体中的配置参数（如身份密钥目录 `KeysDir`、数据库路径 `DBPath`、监听端口等），然后调用 [InitIdentity](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go#L42-L110)。这完全在本地运行，不依赖云端。
 
-## 当前底层实现状态
+### 目标 2：交换通信名片与互加好友 (纯 Skill 本地功能)
+要与另一个智能体通信，你需要它的**联系人卡片（Contact Card）**，它也同样需要你的卡片。
+> [!NOTE]
+> 智能体在网络中的唯一数字身份称为 **URN (Uniform Resource Name，统一资源名称)**，其格式为 `urn:hermes:agent:<fingerprint>`。
+* **分享名片**：调用 [GenerateContactCard](file:///c:/Users/zhang/Developer/agent-comm/agent/contact_card.go#L223-L225) 导出你的名片文本，完全基于本地生成，无需向服务器注册。
+* **导入名片**：获取对方名片的文本块，然后调用 [ImportContactCard](file:///c:/Users/zhang/Developer/agent-comm/agent/contact_card.go#L228-L230)。这会自动将对方的物理网络地址写入本地 peerstore，并在 `contacts` 数据库中保存其静态公钥。
 
-| Phase | 状态 | 验证命令 | 说明 |
-|-------|------|---------|------|
-| 1-3 | ✅ | `go run ./cmd/test_mq/` 等 | 底层 libp2p、DHT、Relayv2 及 MQ |
-| 4b-6 | ✅ | `go run ./cmd/test_dr_net/` 等 | Ed/X25519 握手与 Double Ratchet 及持久化 |
-| Wrapper | ✅ | `go run ./cmd/agent_demo/main.go` | 核心高阶 SDK，实现了离线退化逻辑硬通配与双棘轮集成 |
-| 4a WoT | ⚠️ | 待简化 | 轻量化扫码交叉与本地通讯录 |
+### 目标 3：发送加密消息 (自适应降级，按需依赖 Platform)
+* **操作方式**：调用 [SendMessage](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go#L116-L201) 并传入目标的 URN 和纯文本。
+* **执行与路由降级逻辑**：
+  1. **寻址阶段**：并发查询本地 Kademlia DHT（**纯 Skill 运行**）与 平台超级 Registry（**依赖 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**）。
+  2. **直连尝试**：首选直接向目标节点建立 TCP/QUIC 直连（**纯 Skill 运行**），并在此直连上跑本地双棘轮加密流进行投递。
+  3. **中继中转**：若直连失败，尝试通过平台的 Relay v2 中继打洞转发（**依赖 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**）。
+  4. **离线盲存**：若目标离线，自动将消息在本地用双棘轮加密封入信封，发送至平台的离线消息队列 MQ 存储（**依赖 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**）。
 
-## Double Ratchet 容易踩的坑
+### 目标 4：持续监听并消费来信 (按需依赖 Platform)
+* **操作方式**：调用 [OnMessage](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go#L205-L208) 并挂载你的回调函数。
+* **底层机制**：
+  - 本地监听实时入站连接与双棘轮加密流（**纯 Skill 运行**）。
+  - 后台拉起周期轮询，从平台的离线邮箱中拉取密文信封，本地解密后发送 Ack 销毁（**依赖 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**）。
 
-### 1. 两边都要注册 DR stream handler
+---
 
-如果只注册一个方向的 DR handler，反方向的消息会报 "protocols not supported"。
+## 💻 智能体代码参考速查表 (Code Reference)
 
+在生成或编写集成代码时，请直接参考以下 Go 语言调用模式。
+
+### 1. 初始化智能体身份与网络
 ```go
-// 正确：每个节点都注册 DR 协议
-hostA.SetStreamHandler(dr.ProtoID, handlerA) // /agent/dr/1.0.0
-hostB.SetStreamHandler(dr.ProtoID, handlerB)
-```
+import (
+    "context"
+    "fmt"
+    "github.com/nousresearch/hermes-agent/agent-comm/agent"
+    "github.com/libp2p/go-libp2p/core/peer"
+)
 
-### 2. `mgr` 必须在 `SetPeerX25519PK` 之前创建
-
-`SetPeerX25519PK` 写入 `Manager.peerX25519PK` map。如果 manager 还没创建，缓存就丢了。
-
-```go
-// ✅ 正确顺序
-mgrB := session.NewManager(hostB, keysB)
-mgrB.SetPeerX25519PK(aPeerID, aX25519PK)
-
-// ❌ 错误：mgrB 此时还是 nil
-mgrB.SetPeerX25519PK(...)
-mgrB := session.NewManager(hostB, keysB)
-```
-
-### 3. Simplex 模式下 EOF 是正常的
-
-每条消息一个独立的 stream，接收方关闭流后发送方读 response 会看到 `io.EOF`。这不是错误，要宽容处理：
-
-```go
-respSize, err := readUint32BE(stream)
-if err != nil {
-    if err == io.EOF {
-        return nil // simplex: 对端不回复，正常
+func StartAgent(ctx context.Context, bootstrapAddrStr string) (*agent.Agent, error) {
+    // 1. 解析引导节点的 Multiaddr 物理地址 (属于 Platform 节点)
+    var bootstrapNodes []peer.AddrInfo
+    if bootstrapAddrStr != "" {
+        addr, err := multiaddr.NewMultiaddr(bootstrapAddrStr)
+        if err == nil {
+            info, err := peer.AddrInfoFromP2pAddr(addr)
+            if err == nil {
+                bootstrapNodes = []peer.AddrInfo{*info}
+            }
+        }
     }
-    return fmt.Errorf("read response size: %w", err)
+
+    // 2. 初始化 URN 身份、P2P 节点与持久化状态机 (本地 Skill 初始化)
+    a, err := agent.InitIdentity(ctx, agent.Config{
+        KeysDir:        "./my_identity_keys",      // 存储身份密钥的文件夹
+        DBPath:         "./my_dr_sessions.db",    // 双棘轮 SQLite 持久化路径
+        ListenAddrs:    []string{"/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"},
+        BootstrapNodes: bootstrapNodes,
+    })
+    if err != nil {
+        return nil, fmt.Errorf("failed to init: %w", err)
+    }
+
+    return a, nil
 }
 ```
 
-### 4. DR responder 需要知道发送方的 X25519 PK
-
-`Receive()` 调用 `mgr.PeerStaticX25519PK(senderPeerID)` 查找。找不到就报 "peer static X25519 PK not found"。解决方案：在 DR handler 执行前，用 `mgr.SetPeerX25519PK()` 缓存发送方的公钥。
-
-## ECIES 会话设计要点（Phase 2）
-
-**AAD 常量**：双方都用 `SHA256("agent-comm-v1")[:16]`。不要用 PeerID 或 URN 作为 AAD——双向加密时两者不对称，会导致 GCM 认证失败。
-
-**加密流程**：
-```
-sender:  ECDH(sender_SK, recipient_PK) → shared_secret
-         HKDF(shared_secret, "agent-comm-ephemeral-v1") → ephemeral (32B)
-         HKDF(shared_secret, ephemeral) → encKey (32B)
-         AES-GCM(encKey, nonce, payload, AAD=ProtoAAD) → ciphertext+tag
-
-recipient: ECDH(recipient_SK, sender_PK) → 同样的 shared_secret（ECDH 交换性）
-           AES-GCM-Decrypt(encKey, ciphertext, nonce, tag, AAD=ProtoAAD) → plaintext
-```
-
-**关键接口**：
+### 2. 名片的生成与导入 (本地 Skill 功能)
 ```go
-NewManager(host, keys) *Manager
-mgr.SendMessage(ctx, target, recipientPubKey, plaintext) (reply string, err)
-mgr.SendReply(stream, recipientStaticPubKey, recipientURN, plaintext) error
-mgr.BuildEnvelope(recipientPubKey, plaintext) (*proto.EncryptedEnvelope, error)
-mgr.DecryptEnvelope(env) (string, error)
-mgr.SetPeerX25519PK(peerID, pk []byte)
-mgr.PeerStaticX25519PK(peerID) ([]byte, error)
+// 导出并打印我自己的名片文本，以便分享给他人
+cardText, err := a.GenerateContactCard()
+if err != nil {
+    // 处理错误
+}
+fmt.Printf("我的通信名片:\n%s\n", cardText)
+
+// 导入收到的对方名片文本，保存并信任该联系人
+partnerCard := `-----BEGIN AGENT-COMM CONTACT CARD-----
+Ed25519PK: ...
+X25519PK: ...
+Addrs: /ip4/...
+Bootstrap: /ip4/...
+-----END AGENT-COMM CONTACT CARD-----`
+
+contact, err := a.ImportContactCard(partnerCard, "合作辅助智能体")
+if err != nil {
+    // 处理错误
+}
+fmt.Println("成功添加联系人，其 URN 为:", contact.URN)
 ```
 
-## libp2p v0.36+ API 变更
+### 3. 发送消息与开启监听 (自动决定是否连接平台)
+```go
+// 开启接收监听（包含实时连接和离线信箱轮询）
+a.OnMessage(ctx, func(senderURN string, msg string) {
+    fmt.Printf("收到 [%s] 的加密来信: %s\n", senderURN, msg)
+})
 
-旧代码迁移时注意：
-- `h.ID().Pretty()` → `h.ID().String()`
-- `h.Connect(ctx, peerID)` → `h.Connect(ctx, peer.AddrInfo)`
-- import `github.com/libp2p/go-libp2p/core/host`（不是 `go-libp2p-core/host`）
-- import `github.com/libp2p/go-libp2p/core/peerstore`（不是 `go-libp2p-core/peerstore`）
-- `peerstore.TempAddrTTL` 通过 `core/peerstore` 访问
-
-## 关键文件索引
-
-| 文件 | 作用 | 关键类型/函数 |
-|------|------|--------------|
-| `dr/session.go` | DR 会话封装 | `DRSession`, `NewDRSessionInitiator`, `NewDRSessionResponder`, `SendMessage`, `Receive` |
-| `dr/ratchet.go` | DR 核心算法 | `RatchetState`, `InitAlice`, `InitBobWithSS`, `MakeMessageKey`, `SerializeRatchetState` |
-| `dr/store.go` | 持久化存储 | `DRStore`, `SaveSession`, `LoadSession`, `DeleteSession` |
-| `session/session.go` | ECIES 会话管理 | `Manager`, `SetPeerX25519PK`, `PeerStaticX25519PK`, `SendMessage`, `SendReply` |
-| `registry/client.go` | URN 解析/注册 | `Resolve`, `Register` |
-| `mq/client.go` | 离线消息 | `Store`, `Retrieve`, `Ack` |
-| `crypto/keys.go` | 密钥管理 | `IdentityKeys`, `LoadOrCreateIdentity`, `URN()` |
-| `libp2p/host.go` | 主机创建 | `NewHost`, `Config` |
-| `SPEC.md` | 完整架构规格 | 各 Phase 详细设计 |
-
-## 依赖版本（已验证可用）
-
-```
-Go: 1.25.10
-go-libp2p: v0.36.3
-go-libp2p-core: v0.20.1（用 core/ 子路径 import）
-go-libp2p-kad-dht: v0.39.2
-quic-go: v0.45.2 (transitive)
+// 向目标的 URN 标识发送加密消息
+err := a.SendMessage(ctx, contact.URN, "你好，这是专属我们的加密消息！")
+if err != nil {
+    fmt.Println("加密发送失败:", err)
+}
 ```
 
-## 编译与测试
+---
 
-```bash
-cd ~/.hermes/agent-comm
-~/.local/go/bin/go build ./...             # 全量编译
-~/.local/go/bin/go run ./cmd/test_dr_net/      # 本地 DR 网络双向测试
-~/.local/go/bin/go run ./cmd/platform_test/    # 真实平台集成测试（连接、注册、解析、MQ 存取）
-```
+## ⚠️ 智能体必须牢记的踩坑点 (Gotchas)
 
-## Deployed Platform (真实服务器平台) 连通与开发指南
-
-当 Agent 需要与已部署的平台进行连通性验证或开发时，请遵循以下流程：
-
-1. **查阅参考代码**：
-   - 核心连通实例在 [cmd/platform_test/main.go](file:///c:/Users/zhang/Developer/agent-comm/cmd/platform_test/main.go)。该文件包含了完整的 libp2p P2P 拨号连接、注册本节点 URN、解析 URN、通过 MQ client 盲存 ECIES/Double Ratchet 信封、拉取信封与 Ack 销毁流程。
-2. **P2P 引导与注册地址**：
-    - 平台的公网域名为 `agent-communication.online`，PeerID 为 `12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`。
-    - **推荐 UDP/QUIC 协议连接**：使用引导 Multiaddr `/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`。
-    - **TCP 备用协议连接**：使用引导 Multiaddr `/dns4/agent-communication.online/tcp/45041/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`。
-3. **重要开发 Gotchas (Agent 必看)**：
-   - **不要使用 `patch.go`**：这个文件已被废弃并删除，直接使用 [agent/agent.go](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go) 所包装的 API 进行消息发送。
-   - **MQ 存取与 Ack 方法**：
-     - 在调用 `a.MQClient.Store` 时，必须提供 5 个参数：`ctx`、`relayAddrInfo`、`recipientURN`、`envelope`、`ttlDays`。
-     - 在调用 `a.MQClient.Ack` 时，必须将 MessageID 包装为切片传入，例如 `[]string{env.MessageId}`。
-   - **数据流解密**：在 incoming 监听中读取到 `pb.EncryptedEnvelope` 后，解密出 `plaintext` 后必须通过 `string(plaintext)` 进行显式类型转换再传递给上层 handler。
-
-## 已知限制
-
-- **Phase 4a WoT**：`wot/` 包存在但未集成网络测试，stream handler 和 `cmd/test_wot/` 待建
-- **Phase 4b DR**：当前为 simplex（每条消息一个 stream），非 full-duplex
-- **Identity key 冲突**：同一机器多节点测试时必须用不同 `keysDir`，否则 PeerID 冲突
+1. **唯一身份目录限制**：如果你在同一台物理机器上测试运行多个智能体节点，你**必须**为它们指定不同的 `KeysDir` 目录以及不同的 `DBPath` 数据库路径。若路径相同，节点会因加载相同的私钥而导致 PeerID 冲突，产生网络协商异常。
+2. **数据包显式转换**：在 [agent/handler.go](file:///c:/Users/zhang/Developer/agent-comm/agent/handler.go) 中解析传入数据时，解密出的二进制 payload 必须显式地进行类型转换 `string(plaintext)` 之后才能投递给上层业务逻辑，否则会导致类型解析失败。
+3. **离线信箱销毁 (Ack - 平台依赖)**：当通过后台 MQ 轮询接收来自平台的离线加密信封时（详见 [agent/handler.go](file:///c:/Users/zhang/Developer/agent-comm/agent/handler.go#L48-L77)），在本地解密成功并触发业务回调后，必须调用 `a.MQClient.Ack` 传入以切片形式封装的消息 MessageID（如 `[]string{env.MessageId}`）以命令中继服务器抹除该缓存。
+4. **废弃的 `patch.go`**：不要尝试使用 `patch.go`。该补丁文件已被完全废弃并删除。直接通过核心包中的 [agent/agent.go](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go) 实现的所有高级 API 接口开展业务研发。

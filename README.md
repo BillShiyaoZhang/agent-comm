@@ -1,182 +1,110 @@
-# agent-comm
+# Agent Comm — AI 智能体之间的 P2P 安全通话仪 📞
 
-**P2P encrypted messaging for AI agents — libp2p + Double Ratchet + DHT registry.**
-
----
-
-## 这个项目要解决什么问题
-
-两个在不同机器上运行的 AI agent，如何安全地直接通信？
-
-"安全"不是指 TLS 加密传输——TLS 依赖 CA，且中心化服务器能看到明文。这个项目要解决的是：
-
-**在没有中心化服务器的前提下，两个 AI agent 如何发现彼此、互相验证、交换只有彼此能解密的消息？**
-
-当前主流方案都有根本性的不匹配：
-
-| 方案 | 问题 |
-|------|------|
-| 中心化服务器（Webhook / HTTP API） | 单点故障；服务器能读取消息；可被审查 |
-| Signal / Matrix 等 IM 平台 | 需要手机号注册；身份是中心化的 |
-
-agent-comm 的目标：
-- **去中心化路由**：DHT 分布式查找，没有通讯录服务器
-- **去中心化存储**：relay 只存加密 blob，无法读取内容
-- **自证明身份**：Ed25519 公钥即身份，没有 CA
-- **端到端加密**：只有收方能解密
-- **前向保密**：Double Ratchet，每条消息用不同密钥
+**不需要中心化账号，没有第三方能偷看——让 AI 智能体像人类使用加密电话一样直接通信。**
 
 ---
 
-## 核心设计思路
+## 💡 这个项目能帮你做什么？
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  问题 1: 如何找到对方？                                   │
-│  答案：DHT (Kademlia) — 分布式存储 URN → PeerID 映射      │
-│                                                          │
-│  问题 2: 怎么证明"我是我"？                              │
-│  答案：自证明身份 — URN = SHA256(pubkey)，公钥即身份      │
-│                                                          │
-│  问题 3: 通信内容如何只有对方能解密？                     │
-│  答案：端到端加密 — ECIES (X25519 ECDH) + Double Ratchet  │
-│  ECIES 建立了会话密钥，Double Ratchet 让每条消息用不同密钥 │
-│                                                          │
-│  问题 4: 对方不在线时消息怎么办？                        │
-│  答案：relay 存加密 blob，对方上线后拉取                  │
-│  relay 只知道"某人的加密信封"，不知道内容                │
-└─────────────────────────────────────────────────────────┘
-```
+在多智能体（Multi-Agent）协作的时代，运行在不同设备、不同网络环境中的 AI 智能体之间经常需要交换数据、同步日程或协同完成任务。
+
+**agent-comm** 专为解决这一痛点而生。它是一个**去中心化、端到端加密**的通信套件。它让两个 AI 智能体能够直接打通一条专属的“安全加密电话线”，不需要手机号，不需要邮箱注册，没有任何中间人可以解密它们传输的数据。
+
+根据您的部署选择，本项目的运行可以完全去中心化，也可以通过结合配套服务来保障复杂网络环境下的消息连通率。
 
 ---
 
-## 技术栈
+## 🧩 功能划分：纯 Skill (SDK) 独立运行 vs. 搭配配套平台
 
-| 层次 | 技术 | 作用 |
-|------|------|------|
-| 网络传输 | libp2p + Relay v2 | P2P 连接、NAT 穿透 |
-| 路由 | Kad-DHT | 分布式 URN → PeerID 查找 |
-| 身份 | Ed25519 + URN | 自证明身份 |
-| 密钥交换 | X25519 ECDH + HKDF | ECIES 加密 |
-| 消息加密 | AES-GCM-SIV + Double Ratchet | 前向保密 |
-| 离线存储 | Relay + SQLite | 加密 blob 存储 |
+### 1. 单凭本 Skill (SDK) 即可独立运行的本地功能
+无需任何公共服务器，本客户端 SDK 即可提供以下核心高安全功能：
+* **本地身份管理与安全密钥对生成**：每个 Agent 启动时都会在本地生成一对自证明的数字身份证 **URN (Uniform Resource Name，统一资源名称)**，完全保存在本地，无需向任何 CA 机构注册。
+* **点对点 (P2P) 直连实时加密通信**：当两个 Agent 都拥有公网 IP，或者处于**同一个局域网内**时，它们会在本地建立直连通道，直接拨号（TCP/QUIC）并建立基于前向安全双棘轮（Double Ratchet）算法的实时对话。**通信数据不流经任何中转服务器，保障绝对的纯净隐私。**
+* **安全通信名片 (Contact Card) 交互与本地存储**：允许 Agent 相互生成和导入文本名片，并通过本地 SQLite 数据库持久化存储已信任的好友联系人列表。
 
----
-
-## Phase 进度
-
-| Phase | 状态 | 说明 |
-|-------|------|------|
-| 1 | ✅ | libp2p host + Relay v2 + AutoNAT |
-| 2 | ✅ | Ed25519 身份 + DHT registry + ECIES 会话 |
-| 3 | ✅ | 异步消息队列（relay 离线存储） |
-| 4b | ✅ | Double Ratchet（前向保密） |
-| 5 | ✅ | SQLite-backed DRSession 持久化 |
-| 6 | ✅ | E2E DR over libp2p streams（双向） |
-| 4a WoT | ⚠️ | `wot/` 包存在，未集成 |
+### 2. 需要搭配公共或自建 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform) 配套平台的功能
+为了让身处复杂网络边界（如蜂窝移动网、严格企业防火墙）以及可能随时关机离线的智能体也拥有像微信般的网络送达体验，您可以为本 Skill 挂载配套的平台基础设施。平台额外提供以下能力：
+* **多路竞速寻址解析**：通过向平台的超级地址薄（Super Registry）发起秒级查询，快速定位目标的物理 IP 和节点 ID。
+* **中继流量转发 (Relay v2)**：当双方节点因防火墙（NAT）拦截导致无法建立直连时，平台中继节点会主动协助双方打洞并进行中继中转，保障连通。
+* **离线邮箱盲存 (MQ)**：当接收方智能体断网或关机时，发送方会自动在本地用双棘轮将消息装入“加密信封”，盲投到平台的 MQ 离线信箱中暂存。接收方重新上线时主动拉取解密，并抹除平台上的备份（Ack 销毁）。
 
 ---
 
-## 文档体系
+## 🌟 典型应用场景 (Use Cases)
 
-```
-OVERVIEW.md      ← 概览（问题、思路、各部分协作图）
-SPEC.md          ← Phase by Phase 技术规格
-README.md        ← 你在这里：为什么要做 + 核心设计
-SKILL.md         ← agent 调用参考（gotchas、API、设计决策）
-──────────────────────────────────────────────────
-docs/
-  TUTORIAL.md    ← CS 本科生教程：背景知识 + Phase 详解
-  DR-CODE-COMMENTARY.md ← DR 代码逐文件注解
-```
+### 1. 纯本地 P2P 协作（仅用 Skill 运行）
+* **场景**：你在同一个办公室的本地局域网内运行了两个 Agent。
+* **效果**：它们不依赖任何云服务，直接依靠本 Skill 在局域网内发现对方，并建立最安全的点对点双棘轮加密通信，任何数据绝不出办公室路由器。
+
+### 2. 跨云端智能体协作（Skill 搭配平台运行）
+* **场景**：你将 **Writer-Agent** 部署在阿里云，将 **Illustrator-Agent** 部署在受防火墙严格限制的本地电脑，且本地电脑晚上会关机。
+* **效果**：结合 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)，它们可以借助平台的 Relay v2 进行内网穿透拨号；在本地电脑晚上关机时，Writer-Agent 生成的配图需求会自动盲投到平台的离线信箱中，等第二天本地电脑开机时由 Illustrator-Agent 自动拉取解密并销毁平台暂存，保障全天候异步收件。
 
 ---
 
-## Hybrid P2P 架构与高层 SDK 封装
+## 🚀 极速上手：用“人话”指令命令你的 Agent 开始通话
 
-本项目在底层 P2P (DHT + Double Ratchet) 跑通的基础上，新增了**客户端 SDK (Agent Comm Skill)** 的高级封装（位于 `agent/` 目录），并设计了**Hybrid P2P (混合降级通讯)** 架构：
+只要你为 Agent 安装了这个 Skill，你不必编写任何 Go 代码，可以直接用自然语言在对话框中给它下达指令，让它替你完成通信配置：
 
-- **自适应网络降级**：通过多路竞速发现（并发查询 Kademlia DHT 及中心 Registry），并按照阶梯退化策略投递消息（① TCP/QUIC 直连拨号 -> ② Relay 中继打洞 -> ③ 离线加密信封盲投 MQ）。
-- **SDK Wrapper (`agent.Agent`)**：对外抹平了底层密码学与连接逻辑的复杂性，仅暴露了极其友好的业务级 API。
-- **Platform (另立项目)**：包括中心化 Registry 寻址、MQ 高性能大并发盲存集群、离线代持合规网关，作为该去中心化项目的全天候兜底“信箱云”。
+### 第一步：让 Agent 生成名片并分享 (仅 Skill)
+* 💬 **你对 Agent 说**：
+  > “请帮我生成我的 agent-comm 通信名片。”
+* 🤖 **Agent 的执行与回复**：
+  > “已为您生成通信名片，内容如下，您可以直接复制发给对方：
+  > \`\`\`text
+  > -----BEGIN AGENT-COMM CONTACT CARD-----
+  > Ed25519PK: 41b2a...
+  > X25519PK: f810a...
+  > Addrs: /ip4/127.0.0.1/tcp/0
+  > -----END AGENT-COMM CONTACT CARD-----
+  > \`\`\`
+  > 我的 URN 是：\`urn:hermes:agent:xxxxxx\`”
 
-### 极速上手 Demo
+### 第二步：让 Agent 导入对方的名片 (仅 Skill)
+* 💬 **你对 Agent 说**：
+  > “请帮我导入这个 agent-comm 名片，备注为 '合作助手'：
+  > -----BEGIN AGENT-COMM CONTACT CARD-----
+  > Ed25519PK: 83c9a...
+  > X25519PK: e210f...
+  > Addrs: /dns4/agent-communication.online/tcp/45041
+  > -----END AGENT-COMM CONTACT CARD-----”
+* 🤖 **Agent 的执行与回复**：
+  > “名片已成功解析并导入！对端已成功添加进我的本地联系人列表。
+  > 备注姓名：合作助手
+  > URN 标识：\`urn:hermes:agent:yyyyyy\`”
 
-只需创建一个 Config 并调用三行核心 API 即可拉起包含双棘轮状态引擎的 AI Agent 端点：
-
-```go
-// 1. 一键读取身份并开启混合 P2P 网络 (挂载 SQLite DR持久化)
-a, _ := agent.InitIdentity(ctx, agent.Config{
-    KeysDir: "./demo_keys",
-    DBPath: "./demo_dr.db",
-    // BootstrapNodes...
-})
-
-// 2. 异步接收打洞与离线缓存 MQ 的消息
-a.OnMessage(ctx, func(senderURN string, msg string) {
-    fmt.Printf("<<< Received from %s: %s\n", senderURN, msg)
-})
-
-// 3. 多路寻址竞速发送（支持离线兜底 Double Ratchet 盲存）
-a.SendMessage(ctx, targetURN, "Hello!")
-```
-
-详见 `cmd/agent_demo/main.go`。
-
-## 测试命令
-
-```bash
-cd ~/.hermes/agent-comm
-
-# 各个阶段的本地独立测试
-~/.local/go/bin/go run ./cmd/test_host/        # Phase 1 — libp2p host
-~/.local/go/bin/go run ./cmd/test_session/     # Phase 2 — ECIES 会话
-~/.local/go/bin/go run ./cmd/test_mq/          # Phase 3 — 离线 MQ
-~/.local/go/bin/go run ./cmd/test_dr/          # Phase 4b — DR 握手
-~/.local/go/bin/go run ./cmd/test_dr_persist/  # Phase 5 — DR 持久化
-~/.local/go/bin/go run ./cmd/test_dr_net/      # Phase 6 — 双向 DR over libp2p
-
-# 真实已部署平台（ECS）完整连通性集成测试
-~/.local/go/bin/go run ./cmd/platform_test/    # 连通已部署平台测试注册、解析、MQ存取、解密与Ack流程
-```
-
-**已部署平台信息**：
-- **公网域名**：`agent-communication.online`
-- **PeerID**：`12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
-- **Platform URN**：`urn:hermes:platform:ee8be13add63a020`
-- **推荐 P2P QUIC 引导地址**：`/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
-- **TCP 备用引导地址**：`/dns4/agent-communication.online/tcp/45041/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
-
-**Go binary:** `~/.local/go/bin/go` (Go 1.25.10)
+### 第三步：让 Agent 监听来信并发送加密消息 (自动判断是否搭配 Platform)
+* 💬 **你对 Agent 说**：
+  > “请开启安全通信监听，并帮我给 合作助手（URN 为 urn:hermes:agent:yyyyyy）发送一条消息：'你好！我们已经成功建立加密连接。'”
+* 🤖 **Agent 的执行与回复**：
+  > “好的，后台安全监听已拉起。
+  > 正在尝试向 合作助手（urn:hermes:agent:yyyyyy）寻址通信……
+  > 消息已通过 Double Ratchet 实时加密流成功送达！”
 
 ---
 
-## 项目结构
+## 🌐 关于云端基础设施 (Platform) 的合规与审计提示
 
-```
-agent-comm/
-├── crypto/          # Ed25519/X25519 密钥 + ECIES
-├── libp2p/          # libp2p.Host 构造
-├── dht/             # Kad-DHT 封装
-├── registry/        # URN 注册/解析（client + server handler）
-├── session/         # ECIES 会话管理
-├── mq/              # 异步消息队列（client + relay server）
-├── dr/              # Double Ratchet（ratchet + session + store）
-├── wot/             # Web of Trust ⚠️ partial
-├── proto/           # Protobuf 定义
-├── contacts/        # 身份密钥（自动生成）
-└── cmd/
-    ├── bootstrap/  # Bootstrap 节点（DHT Server）
-    ├── client/     # 客户端节点
-    └── test_*/     # 各 Phase 验证测试
-```
+当您的 Agent 接入公共或第三方自建的 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform) 配套服务时，必须知晓其合规安全边界：
+
+> [!WARNING]
+> ### ⚠️ 平台服务合规性与监管模式警告
+> - **原生隐私模式**：在默认的原生隐私模式下，平台仅作为数据中继与盲存信箱，数据在智能体端侧执行高安全双棘轮加密。平台由于无法获取私钥，对传输内容完全不可见（严格端到端加密）。
+> - **监管合规模式 (MITM)**：为了符合特定国家或地区（例如中国大陆）对网络信息服务提供者的法律合规与内容审计要求，平台支持并可能运行在**监管合规模式**。在该模式下，平台将启用“代持网关代理 (Gateway MITM Proxy)”，对外代理并持有一套网关私钥。发送方与网关握手，网关会**自动解密、审计风控并记录通信信息（进行敏感词风控与司法存证）**。审查通过后，网关再重新加密发送给最终接收的 Agent。
+> 
+> **隐私建议**：如果您对通信保密性有绝对不可泄露的苛刻要求，**请不要使用任何公共配套平台服务**。您应当修改本 Skill 配置，部署您个人或团队完全掌控的私有私密 Bootstrap 和 Relay 节点（运行原生隐私模式），完全脱离对公共平台服务的依赖。
+
+👉 **具体 Go API 实现及注释请查阅**：
+- [InitIdentity (agent/agent.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go#L42)
+- [SendMessage (agent/agent.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go#L116)
+- [OnMessage (agent/agent.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go#L205)
+- [GenerateContactCard (agent/contact_card.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/contact_card.go#L223)
+- [ImportContactCard (agent/contact_card.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/contact_card.go#L228)
 
 ---
 
-## 安全属性
+## 🛠️ 开发者指南 (Developer & Engineering Portal)
 
-- **Ed25519 签名**：自证明 URN，私钥几乎不触网
-- **X25519 加密密钥**：与身份密钥分离，减少暴露面
-- **Double Ratchet**：泄露一条消息密钥不影响其他（前向保密）
-- **Relay blind storage**：relay 只存加密 blob，无法读取内容
-- **无 WoT 时**：首次联系依赖 registry，需防范 MITM
+如果你是开发者，想要深入了解本项目的底层网络通信细节（基于 `libp2p`）、双棘轮加密实现（`Double Ratchet`）或者想本地跑通协议测试命令，请直接移步阅读：
+
+👉 **[项目架构设计与开发总览 (OVERVIEW.md)](file:///c:/Users/zhang/Developer/agent-comm/OVERVIEW.md)**

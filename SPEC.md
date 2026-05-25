@@ -1,139 +1,135 @@
-# agent-comm Specification
+# agent-comm 协议规格说明书
 
-## Overview
+## 概述
 
-A peer-to-peer encrypted messaging protocol for AI agents, built on libp2p. Each agent has a stable identity (URN + Ed25519 key) and can reach other agents via their URN through a DHT-based registry.
+本项目是一个基于 `libp2p` 构建的、面向 AI 智能体的端到端 P2P 加密消息通信协议。每个智能体都有一个固定的网络身份标识：**URN (Uniform Resource Name，统一资源名称)** 与其绑定的 Ed25519 密钥对。通过基于 DHT 的寻址目录注册表，智能体能够仅凭借对方的 URN 来发现并与对端建立安全连接。
 
-**Design principles:**
-- No central server for message routing (uses DHT)
-- No central server for message storage (uses relay nodes)
-- Messages are end-to-end encrypted (ECIES/X25519)
-- Relay nodes store encrypted blobs they cannot read
-- Agents poll relay nodes to retrieve offline messages
+**设计原则：**
+- **去中心化路由**：不依赖中心化服务器进行消息路由（使用 Kademlia DHT 进行解析）
+- **去中心化离线中转**：不依赖中心化服务器进行明文消息暂存（使用 Relay 节点作为盲信箱）
+- **端到端加密**：所有消息从端侧发出前均已执行加密（使用 ECIES/X25519）
+- **Relay 盲存**：Relay 中继节点仅能存储其无法读取解密的加密 Blob（信封）
+- **主动消费**：接收方智能体在上线后主动向 Relay 节点拉取并解密离线暂存的消息
 
 ---
 
-## Architecture
+## 系统架构
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         libp2p Host                             │
+│                         libp2p 主机                             │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────────┐  │
-│  │   DHT    │  │ Registry  │  │ Session  │  │  MQ (relay)     │  │
-│  │ Kad-DHT  │  │ URN→Peer  │  │ ECIES    │  │  Store/Retrieve │  │
+│  │   DHT    │  │  注册表  │  │   会话   │  │    MQ (中继)    │  │
+│  │ Kad-DHT  │  │ URN→Peer │  │  ECIES   │  │  存储/拉取消息  │  │
 │  └──────────┘  └──────────┘  └──────────┘  └─────────────────┘  │
 │                                                                   │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────────┐  │
-│  │  Crypto  │  │  Identity │  │  Proto   │  │  Session        │  │
-│  │ Ed25519  │  │  Keys     │  │  .proto  │  │  Manager        │  │
-│  │ X25519   │  │  (files)  │  │          │  │                 │  │
+│  │  密码学  │  │ 身份密钥 │  │  协议帧  │  │    双棘轮会话   │  │
+│  │ Ed25519  │  │  (文件)  │  │  .proto  │  │     管理器      │  │
+│  │  X25519  │  │          │  │          │  │                 │  │
 │  └──────────┘  └──────────┘  └──────────┘  └─────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Phase 1 — Transport Layer
+## Phase 1 — 传输层 (Transport Layer)
 
-**完成。** libp2p v0.36+，包含：
+**完成。** 采用 libp2p v0.36+，集成了：
 
-- TCP + QUIC 监听
-- Relay v2（NAT 穿透连接中继）
-- AutoNAT
-- gossipsub（未来扩展用）
+- TCP + QUIC 双协议监听
+- Relay v2（内网 NAT 穿透连接中继）
+- AutoNAT（网络类型自适应探测）
+- gossipsub（发布订阅协议，用于未来多路广播扩展）
 
 ---
 
-## Phase 2 — Identity and Encrypted Sessions
+## Phase 2 — 身份与加密会话 (Identity & Encrypted Sessions)
 
-### Identity
+### 节点身份 (Identity)
 
-每个节点有一对 `IdentityKeys`（持久化到磁盘）：
-- **Ed25519**：用于 `libp2p.Identity()` — 稳定 PeerID，URN 推导
-- **X25519**：用于 ECIES 加密 — 与 Ed25519 分离，保证前向保密
+每个节点拥有一对持久化于磁盘的 `IdentityKeys`（身份密钥）：
+- **Ed25519**：用于构建 `libp2p.Identity()` 并导出稳定的 PeerID。它也是 URN 计算的唯一源。
+- **X25519**：用于 ECIES 加密密钥协商。与 Ed25519 身份密钥分离，以实现密钥角色的安全隔离。
 
-URN 格式：`urn:hermes:agent:<base58(random16bytes)>`
+URN 格式定义：`urn:hermes:agent:<base58(随机16字节公钥哈希)>`
 
-URN 从 Ed25519 公钥派生，因此是自证明的。
+URN 从 Ed25519 公钥直接派生，具备自证明属性（Self-Certifying）。
 
-### Registry
+### 寻址目录服务 (Registry)
 
-URN → PeerID/addrs/X25519PubKey 通过 libp2p stream 解析。
+基于 libp2p 协议协商实现 URN → PeerID、物理地址（Addrs）、以及静态 X25519 公钥（X25519PubKey）的解析。
 
-**协议：** `/hermes/agent-comm/registry/1.0.0`
+**协商协议 ID：** `/hermes/agent-comm/registry/1.0.0`
 
 ```
-Client                              Server
+客户端 (Client)                       服务端 (Server)
    │── URNRegistryRequest(register) ──→  │
    │←─ URNRegistryResponse(ok) ─────────  │
 
-Client                              Server
+客户端 (Client)                       服务端 (Server)
    │── URNRegistryRequest(resolve) ──→   │
    │←─ URNRegistryResponse(found) ───────  │
 ```
 
-### Encrypted Session
+### 加密临时会话 (Encrypted Session)
 
-**协议：** `/hermes/agent-comm/session/1.0.0`
+**协商协议 ID：** `/hermes/agent-comm/session/1.0.0`
 
-基于 stream 的请求/响应，使用 `EncryptedEnvelope`：
+基于 Stream 的双向请求/响应流，在网络层使用临时加密信封 `EncryptedEnvelope`：
 
 ```
-Sender                                  Recipient
+发送方 (Sender)                          接收方 (Recipient)
   │─ ECDH(sender_SK, recipient_PK) ──────→│
   │─ HKDF → ephemeral + encKey              │
   │─ AES-GCM(plaintext, AAD=ProtoAAD)      │
   │─ EncryptedEnvelope{wire} ─────────────→│
   │                                        │─ ECDH(recipient_SK, sender_PK)
-  │                                        │─ re-derive ephemeral + encKey
-  │                                        │─ AES-GCM decrypt
+  │                                        │─ 重新推导 ephemeral + encKey
+  │                                        │─ AES-GCM 解密
   │←─ EncryptedEnvelope{reply} ←────────── │
-  │─ decrypt reply                         │
+  │─ 解密回复内容                          │
 ```
 
-**Envelope 字段：**
-- `sender_urn` — 发送者 URN
-- `sender_static_pubkey` — X25519 静态公钥（用于 ECDH 回复）
-- `ephemeral_pubkey` — HKDF 导出的 32 字节值
+**信封 (Envelope) 核心字段：**
+- `sender_urn` — 发送方的 URN 身份标识
+- `sender_static_pubkey` — 发送方静态 X25519 公钥（用作 ECDH 双向回复协商）
+- `ephemeral_pubkey` — HKDF 派生出的 32 字节临时公钥
 - `nonce` — 随机 12 字节 AES-GCM nonce
-- `ciphertext` — 加密载荷
+- `ciphertext` — 密文载荷
 - `tag` — GCM 认证标签（16 字节）
-- `message_id` — 唯一 ID，用于去重
+- `message_id` — 唯一消息 ID，用于去重
 
-**AAD：** `SHA256("agent-comm-v1")` — 协议常量，双向相同。
+**附加认证数据 (AAD)：** `SHA256("agent-comm-v1")` — 协议约定的全局静态常量。
 
-**实现：** `session/session.go` — `Manager` 结构体
-
-- `SendMessage()` — 发送消息并等待加密回复
-- `SendReply()` — 在已有 stream 上发送加密回复
-- `BuildEnvelope()` — 构建加密信封（用于 MQ 存储）
-- `DecryptEnvelope()` — 解密收到的信封
+**核心实现：** `session/session.go` — `Manager` 结构体
+- `SendMessage()` — 建立连接，发送信封并同步阻塞等待对端响应
+- `SendReply()` — 在现有 stream 链路中发送回传的加密信封
+- `BuildEnvelope()` — 打包并输出加密信封（用于离线盲存）
+- `DecryptEnvelope()` — 接收并解密传入的信封
 
 ---
 
-## Phase 3 — Async Message Queue
+## Phase 3 — 异步消息队列 (Async Message Queue / MQ)
 
-### Problem
+### 问题背景
+若接收方节点断网或关机，点对点直连将失效，需要提供安全的异步离线存储中转。
 
-接收方离线时消息会丢失，需要持久的离线存储。
+### 核心设计
+网络中的 **Relay 节点**（通常由 Bootstrap 节点担任）充当信箱。它们负责接收并持久化发往离线收件人的 `EncryptedEnvelope` 信封。由于消息已执行端到端加密，中继节点无法读取信封内容（Relay 盲存）。
 
-### Design
-
-**relay 节点**（bootstrap 节点）充当信箱：存储离线接收者的加密消息。Relay 无法读取消息内容（加密 blob）。
-
-### Architecture
-
+### 体系结构
 ```
-Sender ──→ Relay (store) ──→ Recipient (online later)
-                    └── SQLite: urn → [encrypted_envelope, msg_id, expiry]
+发送方 ──→ 中继服务器 (Store) ──→ 接收方 (上线后拉取)
+             └── SQLite: 接收方URN → [信封密文, 消息ID, 过期时间]
 
-Recipient ──→ Relay (pull) ──→ Retrieve pending messages
-Recipient ──→ Relay (ack)  ──→ Delete read messages
+接收方 ──→ 中继服务器 (Pull)  ──→ 获取积压的离线消息列表
+接收方 ──→ 中继服务器 (Ack)   ──→ 确认已读取消息，物理抹除记录
 ```
 
-### Protocol: `/hermes/agent-comm/mq/1.0.0`
+### 协议规约：`/hermes/agent-comm/mq/1.0.0`
 
-**Proto 文件：** `proto/mq.proto`（引用 `proto/envelope.proto` 中的 `EncryptedEnvelope`）
+**数据契约：** `proto/mq.proto`
 
 ```proto
 message MQRequest {
@@ -146,8 +142,8 @@ message MQRequest {
 
 message StoreRequest {
   string recipient_urn = 1;
-  EncryptedEnvelope payload = 2;  // 加密消息 blob（relay 无法读取）
-  int64 expiry_unix = 3;          // TTL：relay 在此时间戳后删除（0 = 永不过期）
+  EncryptedEnvelope payload = 2;  // 密文信封（中继无法查看）
+  int64 expiry_unix = 3;          // TTL 过期时间戳（0 = 永不过期）
 }
 
 message RetrieveRequest {
@@ -155,7 +151,7 @@ message RetrieveRequest {
 }
 
 message AckRequest {
-  repeated string message_ids = 1;  // 客户端处理完成后删除
+  repeated string message_ids = 1;  // 客户端消费完毕后发起删除
 }
 
 message MQResponse {
@@ -169,11 +165,11 @@ message MQResponse {
 
 message StoreResponse {
   bool ok = 1;
-  string message_id = 2;  // relay 分配
+  string message_id = 2;  // 由 Relay 分配
 }
 
 message RetrieveResponse {
-  repeated EncryptedEnvelope payloads = 1;  // 按时间顺序
+  repeated EncryptedEnvelope payloads = 1;  // 按时间先后排序
 }
 
 message AckResponse {
@@ -186,73 +182,59 @@ message ErrorResponse {
 }
 ```
 
-### Storage (Relay Side)
+### 存储机制 (Relay 侧)
 
-**实现：** `mq/server.go` — `Server` 结构体，SQLite 持久化
+**实现：** `mq/server.go` — `Server` 结构体，SQLite 持久化引擎。
 
 ```sql
 CREATE TABLE messages (
   id         TEXT PRIMARY KEY,
-  recipient  TEXT NOT NULL,          -- URN
-  payload    BLOB NOT NULL,           -- EncryptedEnvelope 字节
+  recipient  TEXT NOT NULL,          -- 接收方 URN
+  payload    BLOB NOT NULL,           -- EncryptedEnvelope 二进制字节
   expiry     INTEGER NOT NULL,        -- Unix 时间戳
-  stored_at  INTEGER NOT NULL         -- Unix 时间戳
+  stored_at  INTEGER NOT NULL         -- 存储时的 Unix 时间戳
 );
 CREATE INDEX idx_recipient ON messages(recipient);
 CREATE INDEX idx_expiry ON messages(expiry);
 ```
 
-Relay 在启动时和每 5 分钟定期删除过期消息。
+中继服务器在初始化及之后每隔 5 分钟在后台定期执行物理删除以清除过期信封。
 
-### Client Behavior
+### 客户端路由行为
 
-**实现：** `mq/client.go` — `Client` 结构体
+**实现：** `mq/client.go` — `Client` 结构体。
 
-- `Store(ctx, relay, recipientURN, envelope, ttlDays)` — 发送到 relay
-- `Retrieve(ctx, relay, myURN)` — 拉取所有待处理消息
-- `Ack(ctx, relay, messageIDs)` — 读取后删除
+- `Store(ctx, relay, recipientURN, envelope, ttlDays)` — 投递信封到中继
+- `Retrieve(ctx, relay, myURN)` — 获取我未读的离线信封列表
+- `Ack(ctx, relay, messageIDs)` — 发送确认，从数据库中抹除
 
-**发送流程：**
-1. 通过 Registry 解析接收者 PeerID
-2. 尝试直接会话（`SendMessage`）
-3. 接收者在线 → 完成
-4. 接收者离线 / 连接失败 → 尝试 MQ store：
-   a. 找到 relay（默认使用 bootstrap 节点）
-   b. `MQStoreRequest` + 加密载荷
-   c. Relay 返回 `message_id`
+**投递流程：**
+1. 并发寻址获取接收方网络信息与公钥。
+2. 尝试直接拨号并建立双棘轮会话（`SendMessage`）。
+3. 直连成功完成通信。
+4. 直连超时或网络不可达时降级为 MQ 存储：
+   a. 获取平台中继节点（默认为公共引导节点 URN）。
+   b. 发送带有加密载荷的 `MQStoreRequest`。
+   c. 中继返回该信封在服务器的 `message_id`。
 
-**接收流程：**
-1. 启动时：`MQRetrieveRequest` 拉取所有待处理消息
-2. 解密每条消息（正常通过 Session 解密）
-3. 处理完成后：`MQAckRequest` 从 relay 删除
-
-### Relay Discovery
-
-每个节点可指定一个 relay URN。未设置则默认使用 bootstrap 节点的 URN（在 DHT bootstrap 过程中注册）。
-
-同一节点同时处理 URN registry 和 MQ。
-
-### Test
-
-```bash
-go run ./cmd/test_mq/    # 三节点测试：Relay + Sender + Receiver（离线后上线）
-```
+**消费流程：**
+1. 启动或周期性地向中继发送 `MQRetrieveRequest` 抓取密文。
+2. 在本地调用 Session 模块尝试解密每一个信封。
+3. 对解密成功且成功回调的数据发送 `MQAckRequest` 指令进行彻底销毁。
 
 ---
 
-## Phase 4a — Web of Trust
+## Phase 4a — 信任网络 (Web of Trust / WoT)
 
-### Problem
+### 待解决问题
+当 Bob 首次联系 Alice 时，如何保证 `urn:hermes:agent:Alice` 所指向的公钥真正属于 Alice 而不是中间人冒充的？Registry 寻址服务只提供物理寻址，无法确保证明其真实所有权。
 
-当 Bob 第一次向 Alice 发送消息时，Bob 如何确认 `urn:hermes:agent:Alice` 属于真实的 Alice 而不是冒充者？Registry 只提供 URN→PeerID→pubkey 映射，不做身份认证。
+### 解决方案
+对等节点签署信任声明。例如 Charlie 声明：“我信任 `urn:hermes:agent:Alice` (公钥=X，节点ID=12D3...)”。若 Bob 已经信任了 Charlie，那么 Bob 可以通过图的遍历推导出对 Alice 的传递信任。
 
-### Solution
+### 信任声明数据结构
 
-签名信任声明。如果 Charlie 说"我信任 `urn:hermes:agent:Alice`（key=X, peer=12D3...）"，且 Bob 已信任 Charlie，则 Bob 可以推导对 Alice 的传递信任。
-
-### Trust Claim
-
-**Proto 文件：** `proto/wot.proto`
+**协议帧：** `proto/wot.proto`
 
 ```proto
 enum TrustLevel {
@@ -262,277 +244,71 @@ enum TrustLevel {
 }
 
 message TrustClaim {
-  string issuer_urn = 1;          // 声明者（如 "urn:hermes:agent:Charlie"）
-  string subject_urn = 2;          // 被声明者（如 "urn:hermes:agent:Alice"）
-  string subject_peer_id = 3;      // Subject 的 libp2p PeerID
-  bytes  subject_x25519_pk = 4;   // Subject 的 X25519 静态公钥（32 字节）
-  TrustLevel level = 5;            // TRUSTED / UNTRUSTED / UNKNOWN
-  bytes  issuer_signature = 6;     // Ed25519 签名
-  int64  issued_at_unix = 7;       // Unix 时间戳
+  string issuer_urn = 1;          // 签署方 URN (如 Charlie)
+  string subject_urn = 2;          // 被声明方 URN (如 Alice)
+  string subject_peer_id = 3;      // Subject 的 libp2p 节点 ID
+  bytes  subject_x25519_pk = 4;   // Subject 静态公钥
+  TrustLevel level = 5;            // 信任关系评级 (TRUSTED / UNTRUSTED / UNKNOWN)
+  bytes  issuer_signature = 6;     // 签署方的 Ed25519 签名
+  int64  issued_at_unix = 7;       // 签署时间戳
 }
 ```
 
-**Trust Levels：**
-- `TRUSTED` — 声明者明确为 subject 的身份担保
-- `UNTRUSTED` — 声明者明确不信任（撤销用例）
-- `UNKNOWN` — 中性陈述（知情但不做判断）
-
-**签名内容：** `SHA256(issuer_urn || subject_urn || subject_peer_id || subject_x25519_pk || level || issued_at)`
-
-### Implementation
-
-- `wot/claim.go` — `TrustClaim` 结构体，`NewTrustClaim()` 创建声明，`Verify()` 验证签名
-- `wot/store.go` — `Store` 结构体，SQLite 持久化所有已知声明（本地声明 + 网络获取的）
-- `wot/resolver.go` — `Resolver` 结构体，BFS 信任路径搜索
-
-**Store Schema：**
-```sql
-CREATE TABLE claims (
-  id          TEXT PRIMARY KEY,      -- SHA256(issuer||subject||issued_at)[:16]
-  issuer_urn  TEXT NOT NULL,
-  subject_urn TEXT NOT NULL,
-  peer_id     TEXT NOT NULL,
-  x25519_pk   BLOB NOT NULL,
-  level       INTEGER NOT NULL,
-  signature   BLOB NOT NULL,
-  issued_at   INTEGER NOT NULL,
-  fetched_at  INTEGER NOT NULL
-);
-CREATE INDEX idx_subject ON claims(subject_urn);
-CREATE INDEX idx_issuer  ON claims(issuer_urn);
-
-CREATE TABLE known_peers (
-  urn         TEXT PRIMARY KEY,
-  peer_id     TEXT NOT NULL,
-  x25519_pk   BLOB NOT NULL,
-  ed25519_pk  BLOB NOT NULL,
-  first_seen  INTEGER NOT NULL,
-  last_seen   INTEGER NOT NULL
-);
-```
-
-**Trust Path Resolution：**
-- BFS 从 `myURN` 出发，找任意发出了 `TRUSTED` 声明的节点关于目标 URN 的路径
-- 找到路径 → 验证签名链 → 接受 pubkey
-- 无路径 → 警告："Untrusted peer, proceed manually?"
-
-**网络查询：** `Resolver.FetchClaimsAbout(ctx, subjectURN)` — 通过 `/hermes/agent-comm/wot/1.0.0` 协议查询远端节点关于某 URN 的所有声明
-
-**Bootstrap trust：** 首次运行需要手动输入一个已知 URN 作为直接信任对象。之后 WoT 网络通过传递声明增长。
+**签名校验散列：** `SHA256(issuer_urn || subject_urn || subject_peer_id || subject_x25519_pk || level || issued_at)`
 
 ---
 
-## Phase 4b — Double Ratchet
+## Phase 4b — 双棘轮会话 (Double Ratchet / DR)
 
-### Problem
+### 待解决问题
+一次性 ECIES 依赖静态 X25519 私钥的长期安全。如果某一端点的静态私钥泄露，历史上的所有密文都将能够被被解密（静态 ECDH 缺乏前向安全性）。
 
-如果 Bob 的静态密钥明天被泄露，所有过去与 Alice 的消息都会被解密（静态-静态 ECDH 无前向保密）。
+### 解决方案
+引入双棘轮算法（Double Ratchet / Signal 协议）。每次发送/接收时都会在状态机内自动演进密钥。一次密钥泄露仅暴露极其局限的消息窗口。
 
-### Solution
-
-Double Ratchet（Signal Protocol）。每条消息使用从 ratchet state 派生的新临时密钥。一把密钥泄露只暴露有限窗口的消息。
-
-### Architecture
-
+### 代码包设计
 ```
 dr/
-├── ratchet.go   # RatchetState: root key, chain keys, DH ratchet step
-├── session.go   # DRSession: encrypt/decrypt with ratchet, ECIES for initial key exchange
-└── store.go     # Persistent session state (per-peer URN, SQLite)
+├── ratchet.go   # 核心演进：RootKey、ChainKey 派生与 DH 棘轮步进
+├── session.go   # DRSession 会话层：融合 ratchet 演进，结合 ECIES 握手做初始密钥商定
+└── store.go     # SQLite 状态持久化：记录对等 URN 的最新棘轮演进进度
 ```
 
-### Key Derivation Chain
+### 密钥派生链 (KDF Chain)
 
 ```
-初始：ECDH(our_DH_SK, their_DH_PK) → SKR
-SKR → HKDF → root_key + chain_key_0
+初创期：ECDH(我们的临时DH_SK, 对端的静态X25519_PK) → SKR (共享机密)
+SKR → HKDF 派生 → 根密钥 (Root Key) + 发送/接收链密钥 0 (Chain Key 0)
 
-发送消息 (k=0)：
-  chain_key_0 → HKDF → message_key_0 + chain_key_1
-  encrypt(message_key_0, plaintext) → ciphertext
+发送阶段 (Message Number = 0)：
+  发送链密钥 0 → HKDF 派生 → 消息加密密钥 0 (Message Key 0) + 下一级链密钥 1
+  用 Message Key 0 加密明文主体 → 输出密文载荷
 
-DH Ratchet step（收到对方新 DH 公钥后）：
-  ECDH(our_new_DH_SK, their_DH_PK) → SKR2
-  SKR2 → HKDF → root_key_2 + chain_key_2
+DH棘轮更新阶段 (收到对端带回的新临时 DH 密钥后)：
+  ECDH(本端新临时DH_SK, 对端新临时DH_PK) → 新共享机密 SKR2
+  SKR2 → HKDF 派生 → 新根密钥 2 + 新接收链密钥 2
 ```
-
-### Integration with ECIES Session
-
-- `session/session.go` 已实现 ECDH + ECIES 初始密钥交换
-- Double Ratchet 用初始 ECDH 握手替换静态-静态 ECDH
-- `dr/session.go` 提供 `DRSendMessage` / `DRReceiveMessage` 作为 `SendMessage` / stream handler 的替代
-- 前向保密：N 条消息后旧 chain key 被删除
-
-**注意：** Double Ratchet 需要每对等节点的有状态会话（不同于当前无状态的 ECIES）。复杂度增加 — 保留当前 `session/session.go` 作为 DR state 不可用时的降级方案。
 
 ---
 
-## Phase 5 — Storage Layer (DRSession Persistence)
+## Phase 5 — 持久化层 (SQLite DR Session Store)
 
-**完成。** `dr/store.go` — SQLite 持久化 DR 会话存储。
+**完成。** `dr/store.go` 实现了对有状态双棘轮会话进度（`RatchetState`）的本地 SQLite 高速读写。
 
-### Problem
-
-Double Ratchet 是有状态的。每个对等方必须持久化 `RatchetState`（root key, chain keys, DH key pairs, message numbers）以在重启后存活。无持久化情况下，每次重启重置 ratchet，破坏前向保密。
-
-### Storage Schema
-
+### 存储结构
 ```sql
 CREATE TABLE dr_sessions (
-    peer_urn    TEXT PRIMARY KEY,   -- 对等方 URN
-    state       BLOB NOT NULL,      -- 序列化的 RatchetState
-    updated_at  INTEGER NOT NULL    -- Unix 时间戳
+    peer_urn    TEXT PRIMARY KEY,   -- 目标的 URN
+    state       BLOB NOT NULL,      -- 序列化后的 RatchetState 棘轮状态实体
+    updated_at  INTEGER NOT NULL    -- 更新时的 Unix 时间戳
 );
 ```
 
-### Test
-
-```bash
-go run ./cmd/test_dr_persist/
-```
-
-测试流程：创建会话 → 发送/接收 → 模拟重启 → 恢复 → 继续通信。
-
 ---
 
-## Phase 6 — Network Transport (E2E DR over libp2p)
+## Phase 6 — 网络加密传输 (E2E DR over libp2p)
 
-**完成。** `cmd/test_dr_net/main.go` — 两节点双向 DR 消息交换，通过真实 libp2p。
+**完成。** `cmd/test_dr_net/main.go` 跑通了真实网络拓扑下的端到端双棘轮对称握手与消息交换。
 
-### What Works
-
-- **B → A**：B（initiator）打开 DR stream 到 A，A 的 responder handler 接收并解密
-- **A → B**：A（initiator）打开 DR stream 到 B，B 的 responder handler 接收并解密
-- 双向使用独立的 DRSession initiator 会话
-- Simplex 模式：每条消息一个新 stream；读端 EOF 可接受
-- X25519 PK 缓存：`session.Manager.SetPeerX25519PK()` + `mgr.PeerStaticX25519PK()` 用于带内对等方密钥查找
-
-### Architecture
-
-```
-B (initiator)                         A (responder)
-  │ ── OpenStream(/agent/dr/1.0.0) ──→ │
-  │ ── DR encrypted message ────────────→ │
-  │                                      │ Receive() decrypts using responder ratchet
-  │ ←── EOF (simplex, no reply) ─────── │
-  │                                      │
-A (initiator)                         B (responder)
-  │ ── OpenStream(/agent/dr/1.0.0) ──→ │
-  │ ── DR encrypted message ────────────→ │
-  │                                      │ Receive() decrypts using responder ratchet
-  │ ←── EOF (simplex, no reply) ─────── │
-```
-
-### Key Design Decisions
-
-- **Responder ratchet 初始化**：`NewDRSessionResponder` 创建空 ratchet；第一条入站消息的 header 用于初始化（X3DH-style agreement 嵌入 DR header）
-- **Peer X25519 PK 查找**：`session.Manager` 有本地 `peerX25519PK map[peer.ID][]byte` 缓存。调用者必须在 `Receive()` 前通过 `SetPeerX25519PK()` 设置对等方静态密钥
-- **Simplex streams**：`DRSession.Send()` 用 `io.EOF` 容限读取响应大小 — simplex 模式下对等方发送后关闭 stream
-- **Protocol IDs**：ECIES session 使用 `/hermes/agent-comm/session/1.0.0`，DR 使用 `/agent/dr/1.0.0`（独立协议协商）
-
-### Test
-
-```bash
-go run ./cmd/test_dr_net/
-```
-
-预期输出：
-```
---- B sends 'Message 1 from B' to A ---
-[OK] B: Message 1 sent
-
---- A creates DRSession(initiator) -> B ---
-[OK] Bidirectional DR test passed
-
-=== ALL TESTS PASSED ===
-```
-
----
-
-## Project Structure
-
-```
-agent-comm/
-├── crypto/
-│   ├── keys.go       # Identity key 加载/创建（Ed25519 + X25519）
-│   └── ecies.go      # ECIES 加密/解密
-├── dht/
-│   └── dht.go        # Kad-DHT 封装
-├── libp2p/
-│   └── host.go       # libp2p.Host 构建
-├── proto/
-│   ├── registry.proto
-│   ├── envelope.proto    # EncryptedEnvelope, ChatMessage
-│   ├── mq.proto          # Phase 3: async queue
-│   ├── wot.proto         # Phase 4a: trust claims
-│   └── *.pb.go
-├── registry/
-│   ├── client.go     # URN resolve/register via libp2p stream
-│   └── server.go     # URN registry server handler
-├── session/
-│   └── session.go    # Encrypted session send/receive (Phase 2)
-├── mq/               # Phase 3: async message queue
-│   ├── server.go     # Relay: store/retrieve/ack (SQLite)
-│   └── client.go     # Client: store via relay, retrieve on startup
-├── contacts/         # Phase 4a: contact management + trusted pubkey cache
-├── wot/              # Phase 4a: web of trust
-│   ├── claim.go      # TrustClaim 创建和验证
-│   ├── store.go      # SQLite persistence
-│   └── resolver.go   # BFS trust path resolution
-├── dr/               # Phase 4b: double ratchet
-│   ├── ratchet.go    # RatchetState: root/chain keys, DH step
-│   ├── session.go    # DRSession: encrypt/decrypt
-│   └── store.go      # DRSession persistence (SQLite)
-├── store/
-│   └── relay/        # (空目录，relay 功能由 mq/server.go 实现)
-├── cmd/
-│   ├── bootstrap/    # Bootstrap/relay 节点（registry + MQ server）
-│   ├── client/       # 常规客户端节点
-│   ├── test_session/  # Phase 2: 两节点 ECIES 加密会话测试
-│   ├── test_mq/       # Phase 3: 三节点离线消息测试（relay + sender + receiver）
-│   ├── test_dr_persist/  # Phase 5: DR 会话持久化测试
-│   ├── test_dr_net/     # Phase 6: 两节点 libp2p 双向 DR 测试
-│   ├── test_hkdf_check/
-│   ├── test_kdf/
-│   ├── test_debug/
-│   └── debug_dh/
-└── docs/
-    ├── TUTORIAL.md
-    └── DR-CODE-COMMENTARY.md
-```
-
----
-
-## Security Notes
-
-- Relay 存储加密 blob — 无法读取消息内容
-- Relay 可移除而不影响消息机密性
-- AAD = 协议常量（非对等方特定）— 避免 URN↔PeerID 推导问题
-- WoT（Phase 4a）：信任声明使用 Ed25519 签名；接受新对等方 pubkey 前验证信任路径
-- Double Ratchet（Phase 4b）：前向保密 — 旧 chain key 使用后删除
-- 无 WoT → 首次联系身份仅依赖 registry（MITM 可能）
-- 无 Double Ratchet（当前）→ 静态-静态 ECDH；密钥泄露暴露所有历史
-
----
-
-## Test Commands
-
-```bash
-# Phase 2: 两节点 ECIES 加密会话
-go run ./cmd/test_session/
-
-# Phase 3: 三节点离线消息测试（relay + sender + receiver）
-go run ./cmd/test_mq/
-
-# Phase 5: DR 会话持久化（SQLite 往返）
-go run ./cmd/test_dr_persist/
-
-# Phase 6: 两节点 libp2p 双向 DR
-go run ./cmd/test_dr_net/
-
-# Bootstrap 节点（registry + MQ server）
-go run ./cmd/bootstrap/
-
-# 客户端节点（交互式：send/pull/quit）
-BOOTSTRAP_ADDR=/ip4/127.0.0.1/tcp/45041/p2p/... go run ./cmd/client/
-```
+- **Simplex（单工模式）**：每一条发送的消息都通过一个独立的、短暂生存的 libp2p 协议 Stream 传递，接收方处理完后写入 EOF。
+- **带内密钥自动构建**：利用 `session.Manager` 本地内存缓存对端的 X25519 PK，从而在 Responder 接收到握手头信息时，无缝匹配正确的密钥以初始化棘轮。

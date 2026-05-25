@@ -1,168 +1,164 @@
-# agent-comm 概览
+# agent-comm 开发与架构设计总览 🛠️
 
-## 这个项目要解决什么问题
+本文档专门面向**开发者与系统贡献者**。它描述了 `agent-comm` 系统的技术架构、核心密码学设计、降级策略、项目代码布局、以及本地编译测试流程。
 
-两个在不同机器上运行的 AI agent，如何安全地直接通信？
-
-这里的"安全"不是指"加密传输"——TLS 可以做到。但 TLS 的安全假设是**所有人都信任 CA**，而且中心化服务器可以访问明文。agent-comm 要解决的是更深层的问题：
-
-**如果没有任何可信的第三方服务器，两个 agent 怎么找到对方、互相验证、并且交换只有彼此能解密的消息？**
-
-这是一个端到端安全的 P2P 通信问题。
+如果您只是该通信套件的普通使用者或集成商，请先阅读 **[用户使用指南 (README.md)](file:///c:/Users/zhang/Developer/agent-comm/README.md)**。
 
 ---
 
-## 为什么重要
+## 🧭 开发者文档地图 (Documentation Directory Map)
 
-当前主流的 agent 通信方案有两种：
+项目提供了分层、递进的文档体系，建议按照以下路线进行阅读：
 
-| 方案 | 问题 |
-|------|------|
-| **中心化服务器**（Webhook / HTTP API） | 服务器是单点故障；服务器能读取消息内容；运营商可以审查或拦截 |
-| **端到端加密消息平台**（Signal / Matrix） | 需要手机号或邮箱注册，不适合 AI agent；依赖中心化的用户目录 |
-
-对于 AI agent 来说，这些方案都有根本性的不匹配：
-
-- Agent 没有手机号，身份应该是** cryptographic 的**（公钥即身份）
-- Agent 应该在**没有任何第三方能读取内容**的前提下通信
-- Agent 的通信基础设施应该是**去中心化的**，不依赖某个云服务
-
-所以这个项目要回答：**在没有中心化服务器的前提下，两个 AI agent 如何安全地发现彼此并加密通信？**
+1. **整体概览**：即本文档（[OVERVIEW.md](file:///c:/Users/zhang/Developer/agent-comm/OVERVIEW.md)），了解项目全貌与本地开发调试。
+2. **应用 SDK 封装设计**：阅读 **[AGENT_SKILL_DESIGN.md](file:///c:/Users/zhang/Developer/agent-comm/docs/AGENT_SKILL_DESIGN.md)**，了解高阶客户端 SDK（`agent/` 目录）的路由降级与会话封装逻辑。
+3. **云端基础设施设计**：阅读 **[PLATFORM_DESIGN.md](file:///c:/Users/zhang/Developer/agent-comm/docs/PLATFORM_DESIGN.md)**，了解配套公共平台 **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)** 提供的超级 Registry、Relay 集群、MQ 盲存服务的设计及合规网关代理。
+4. **通信与加密协议规格书**：阅读 **[SPEC.md](file:///c:/Users/zhang/Developer/agent-comm/SPEC.md)**，这是系统 Phase 1 至 Phase 6 的协议级物理定义文件（数据包格式、消息帧、AAD定义等）。
+5. **基础背景与原理教程**：阅读 **[TUTORIAL.md](file:///c:/Users/zhang/Developer/agent-comm/docs/TUTORIAL.md)**，适合需要补充 P2P、Relay v2、Kademlia DHT 或密码学密钥协商背景的开发者。
+6. **双棘轮代码逐文件批注**：阅读 **[DR-CODE-COMMENTARY.md](file:///c:/Users/zhang/Developer/agent-comm/docs/DR-CODE-COMMENTARY.md)**，深入理解 `dr/` 目录中 Double Ratchet 会话与状态持久化的 Go 语言实现细节。
 
 ---
 
-## 解决思路
+## 🏗️ 核心架构与技术栈
 
-核心思路是 **peer-to-peer + end-to-end encryption + self-certifying identity**：
+`agent-comm` 由本地客户端 SDK 模块（纯 Skill）以及云端配套基础设施 **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)** 协同构建。
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  目标：让两个 agent 在没有中心化服务器的情况下安全通信           │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  问题 1: 如何找到对方？                                         │
-│  ─────────────────────                                         │
-│  答案：DHT (Kademlia 分布式哈希表)                               │
-│  每个 agent 把自己的网络地址注册到一个共享的 DHT 里，           │
-│  其他人通过查 DHT 找到它。没有中心化的"通讯录服务器"。         │
-│                                                                 │
-│  问题 2: 怎么证明"我是我"而不是有人冒充？                       │
-│  ────────────────────────────────                               │
-│  答案：自证明身份 (Self-Certifying Identity)                    │
-│  身份 = Ed25519 密钥对 → 公钥的哈希 → URN                       │
-│  URN 本身就是公钥的哈希，所以知道 URN 就等于知道了公钥，        │
-│  用对应私钥签名就能证明身份。没有 CA，没有手机号。              │
-│                                                                 │
-│  问题 3: 通信内容如何做到只有对方能解密？                       │
-│  ──────────────────────────────────                             │
-│  答案：端到端加密 (ECIES + Double Ratchet)                      │
-│  ECIES：X25519 ECDH 做密钥交换，每次通信用临时密钥              │
-│  Double Ratchet：在 ECIES 基础上再加一层 ratchet——               │
-│  每条消息的密钥都是从上一个状态派生出来的，                     │
-│  泄露一条消息的密钥不会影响其他消息（前向保密）。               │
-│                                                                 │
-│  问题 4: 对方不在线时消息怎么办？                               │
-│  ────────────────────────────────                               │
-│  答案：relay 节点存储加密 blob                                   │
-│  如果对方不在线，消息加密后存到 relay 节点。                    │
-│  relay 只能存 blob，不知道内容；对方上线后去拉取。               │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+### 密码学与网络协议栈划分：
+
+| 层次 | 技术 | 运行边界划分与作用 |
+|------|------|------------------|
+| **网络传输** | libp2p + Relay v2 | **[纯 Skill 本地功能]** 点对点物理连接协商；若双方不可达，则 **[需 Platform 配合]** 由中继节点转发 |
+| **寻址路由** | Kademlia DHT + 超级 Registry | **[纯 Skill 本地功能]** DHT 节点寻址；**[需 Platform 配合]** 由平台的 Registry 进行极速并行解析 |
+| **节点身份** | Ed25519 | **[纯 Skill 本地功能]** 密钥生成自证明身份 URN (Uniform Resource Name，统一资源名称)，完全保密 |
+| **密钥交换** | X25519 ECDH + HKDF | **[纯 Skill 本地功能]** 初始一次性会话会商 ECIES 加密密钥 |
+| **消息加密** | AES-GCM-SIV + Double Ratchet | **[纯 Skill 本地功能]** 状态机密钥推导演进，实现前向保密的“一文一密” |
+| **离线暂存** | Platform MQ + SQLite | **[需 Platform 配合]** 消息信封的异步盲存，中继对消息明文完全不可见 |
+
+---
+
+## 🔄 混合降级路由机制 (Hybrid P2P Flow)
+
+高阶 SDK（`agent/`）内置了降级流转时序。根据当前的网络可达状态，系统会在 **纯 Skill 直连模式** 与 **Platform 辅助模式** 之间自动流转：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 发起方 Agent (SDK)
+    participant DHT as P2P DHT网络
+    participant Reg as 平台 Registry
+    participant MQ as 平台 Relay / MQ
+    participant B as 目标节点 Agent
+
+    Note over A, B: 阶段 1: 多路竞速寻址 (Skill 本地发现 vs Platform 超级寻址)
+    
+    par 竞速发现请求
+        A->>DHT: 查找提供者 (Skill 本地 DHT 查找)
+        A->>Reg: 请求解析 (Platform 接口解析)
+    end
+    
+    Reg-->>A: [极速响应] 返回 B 的 PeerID、地址及 X25519 公钥
+    DHT-->>A: [稍后响应] 返回 B 在本地网络拓扑中的物理地址
+    
+    A->>A: 聚合得到目标寻址簿与公钥缓存
+    
+    Note over A, B: 阶段 2: 降级试探通信
+    
+    alt 策略 A [Skill 纯直连首选] : 双方具有公网 IP / 处于局域网
+        A->>B: 尝试 TCP/QUIC 直接拨号
+        B-->>A: 握手成功，建立本地 Double Ratchet 流 (/agent/dr/1.0.0)
+        A->>B: 发送实时加密消息（完全不经过平台中转）
+        
+    else 策略 B [Platform 中继退化] : 双方被 NAT 严格阻挡，但均在线
+        A->>MQ: 通过配套平台的公网 Relay v2 发起流量打洞
+        MQ->>B: 转发连接请求
+        B-->>A: 中继连接建立成功
+        A->>B: 通过平台 Relay 通道传输实时加密消息
+        
+    else 策略 C [Platform 离线盲存] : B 断网 / 关机
+        A->>A: 实时流建立报错，触发 MQ 离线盲存
+        A->>A: 在本地使用 Double Ratchet 状态机派生密钥，对消息进行离线加密
+        A->>A: 封装为加密信封 (EncryptedEnvelope)
+        A->>MQ: 向平台的离线信箱 MQ 投递信封 (Store)
+        
+        Note over MQ, B: ...数小时后，B 重新连入网络...
+        
+        B->>MQ: 主动向平台的离线信箱拉取未读信封 (Retrieve)
+        B->>B: 本地离线解密，触发接收回调
+        B->>MQ: 发送确认并要求永久销毁服务器上的缓存备份 (Ack)
+    end
 ```
 
 ---
 
-
-### 5. 混合 P2P 降级通讯 (Hybrid P2P & Agent Wrapper)
-
-完全没有公网 IP 时单纯依靠 DHT 寻址往往极不稳定。为了落地体验，项目演进出了客户端 SDK 层 `agent/agent.go` 包装器。它实现了降级策略：
-- **寻址竞速**：同时查询 DHT 和 官方/自建的中心 Registry 取最快结果。
-- **阶梯退化传输**：首先尝试 TCP/QUIC 直连，若 NAT 拦截严重，尝试通过 Relay 转发，若是纯断网离线，则直接计算 Double Ratchet 离线状态，封入加密信封盲掷到云端的高并发 MQ 信箱。
-这种设计确保了既保留去中心化的最高极客互连，又能像主流 IM 般稳定抵达。
-
-## 各部分是如何协作的
+## 🗂️ 项目代码目录导航
 
 ```
-用户 A 的机器                          用户 B 的机器
-    │                                        │
-    │  ┌──────────────────────────────┐    │
-    │  │         libp2p Host            │    │
-    │  │  ┌─────────────────────────┐  │    │
-    │  │  │ DHT (Kad-DHT)            │  │    │
-    │  │  │ 存储/查询: URN → PeerID  │  │    │
-    │  │  └─────────────────────────┘  │    │
-    │  │  ┌─────────────────────────┐  │    │
-    │  │  │ Registry (URN 解析)     │  │    │
-    │  │  │ /hermes/agent-comm/     │  │    │
-    │  │  │ registry/1.0.0          │  │    │
-    │  │  └─────────────────────────┘  │    │
-    │  │  ┌─────────────────────────┐  │    │
-    │  │  │ Session (ECIES/DR)      │  │    │
-    │  │  │ 加密消息流             │  │    │
-    │  │  └─────────────────────────┘  │    │
-    │  │  ┌─────────────────────────┐  │    │
-    │  │  │ MQ Client (离线存储)    │  │    │
-    │  │  │ 存/取/确认消息          │  │    │
-    │  │  └─────────────────────────┘  │    │
-    │  └──────────────────────────────┘    │
-    │                                        │
-    └────────────┐         ┌────────────────┘
-                 │         │
-          relay 节点         │
-    (帮你存加密消息的中间人) │
+agent-comm/
+├── agent/           # 🎁 高阶封装 SDK 门面（InitIdentity, SendMessage, OnMessage, 名片导入导出）
+├── crypto/          # 🔐 Ed25519/X25519 密钥工具箱与 ECIES 编解码实现
+├── libp2p/          # 🌐 基于 libp2p.Host 的底层基础网络节点构造
+├── dht/             # 📍 Kademlia DHT 协议查询/分发封装（本地 Skill）
+├── registry/        # 📇 寻址目录服务（client 侧本地解析，及 server 侧服务，服务属于 Platform）
+├── session/         # 📁 ECIES 临时加密会话管理
+├── mq/              # 📥 离线消息信箱（client 侧本地拉取，及基于 SQLite 的 server 存储，存储属于 Platform）
+├── dr/              # 🔄 Double Ratchet 核心状态机算法、持久化层（SQLite）及网络流处理器
+├── wot/             # 🤝 信任网络（Web of Trust）模块（本地 Skill）
+├── contacts/        # 📇 本地已信任的联系人通讯录持久化管理
+├── proto/           # 🧬 Protobuf 消息契约定义文件 (.proto 及自动生成的 Go 接口)
+└── cmd/             # 🛠️ 命令行入口与单元/集成测试
+    ├── bootstrap/   # 平台专属：云端公共 Bootstrap 节点服务启动程序 (属于 Platform)
+    ├── client/      # 交互式 CLI 通信客户端
+    └── test_*/      # 各 Phase 独立的功能测试程序
 ```
-
-**发现阶段**：A 通过 DHT + Registry 找到 B 的 PeerID 和地址（URN 系统确保找到的公钥是对的）
-
-**握手阶段**：A 用 B 的 X25519 公钥做 ECIES 加密，建立会话密钥
-
-**通信阶段**：Double Ratchet 确保每条消息用不同的密钥，有前向保密
-
-**离线阶段**：如果 B 不在线，消息加密后存到 relay；B 上线后去拉取
 
 ---
 
-## 核心设计决策
+## 🛠️ 本地编译与测试指南
 
-### 1. 为什么用 URN 而不是 PeerID 作为身份？
+运行测试前，请确保您本地已安装 Go（推荐 Go 1.25.10 及以上）。
 
-libp2p 用 PeerID 来标识节点，但 PeerID 是从公钥派生的，不人类友好。URN 系统把 Ed25519 公钥的哈希编码成可读的字符串（如 `urn:hermes:agent:S2YWqfjZZBPP3QSFHijuUX`），方便人类阅读和分享，同时还是自证明的——知道 URN 就知道公钥，用对应私钥签名就能证明身份。
+### 1. 运行本地纯 Skill 各 Phase 单元/模拟测试（无需云端平台部署）
 
-### 2. 为什么要 Double Ratchet？
+```bash
+# 进入项目工作区
+cd ~/.hermes/agent-comm
 
-ECIES 用了临时密钥对，但密钥对是每次会话新建的，不是每条消息。如果攻击者在某次会话后窃取了私钥，所有会话都能被解密。Double Ratchet 让每条消息用不同的 chain key 派生出的 message key，即使泄露一条也影响不到其他消息。
+# Phase 1: 测试 libp2p 主机创建与网络发现
+go run ./cmd/test_host/
 
-### 3. relay 节点为什么不能读取消息？
+# Phase 2: 测试两节点 ECIES 加密会话（带内握手）
+go run ./cmd/test_session/
 
-消息在发往 relay 之前就已经被 ECIES 加密了。relay 只存 encrypted blob（加密信封），不知道 sender、recipient 或者内容。Relay 是 blind storage。
+# Phase 5: 测试 Double Ratchet 状态持久化（SQLite 写入与重启恢复）
+go run ./cmd/test_dr_persist/
 
-### 4. 为什么不用 Tor 或者其他已有的匿名网络？
+# Phase 6: 测试两节点通过 libp2p stream 进行双棘轮加密双向通信
+go run ./cmd/test_dr_net/
+```
 
-Tor 隐藏了通信关系，但消息是端到端加密的且 relay 存储的是加密 blob。Tor 解决的是"谁在和谁通信"的隐私问题；agent-comm 解决的是"如何让两个 agent 找到彼此并安全通信"的问题。两者是正交的。
+### 2. 运行需要结合 Platform 中继/信箱的集成测试
+
+```bash
+# Phase 3: 测试三节点离线消息暂存（需要 Relay 节点模拟 MQ 信箱中转）
+go run ./cmd/test_mq/
+
+# 运行已部署平台（ECS）完整连通性集成测试
+go run ./cmd/platform_test/
+```
+
+> [!NOTE]
+> **配套公共 Platform 配置信息**（详情参考 **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)** 仓库）：
+> - **公网域名**：`agent-communication.online`
+> - **平台 PeerID**：`12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
+> - **平台 URN**：`urn:hermes:platform:ee8be13add63a020`
+> - **推荐 P2P QUIC 引导地址**：`/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
+> - **TCP 备用引导地址**：`/dns4/agent-communication.online/tcp/45041/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
 
 ---
 
-## 技术栈总结
+## 🔒 协议安全属性说明
 
-| 层次 | 技术 | 作用 |
-|------|------|------|
-| 网络传输 | libp2p + Relay v2 | P2P 连接、NAT 穿透 |
-| 路由 | Kad-DHT | 分布式 URN → PeerID 查找 |
-| 身份 | Ed25519 + URN | 自证明身份 |
-| 密钥交换 | X25519 ECDH + HKDF | ECIES 加密 |
-| 消息加密 | AES-GCM-SIV + Double Ratchet | 前向保密 |
-| 离线存储 | Relay + SQLite | 加密 blob 存储 |
-
----
-
-## 文档结构
-
-```
-OVERVIEW.md      ← 你现在看的这个：问题、思路、整体协作图
-SPEC.md          ← 技术规格：各 phase 的详细设计、protocol 细节
-README.md        ← 快速参考：测试命令、目录结构
-SKILL.md         ← agent 使用：DR gotchas、API 变更、key design
-docs/
-  TUTORIAL.md    ← 教学文档：背景知识 + Phase 详解 + 上手指南
-  DR-CODE-COMMENTARY.md ← DR 代码逐文件注解
-```
+1. **自证明 URN 绑定**：URN (Uniform Resource Name) 强制绑定为 Ed25519 身份公钥的哈希，除非对端泄露私钥，否则无法被他人冒充。
+2. **静态-静态密钥隔离**：X25519 加密密钥与 Ed25519 签名密钥是分离的，即使加密密钥被破解，签名和身份依然保持安全。
+3. **Double Ratchet 前向保密**：消息密钥的单向派生性意味着即使当前的 Ratchet 状态在某个时间点泄露，攻击者也无法解密在此之前的历史消息。
+4. **Relay 盲存安全性**：中继平台 MQ 存储的 Envelope 在本地即已使用 AES-GCM 锁定，服务器除了知道收件人的 URN、过期时间戳之外，无法窥探消息内容，Relay 机器被攻破不影响消息隐私。
