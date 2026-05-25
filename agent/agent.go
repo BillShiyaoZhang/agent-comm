@@ -17,7 +17,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/nousresearch/hermes-agent/agent-comm/dht"
 	kad "github.com/libp2p/go-libp2p-kad-dht"
-	
+	"path/filepath"
 )
 
 // Agent is the high-level wrapper unifying the P2P networking, 
@@ -41,7 +41,7 @@ type Agent struct {
 // spins up the P2P host, and prepares state managers.
 func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 	if cfg.KeysDir == "" {
-		cfg.KeysDir = "./agent_keys"
+		cfg.KeysDir = crypto.DefaultKeysDir()
 	}
 	if len(cfg.ListenAddrs) == 0 {
 		// Use auto port assignment by default
@@ -49,7 +49,7 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 	}
 
 	if cfg.DBPath == "" {
-		cfg.DBPath = "./agent_dr_store.db"
+		cfg.DBPath = filepath.Join(cfg.KeysDir, "agent_dr_store.db")
 	}
 
 	drStore, err := dr.NewDRStore(cfg.DBPath)

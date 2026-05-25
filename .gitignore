@@ -1,3 +1,19 @@
 test_dr
 test_dr_net
 test_dr_persist
+
+# Keys and Databases
+*.pem
+contacts/*.pem
+demo_keys/
+agent_keys/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Build binaries
+client_bin
+bootstrap_bin
+bootstrap
+client
