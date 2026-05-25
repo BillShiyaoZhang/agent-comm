@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"runtime"
 )
 
 // IdentityKeyPair holds Ed25519 identity keys for an agent.
@@ -221,8 +222,32 @@ type IdentityKeys struct {
 
 // DefaultKeysDir returns the default directory for storing keys.
 func DefaultKeysDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".hermes", "agent-comm", "contacts")
+	var baseDir string
+	var err error
+
+	if runtime.GOOS == "windows" {
+		// On Windows, use AppData (Roaming)
+		baseDir = os.Getenv("APPDATA")
+		if baseDir == "" {
+			baseDir, err = os.UserConfigDir()
+		}
+		if err == nil && baseDir != "" {
+			return filepath.Join(baseDir, "hermes-agent", "agent-comm", "contacts")
+		}
+	} else {
+		// On Unix/Linux/macOS, check HOME first
+		baseDir = os.Getenv("HOME")
+	}
+
+	if baseDir == "" {
+		baseDir, _ = os.UserHomeDir()
+	}
+	if baseDir == "" {
+		// Final fallback to a temp directory
+		baseDir = os.TempDir()
+	}
+
+	return filepath.Join(baseDir, ".hermes", "agent-comm", "contacts")
 }
 
 // EnsureKeysDir ensures the keys directory exists.
