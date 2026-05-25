@@ -78,7 +78,7 @@ func (s *Store) Add(c *Contact) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(c.X25519PK) != 32 || len(c.Ed25519PK) != ed25519.PublicKeySize {
+	if len(c.X25519PK) != 32 || (len(c.Ed25519PK) != 0 && len(c.Ed25519PK) != ed25519.PublicKeySize) {
 		return fmt.Errorf("invalid key length")
 	}
 

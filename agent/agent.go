@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/nousresearch/hermes-agent/agent-comm/contacts"
 	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
 	
 	p2p "github.com/nousresearch/hermes-agent/agent-comm/libp2p"
@@ -25,6 +26,7 @@ type Agent struct {
 	Host           host.Host
 	Keys           *crypto.IdentityKeys
 	Session        *session.Manager
+	Contacts       *contacts.Store
 	
 	MQClient       *mq.Client
 	Registry       *registry.Client
@@ -53,6 +55,11 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 	drStore, err := dr.NewDRStore(cfg.DBPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mount DR store: %w", err)
+	}
+
+	contactStore, err := contacts.NewStore(cfg.DBPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to mount contacts store: %w", err)
 	}
 
 	keys, err := crypto.LoadOrCreateIdentity(cfg.KeysDir)
@@ -84,6 +91,7 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 		Keys:           keys,
 		Session:        session.NewManager(h, keys),
 		DRStore:        drStore,
+		Contacts:       contactStore,
 		MQClient:       mq.NewClient(h),
 		Registry:       registry.NewClient(h),
 		DHT:            d,
@@ -196,4 +204,21 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 // OnMessage registers the listener callback for incoming Realtime streams and polling MQ.
 func (a *Agent) OnMessage(ctx context.Context, handler func(senderURN string, msg string)) {
 	a.StartListening(ctx, handler)
+}
+
+// Close closes the Agent's resources (DRStore, Contacts database, DHT, Host).
+func (a *Agent) Close() error {
+	if a.DRStore != nil {
+		a.DRStore.Close()
+	}
+	if a.Contacts != nil {
+		a.Contacts.Close()
+	}
+	if a.DHT != nil {
+		a.DHT.Close()
+	}
+	if a.Host != nil {
+		a.Host.Close()
+	}
+	return nil
 }

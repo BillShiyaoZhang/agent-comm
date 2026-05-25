@@ -14,6 +14,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/nousresearch/hermes-agent/agent-comm/agent"
 	"github.com/nousresearch/hermes-agent/agent-comm/contacts"
 	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
 	"github.com/nousresearch/hermes-agent/agent-comm/dht"
@@ -162,6 +163,9 @@ func main() {
 	fmt.Println("  trustpath <urn>                — check if there's a trust path to URN")
 	fmt.Println("  contacts                      — list all contacts")
 	fmt.Println("  pull                          — pull offline messages")
+	fmt.Println("  share                         — generate and show my contact card")
+	fmt.Println("  import                        — paste and import a contact card")
+	fmt.Println("  importfile <path>             — import a contact card from a file")
 	fmt.Println("  quit                          — exit")
 	fmt.Println()
 
@@ -239,6 +243,64 @@ func main() {
 				}
 				fp := contacts.Fingerprint(c.X25519PK)
 				fmt.Printf("  %s%s (PeerID=%s, fp=%s)\n", c.URN, trusted, c.PeerID, fp)
+			}
+
+		case "share":
+			card, err := agent.GenerateContactCard(keys, h, []peer.AddrInfo{*bootstrapInfo})
+			if err != nil {
+				fmt.Printf("Error generating contact card: %v\n", err)
+			} else {
+				fmt.Println(card)
+			}
+
+		case "import":
+			fmt.Println("Paste the contact card text block below. Type 'END' on a new line when done:")
+			var lines []string
+			for scanner.Scan() {
+				txt := scanner.Text()
+				if strings.TrimSpace(txt) == "END" {
+					break
+				}
+				lines = append(lines, txt)
+			}
+			cardText := strings.Join(lines, "\n")
+			
+			fmt.Print("Enter display name for this contact (optional): ")
+			var displayName string
+			if scanner.Scan() {
+				displayName = strings.TrimSpace(scanner.Text())
+			}
+
+			c, err := agent.ImportContactCard(h, mgr, contactStore, cardText, displayName)
+			if err != nil {
+				fmt.Printf("Error importing contact card: %v\n", err)
+			} else {
+				fmt.Printf("Successfully imported contact: %s (PeerID=%s)\n", c.URN, c.PeerID)
+			}
+
+		case "importfile":
+			if len(parts) < 2 {
+				fmt.Println("Usage: importfile <path>")
+				continue
+			}
+			filePath := parts[1]
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				fmt.Printf("Error reading file: %v\n", err)
+				continue
+			}
+			
+			fmt.Print("Enter display name for this contact (optional): ")
+			var displayName string
+			if scanner.Scan() {
+				displayName = strings.TrimSpace(scanner.Text())
+			}
+
+			c, err := agent.ImportContactCard(h, mgr, contactStore, string(data), displayName)
+			if err != nil {
+				fmt.Printf("Error importing contact card: %v\n", err)
+			} else {
+				fmt.Printf("Successfully imported contact: %s (PeerID=%s)\n", c.URN, c.PeerID)
 			}
 
 		default:
