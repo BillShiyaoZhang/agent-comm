@@ -24,7 +24,7 @@ import (
 const aadConstant = "agent-comm-v1"
 
 func main() {
-	fmt.Println("=== agent-comm Two-Node Encrypted Message Test ===\n")
+	fmt.Printf("=== agent-comm Two-Node Encrypted Message Test ===\n\n")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

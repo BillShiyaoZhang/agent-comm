@@ -24,7 +24,7 @@ type drSessionEntry struct {
 }
 
 func main() {
-	fmt.Println("=== DR over libp2p: two-node test ===\n")
+	fmt.Printf("=== DR over libp2p: two-node test ===\n\n")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -82,7 +82,7 @@ func main() {
 		handleDRStream(ctx, stream, keysA, mgrA, drStoreA, drPeersA, &drPeersMuA)
 	})
 
-	fmt.Println("Node A handlers registered\n")
+	fmt.Printf("Node A handlers registered\n\n")
 
 	// --- Node B (Bob) ---
 	dirB := "/tmp/dr_test_b"
@@ -115,7 +115,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "B: connect to A: %v\n", err)
 		return
 	}
-	fmt.Println("Node B connected to Node A\n")
+	fmt.Printf("Node B connected to Node A\n\n")
 
 	// Register B with A's registry
 	regClientB := registry.NewClient(hostB)

@@ -151,7 +151,7 @@ func main() {
 	for _, addr := range h.Addrs() {
 		fmt.Printf("  %s/p2p/%s\n", addr.String(), h.ID())
 	}
-	fmt.Println("==================\n")
+	fmt.Printf("==================\n\n")
 
 	// Interactive messaging loop
 	fmt.Println("Commands:")

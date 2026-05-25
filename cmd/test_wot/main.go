@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== WoT: Trust Claims + Trust Path Resolution ===\n")
+	fmt.Printf("=== WoT: Trust Claims + Trust Path Resolution ===\n\n")
 
 	ctx := context.Background()
 
@@ -78,7 +78,7 @@ func main() {
 		fmt.Printf("FAIL: store claim: %v\n", err)
 		return
 	}
-	fmt.Println("  Alice stored her own claim (self-signed)\n")
+	fmt.Printf("  Alice stored her own claim (self-signed)\n\n")
 
 	// --- Carol creates Alice's trust claim ---
 	fmt.Println("--- Carol creates TRUSTED claim about Alice ---")
@@ -142,7 +142,7 @@ func main() {
 		return
 	}
 	fmt.Printf("  Bob's trusted X25519 PK: %x\n", trustedPK[:8])
-	fmt.Println("  [OK] Alice directly trusts Bob\n")
+	fmt.Printf("  [OK] Alice directly trusts Bob\n\n")
 
 	// --- Test 3: Verify claim signature (Ed25519) ---
 	fmt.Println("--- Test 3: Signature verification ---")
@@ -152,7 +152,7 @@ func main() {
 		fmt.Printf("FAIL: signature verify: %v\n", err)
 		return
 	}
-	fmt.Println("  [OK] Alice's signature on Bob's claim is valid\n")
+	fmt.Printf("  [OK] Alice's signature on Bob's claim is valid\n\n")
 
 	// --- Test 4: Trust path resolver (BFS) ---
 	fmt.Println("--- Test 4: Trust path resolver ---")
@@ -185,7 +185,7 @@ func main() {
 		fmt.Printf("FAIL: claim subject mismatch\n")
 		return
 	}
-	fmt.Println("  [OK] Direct trust path Alice->Bob verified\n")
+	fmt.Printf("  [OK] Direct trust path Alice->Bob verified\n\n")
 
 	// --- Test 5: Transitive trust Carol -> Alice -> Bob ---
 	fmt.Println("--- Test 5: Transitive trust Carol -> Alice -> Bob ---")
@@ -217,7 +217,7 @@ func main() {
 		fmt.Printf("FAIL: expected depth=2, got %d\n", path.Depth)
 		return
 	}
-	fmt.Println("  [OK] Transitive trust path verified\n")
+	fmt.Printf("  [OK] Transitive trust path verified\n\n")
 
 	// --- Test 6: Untrusted path (Dave doesn't trust anyone) ---
 	fmt.Println("--- Test 6: Untrusted path (Dave has no trust relationships) ---")
@@ -231,7 +231,7 @@ func main() {
 		return
 	}
 	fmt.Printf("  Dave cannot trust Alice (no trust path): %v\n", err)
-	fmt.Println("  [OK] Correctly rejected untrusted path\n")
+	fmt.Printf("  [OK] Correctly rejected untrusted path\n\n")
 
 	// --- Test 7: Verify signature on transitive path ---
 	fmt.Println("--- Test 7: Verify signatures on full trust path ---")
@@ -253,7 +253,7 @@ func main() {
 		return
 	}
 	fmt.Printf("  Verified %d claim(s) in path\n", len(path.Claims))
-	fmt.Println("  [OK] Full trust path signature verified\n")
+	fmt.Printf("  [OK] Full trust path signature verified\n\n")
 
 	// --- Test 8: Claim expiration ---
 	fmt.Println("--- Test 8: Claim expiration check ---")
@@ -278,7 +278,7 @@ func main() {
 		fmt.Println("FAIL: 10-year old claim should not be expired in this test")
 		return
 	}
-	fmt.Println("  [OK] Claim expiration works correctly\n")
+	fmt.Printf("  [OK] Claim expiration works correctly\n\n")
 
 	fmt.Println("=== ALL TESTS PASSED ===")
 }

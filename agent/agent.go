@@ -3,8 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"sync"
-	"time"
 
 	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
 	
@@ -20,8 +18,6 @@ import (
 	kad "github.com/libp2p/go-libp2p-kad-dht"
 	
 )
-
-}
 
 // Agent is the high-level wrapper unifying the P2P networking, 
 // identity management, and messaging protocol.
@@ -83,15 +79,6 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 	}
 	dht.Bootstrap(ctx, d)
 
-	if cfg.DBPath == "" {
-		cfg.DBPath = "./agent.db"
-	}
-
-	drStore, err := dr.NewDRStore(cfg.DBPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open DR store: %w", err)
-	}
-
 	a := &Agent{
 		Host:           h,
 		Keys:           keys,
@@ -120,7 +107,6 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 // 3. Fallback to MQ blind-store via Double Ratchet / ECIES Envelope
 func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext string) error {
 	var targetID peer.ID
-	var targetAddrs []peer.AddrInfo
 	var recipientPubKey []byte
 
 	// 1. Concurrent Discovery (DHT vs Registry)
@@ -136,8 +122,6 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 	// Launch registry resolutions
 	for _, n := range a.BootstrapNodes {
 		go func(node peer.AddrInfo) {
-			ctxq, cancel := context.WithTimeout(ctx, 3*time.Second)
-			defer cancel()
 			res, err := a.Registry.Resolve(node, recipientURN)
 			resChan <- resolveRes{err: err, res: &res, src: "Registry"}
 		}(n)
@@ -153,7 +137,6 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 		if r.err == nil && r.res != nil && len(r.res.X25519PubKey) == 32 {
 			fmt.Printf("[Agent] Discovery won by: %s\n", r.src)
 			targetID = r.res.ID
-			targetAddrs = []peer.AddrInfo{{ID: r.res.ID, Addrs: r.res.Addrs}}
 			recipientPubKey = r.res.X25519PubKey
 			found = true
 			break
@@ -191,8 +174,6 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 	// 3. Fallback to MQ Store (Offline Envelope blind drop)
 	// We fallback to standard envelope if DR offline envelope builder is not exposed yet.
 	env, err := a.Session.BuildEnvelope(recipientPubKey, plaintext)
-	// 3. Fallback to MQ Store (Offline Envelope blind drop)
-	env, err := a.Session.BuildEnvelope(recipientPubKey, plaintext)
 	if err != nil {
 		return fmt.Errorf("failed to build encrypted envelope: %w", err)
 	}
@@ -202,7 +183,7 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 		return fmt.Errorf("no MQ nodes available for offline drop")
 	}
 
-	err = a.MQClient.Store(ctx, a.BootstrapNodes[0], env)
+	_, err = a.MQClient.Store(ctx, a.BootstrapNodes[0], recipientURN, env, 7)
 	if err != nil {
 		return fmt.Errorf("MQ blind-store failed: %w", err)
 	}

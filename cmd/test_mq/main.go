@@ -22,7 +22,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== MQ Offline Message Test ===\n")
+	fmt.Printf("=== MQ Offline Message Test ===\n\n")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

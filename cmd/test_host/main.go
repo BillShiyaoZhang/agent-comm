@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== agent-comm Phase 1: libp2p Host Test ===\n")
+	fmt.Printf("=== agent-comm Phase 1: libp2p Host Test ===\n\n")
 
 	cfg := libp2p.DefaultConfig()
 	fmt.Printf("Config: %+v\n\n", cfg)

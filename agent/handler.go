@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/nousresearch/hermes-agent/agent-comm/session"
 	goproto "google.golang.org/protobuf/proto"
 	pb "github.com/nousresearch/hermes-agent/agent-comm/proto"
@@ -38,7 +37,7 @@ func (a *Agent) StartListening(ctx context.Context, handler func(urn string, msg
 
 		plaintext, err := a.Session.DecryptEnvelope(&env)
 		if err == nil {
-			handler(env.SenderUrn, plaintext)
+			handler(env.SenderUrn, string(plaintext))
 		}
 	})
 
@@ -67,9 +66,9 @@ func (a *Agent) pollMQ(ctx context.Context, handler func(urn string, msg string)
 				for _, env := range envs {
 					plaintext, err := a.Session.DecryptEnvelope(env)
 					if err == nil {
-						handler(env.SenderUrn, plaintext)
+						handler(env.SenderUrn, string(plaintext))
 						// Ack destruction upon successful decryption
-						_ = a.MQClient.Ack(ctx, node, env.Id)
+						_, _ = a.MQClient.Ack(ctx, node, []string{env.MessageId})
 					}
 				}
 			}
