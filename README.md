@@ -128,13 +128,24 @@ a.SendMessage(ctx, targetURN, "Hello!")
 ```bash
 cd ~/.hermes/agent-comm
 
+# 各个阶段的本地独立测试
 ~/.local/go/bin/go run ./cmd/test_host/        # Phase 1 — libp2p host
 ~/.local/go/bin/go run ./cmd/test_session/     # Phase 2 — ECIES 会话
 ~/.local/go/bin/go run ./cmd/test_mq/          # Phase 3 — 离线 MQ
-~/.local/go/bin/go run ./cmd/test_dr/         # Phase 4b — DR 握手
+~/.local/go/bin/go run ./cmd/test_dr/          # Phase 4b — DR 握手
 ~/.local/go/bin/go run ./cmd/test_dr_persist/  # Phase 5 — DR 持久化
 ~/.local/go/bin/go run ./cmd/test_dr_net/      # Phase 6 — 双向 DR over libp2p
+
+# 真实已部署平台（ECS）完整连通性集成测试
+~/.local/go/bin/go run ./cmd/platform_test/    # 连通已部署平台测试注册、解析、MQ存取、解密与Ack流程
 ```
+
+**已部署平台信息**：
+- **公网 IP**：`8.130.40.38`
+- **PeerID**：`12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
+- **Platform URN**：`urn:hermes:platform:ee8be13add63a020`
+- **推荐 P2P QUIC 引导地址**：`/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
+- **TCP 备用引导地址**：`/ip4/8.130.40.38/tcp/45041/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
 
 **Go binary:** `~/.local/go/bin/go` (Go 1.25.10)
 

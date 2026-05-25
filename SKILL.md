@@ -154,9 +154,27 @@ quic-go: v0.45.2 (transitive)
 
 ```bash
 cd ~/.hermes/agent-comm
-~/.local/go/bin/go build ./...         # 全量编译
-~/.local/go/bin/go run ./cmd/test_dr_net/  # DR 网络测试（最终验证）
+~/.local/go/bin/go build ./...             # 全量编译
+~/.local/go/bin/go run ./cmd/test_dr_net/      # 本地 DR 网络双向测试
+~/.local/go/bin/go run ./cmd/platform_test/    # 真实平台集成测试（连接、注册、解析、MQ 存取）
 ```
+
+## Deployed Platform (真实服务器平台) 连通与开发指南
+
+当 Agent 需要与已部署的平台进行连通性验证或开发时，请遵循以下流程：
+
+1. **查阅参考代码**：
+   - 核心连通实例在 [cmd/platform_test/main.go](file:///c:/Users/zhang/Developer/agent-comm/cmd/platform_test/main.go)。该文件包含了完整的 libp2p P2P 拨号连接、注册本节点 URN、解析 URN、通过 MQ client 盲存 ECIES/Double Ratchet 信封、拉取信封与 Ack 销毁流程。
+2. **P2P 引导与注册地址**：
+   - 平台的公网 IP 为 `8.130.40.38`，PeerID 为 `12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`。
+   - **推荐 UDP/QUIC 协议连接**：使用引导 Multiaddr `/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`。
+   - **TCP 备用协议连接**：使用引导 Multiaddr `/ip4/8.130.40.38/tcp/45041/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`。
+3. **重要开发 Gotchas (Agent 必看)**：
+   - **不要使用 `patch.go`**：这个文件已被废弃并删除，直接使用 [agent/agent.go](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go) 所包装的 API 进行消息发送。
+   - **MQ 存取与 Ack 方法**：
+     - 在调用 `a.MQClient.Store` 时，必须提供 5 个参数：`ctx`、`relayAddrInfo`、`recipientURN`、`envelope`、`ttlDays`。
+     - 在调用 `a.MQClient.Ack` 时，必须将 MessageID 包装为切片传入，例如 `[]string{env.MessageId}`。
+   - **数据流解密**：在 incoming 监听中读取到 `pb.EncryptedEnvelope` 后，解密出 `plaintext` 后必须通过 `string(plaintext)` 进行显式类型转换再传递给上层 handler。
 
 ## 已知限制
 
