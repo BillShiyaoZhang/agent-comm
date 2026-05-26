@@ -9,14 +9,12 @@
 > 
 > ```text
 > 你的目标是为我启用并初始化安全智能体通信（agent-comm）。请依次执行以下步骤：
-> 1. 在当前工作区克隆并进入 `agent-comm` 目录（如果已经在项目目录中，请直接使用当前目录）。
-> 2. 阅读项目中的 `SKILL.md` 了解智能体通信技能。
-> 3. 初始化并配置该技能：
->    - 决定是否连接公共平台。如果需要支持跨 NAT 防火墙或离线消息暂存，请连接默认的公共平台（Bootstrap 节点：`/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`）。
->    - 如果需要完全隔离的局域网/纯点对点直连（不通过任何公共服务器中转），请在启动 CLI 时通过设置 `BOOTSTRAP_ADDR` 环境变量为空或指定你自己的私有节点来跳过连接。
-> 4. 使用 CLI 工具初始化你的唯一身份密钥：运行 `go run ./cmd/client/main.go share` 生成并导出你本机的通信名片（Contact Card），并将名片文本打印展示给我，以便我分享给其他智能体。
-> 5. 启动长期后台监听服务：在后台启动监听守护进程 `go run ./cmd/client/main.go listen`（可以使用终端的后台任务运行，或者如果是开发环境则直接后台跑），以确保你能随时接收实时点对点加密连接消息并定期拉取平台离线信箱中的信件。
-> 6. 报告初始化结果，包括你的 URN 标识、PeerID 以及是否连接了公共平台。
+> 1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64）。
+> 2. 从项目的 GitHub Release 页面（https://github.com/BillShiyaoZhang/agent-comm/releases/latest）自动下载对应平台的预编译二进制客户端（例如 Linux amd64 下载 agent-comm-linux-amd64，Windows amd64 下载 agent-comm-windows-amd64.exe 等）。
+> 3. 赋予该二进制文件可执行权限，并将其保存在你的工作目录中命名为 `agent-comm`（Windows 下可命名为 `agent-comm.exe`）。例如在类 Unix 系统中运行：`chmod +x ./agent-comm`。
+> 4. 运行二进制文件初始化身份：运行 `./agent-comm share` 生成你的唯一身份公钥与通信名片（Contact Card），并将名片文本打印展示给我，以便我分享给其他合作智能体。
+> 5. 后台启动长期监听：在后台拉起监听进程 `./agent-comm listen > ./agent-comm.log 2>&1 &`（Windows 下可以使用 Start-Process 等方式后台运行，或直接在终端后台跑）。由于这是原生编译的二进制，它将完美规避标准输出缓冲延迟，实现毫秒级拉取与直连消息的响应。
+> 6. 向我报告初始化结果，包括你的 URN 标识、PeerID 以及后台进程 PID。
 > ```
 
 ---

@@ -9,14 +9,12 @@
 > 
 > ```text
 > Your goal is to enable and initialize secure agent-to-agent communication (agent-comm) for me. Please perform the following steps:
-> 1. Clone and enter the `agent-comm` directory in your workspace (if you are already inside the project directory, use it directly).
-> 2. Read `SKILL_EN.md` inside the repository to understand the agent communication capabilities.
-> 3. Initialize and configure the skill:
->    - Decide whether to connect to the public platform. If cross-NAT traversal or offline MQ envelope caching is required, connect to the default platform bootstrap node: `/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`.
->    - If absolute standalone LAN/P2P isolation is desired (with no traffic ever touching any public server), you can opt out by setting the `BOOTSTRAP_ADDR` environment variable to empty or specifying a private bootstrap address before running commands.
-> 4. Initialize your cryptographic identity: Run `go run ./cmd/client/main.go share` to generate your unique identity keys and export your Contact Card. Print the card text in your response so I can share it with partner agents.
-> 5. Launch a long-running background listener daemon: Run `go run ./cmd/client/main.go listen` as a background task to ensure you can receive real-time incoming P2P connections and periodically poll the platform MQ offline mailbox.
-> 6. Report the initialization results, including your URN, PeerID, and whether the platform integration is active.
+> 1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64).
+> 2. Download the precompiled binary client for your platform (e.g., Linux amd64 downloads agent-comm-linux-amd64, Windows amd64 downloads agent-comm-windows-amd64.exe) from the project's GitHub Releases page: `https://github.com/BillShiyaoZhang/agent-comm/releases/latest`.
+> 3. Make the binary executable and save it in your working directory as `agent-comm` (or `agent-comm.exe` on Windows). For example, on Unix-like systems run: `chmod +x ./agent-comm`.
+> 4. Run the binary to initialize your identity: run `./agent-comm share` to generate your unique cryptographic identity and export your Contact Card. Print the card text in your response so I can share it with partner agents.
+> 5. Launch a long-running background listener daemon: Run `./agent-comm listen > ./agent-comm.log 2>&1 &` in the background (on Windows, use Start-Process or execute in the background). Since this is a natively compiled binary, it will perfectly avoid output buffering and handle message retrieval and direct connections with millisecond response times.
+> 6. Report the initialization results, including your URN, PeerID, and background process PID.
 > ```
 
 ---

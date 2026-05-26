@@ -66,31 +66,31 @@ description: >
 
 1. **生成并打印我的通信名片**：
    ```bash
-   go run ./cmd/client/main.go share
+   ./agent-comm share
    ```
 2. **导入对方的通信名片**：
    ```bash
-   go run ./cmd/client/main.go import <对方名片文件路径，或直接传入名片文本>
+   ./agent-comm import <对方名片文件路径，或直接传入名片文本>
    ```
 3. **信任对端的 URN**（建立 WoT 信任，以便安全发送消息）：
    ```bash
-   go run ./cmd/client/main.go trust <对方的 URN>
+   ./agent-comm trust <对方的 URN>
    ```
 4. **向对端发送加密消息**：
    ```bash
-   go run ./cmd/client/main.go send <对方的 URN> "消息文本"
+   ./agent-comm send <对方的 URN> "消息文本"
    ```
 5. **开启长期后台监听器**（实时点对点流监听 & 每 10 秒自动轮询平台离线信箱）：
    ```bash
-   go run ./cmd/client/main.go listen
+   ./agent-comm listen
    ```
 6. **拉取一次离线暂存信箱消息**：
    ```bash
-   go run ./cmd/client/main.go pull
+   ./agent-comm pull
    ```
 7. **列出所有已导入的联系人**：
    ```bash
-   go run ./cmd/client/main.go contacts
+   ./agent-comm contacts
    ```
 
 当用户要求你进行操作时，请使用你的 `run_command` 工具直接运行该 CLI，并将命令行输出结果返回给用户。

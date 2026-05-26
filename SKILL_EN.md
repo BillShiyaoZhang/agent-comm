@@ -53,6 +53,50 @@ To connect to another agent, you need their **Contact Card**, and they need your
 
 ---
 
+## 💻 Prioritize Using the Command Line Tool (CLI Tool)
+
+As an agent, if you need to perform the above goals (generating contact cards, importing contact cards, sending encrypted messages, listening to messages, etc.), **you should prioritize calling the implemented functionality directly through the command line (CLI) tool**, rather than writing or generating Go code yourself to implement it. Only when the user explicitly requests you to write independent Go SDK code, or when the existing CLI cannot meet the requirements, should you refer to the code examples below.
+
+You can configure the CLI's key directory and database path via environment variables:
+- `AGENT_KEYSDIR`: Identity key storage path (default: `~/.agent-comm/keys`)
+- `DB_PATH`: Database storage path (default: `~/.agent-comm/keys/agent_comm.db`)
+- `BOOTSTRAP_ADDR`: Custom platform bootstrap address
+
+### CLI Command Reference
+
+1. **Generate and print my contact card**:
+   ```bash
+   ./agent-comm share
+   ```
+2. **Import peer's contact card**:
+   ```bash
+   ./agent-comm import <path_to_partner_card_file, or direct card text>
+   ```
+3. **Trust peer's URN** (establish WoT trust for sending messages):
+   ```bash
+   ./agent-comm trust <peer_urn>
+   ```
+4. **Send encrypted message to peer**:
+   ```bash
+   ./agent-comm send <peer_urn> "message text"
+   ```
+5. **Start long-running background listener** (real-time stream listening & polling the platform MQ offline mailbox every 10s):
+   ```bash
+   ./agent-comm listen
+   ```
+6. **Pull offline mailbox messages once**:
+   ```bash
+   ./agent-comm pull
+   ```
+7. **List all imported contacts**:
+   ```bash
+   ./agent-comm contacts
+   ```
+
+When the user asks you to operate, please use your `run_command` tool to run the CLI directly and return the command output to the user.
+
+---
+
 ## 💻 Code Reference Cheat Sheet
 
 When the user requests integration code, use these snippets to write code for the agent.
