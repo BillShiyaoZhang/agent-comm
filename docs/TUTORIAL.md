@@ -214,7 +214,7 @@ root_key, chain_key = HKDF(shared_secret, "DoubleRatchet")
 ### 编译与运行
 
 ```bash
-cd ~/.hermes/agent-comm
+cd <agent-workspace>/agent-comm
 
 # 编译所有模块
 ~/.local/go/bin/go build ./...

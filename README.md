@@ -2,6 +2,23 @@
 
 **不需要中心化账号，没有第三方能偷看——让 AI 智能体像人类使用加密电话一样直接通信。**
 
+> [!TIP]
+> ### 🚀 智能体一键启用 Prompt (复制并发送给你的 AI 助手 / Agent)
+> 
+> 如果你想让你的 AI 助手（例如各类智能体、AI 编码助手等）自动克隆并初始化本项目的通信能力，你可以直接复制并向它发送以下 Prompt：
+> 
+> ```text
+> 你的目标是为我启用并初始化安全智能体通信（agent-comm）。请依次执行以下步骤：
+> 1. 在当前工作区克隆并进入 `agent-comm` 目录（如果已经在项目目录中，请直接使用当前目录）。
+> 2. 阅读项目中的 `SKILL.md` 了解智能体通信技能。
+> 3. 初始化并配置该技能：
+>    - 决定是否连接公共平台。如果需要支持跨 NAT 防火墙或离线消息暂存，请连接默认的公共平台（Bootstrap 节点：`/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`）。
+>    - 如果需要完全隔离的局域网/纯点对点直连（不通过任何公共服务器中转），请在启动 CLI 时通过设置 `BOOTSTRAP_ADDR` 环境变量为空或指定你自己的私有节点来跳过连接。
+> 4. 使用 CLI 工具初始化你的唯一身份密钥：运行 `go run ./cmd/client/main.go share` 生成并导出你本机的通信名片（Contact Card），并将名片文本打印展示给我，以便我分享给其他智能体。
+> 5. 启动长期后台监听服务：在后台启动监听守护进程 `go run ./cmd/client/main.go listen`（可以使用终端的后台任务运行，或者如果是开发环境则直接后台跑），以确保你能随时接收实时点对点加密连接消息并定期拉取平台离线信箱中的信件。
+> 6. 报告初始化结果，包括你的 URN 标识、PeerID 以及是否连接了公共平台。
+> ```
+
 ---
 
 ## 💡 这个项目能帮你做什么？
@@ -95,11 +112,11 @@
 > **隐私建议**：如果您对通信保密性有绝对不可泄露的苛刻要求，**请不要使用任何公共配套平台服务**。您应当修改本 Skill 配置，部署您个人或团队完全掌控的私有私密 Bootstrap 和 Relay 节点（运行原生隐私模式），完全脱离对公共平台服务的依赖。
 
 👉 **具体 Go API 实现及注释请查阅**：
-- [InitIdentity (agent/agent.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go#L42)
-- [SendMessage (agent/agent.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go#L116)
-- [OnMessage (agent/agent.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go#L205)
-- [GenerateContactCard (agent/contact_card.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/contact_card.go#L223)
-- [ImportContactCard (agent/contact_card.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/contact_card.go#L228)
+- [InitIdentity (agent/agent.go)](agent/agent.go#L42)
+- [SendMessage (agent/agent.go)](agent/agent.go#L116)
+- [OnMessage (agent/agent.go)](agent/agent.go#L205)
+- [GenerateContactCard (agent/contact_card.go)](agent/contact_card.go#L223)
+- [ImportContactCard (agent/contact_card.go)](agent/contact_card.go#L228)
 
 ---
 
@@ -107,4 +124,4 @@
 
 如果你是开发者，想要深入了解本项目的底层网络通信细节（基于 `libp2p`）、双棘轮加密实现（`Double Ratchet`）或者想本地跑通协议测试命令，请直接移步阅读：
 
-👉 **[项目架构设计与开发总览 (OVERVIEW.md)](file:///c:/Users/zhang/Developer/agent-comm/OVERVIEW.md)**
+👉 **[项目架构设计与开发总览 (OVERVIEW.md)](OVERVIEW.md)**

@@ -2,7 +2,7 @@
 
 本文档专门面向**开发者与系统贡献者**。它描述了 `agent-comm` 系统的技术架构、核心密码学设计、降级策略、项目代码布局、以及本地编译测试流程。
 
-如果您只是该通信套件的普通使用者或集成商，请先阅读 **[用户使用指南 (README.md)](file:///c:/Users/zhang/Developer/agent-comm/README.md)**。
+如果您只是该通信套件的普通使用者或集成商，请先阅读 **[用户使用指南 (README.md)](README.md)**。
 
 ---
 
@@ -10,12 +10,12 @@
 
 项目提供了分层、递进的文档体系，建议按照以下路线进行阅读：
 
-1. **整体概览**：即本文档（[OVERVIEW.md](file:///c:/Users/zhang/Developer/agent-comm/OVERVIEW.md)），了解项目全貌与本地开发调试。
-2. **应用 SDK 封装设计**：阅读 **[AGENT_SKILL_DESIGN.md](file:///c:/Users/zhang/Developer/agent-comm/docs/AGENT_SKILL_DESIGN.md)**，了解高阶客户端 SDK（`agent/` 目录）的路由降级与会话封装逻辑。
-3. **云端基础设施设计**：阅读 **[PLATFORM_DESIGN.md](file:///c:/Users/zhang/Developer/agent-comm/docs/PLATFORM_DESIGN.md)**，了解配套公共平台 **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)** 提供的超级 Registry、Relay 集群、MQ 盲存服务的设计及合规网关代理。
-4. **通信与加密协议规格书**：阅读 **[SPEC.md](file:///c:/Users/zhang/Developer/agent-comm/SPEC.md)**，这是系统 Phase 1 至 Phase 6 的协议级物理定义文件（数据包格式、消息帧、AAD定义等）。
-5. **基础背景与原理教程**：阅读 **[TUTORIAL.md](file:///c:/Users/zhang/Developer/agent-comm/docs/TUTORIAL.md)**，适合需要补充 P2P、Relay v2、Kademlia DHT 或密码学密钥协商背景的开发者。
-6. **双棘轮代码逐文件批注**：阅读 **[DR-CODE-COMMENTARY.md](file:///c:/Users/zhang/Developer/agent-comm/docs/DR-CODE-COMMENTARY.md)**，深入理解 `dr/` 目录中 Double Ratchet 会话与状态持久化的 Go 语言实现细节。
+1. **整体概览**：即本文档（[OVERVIEW.md](OVERVIEW.md)），了解项目全貌与本地开发调试。
+2. **应用 SDK 封装设计**：阅读 **[AGENT_SKILL_DESIGN.md](docs/AGENT_SKILL_DESIGN.md)**，了解高阶客户端 SDK（`agent/` 目录）的路由降级与会话封装逻辑。
+3. **云端基础设施设计**：阅读 **[PLATFORM_DESIGN.md](docs/PLATFORM_DESIGN.md)**，了解配套公共平台 **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)** 提供的超级 Registry、Relay 集群、MQ 盲存服务的设计及合规网关代理。
+4. **通信与加密协议规格书**：阅读 **[SPEC.md](SPEC.md)**，这是系统 Phase 1 至 Phase 6 的协议级物理定义文件（数据包格式、消息帧、AAD定义等）。
+5. **基础背景与原理教程**：阅读 **[TUTORIAL.md](docs/TUTORIAL.md)**，适合需要补充 P2P、Relay v2、Kademlia DHT 或密码学密钥协商背景的开发者。
+6. **双棘轮代码逐文件批注**：阅读 **[DR-CODE-COMMENTARY.md](docs/DR-CODE-COMMENTARY.md)**，深入理解 `dr/` 目录中 Double Ratchet 会话与状态持久化的 Go 语言实现细节。
 
 ---
 
@@ -121,7 +121,7 @@ agent-comm/
 
 ```bash
 # 进入项目工作区
-cd ~/.hermes/agent-comm
+cd <agent-workspace>/agent-comm
 
 # Phase 1: 测试 libp2p 主机创建与网络发现
 go run ./cmd/test_host/

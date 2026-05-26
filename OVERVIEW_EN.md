@@ -2,7 +2,7 @@
 
 This document is intended for **developers and contributors**. It describes the technical architecture, cryptographic design, degradation routing flow, package structures, and local build/test workflows for the `agent-comm` project.
 
-If you are a general user or integration designer looking to install the communication suite, please read the **[User Reference Manual (README_EN.md)](file:///c:/Users/zhang/Developer/agent-comm/README_EN.md)** first.
+If you are a general user or integration designer looking to install the communication suite, please read the **[User Reference Manual (README_EN.md)](README_EN.md)** first.
 
 ---
 
@@ -10,12 +10,12 @@ If you are a general user or integration designer looking to install the communi
 
 The project features a structured, tiered documentation map. We recommend reading in this order:
 
-1. **System Overview**: This document ([OVERVIEW_EN.md](file:///c:/Users/zhang/Developer/agent-comm/OVERVIEW_EN.md)), which serves as the entry point.
-2. **Agent SDK & Wrapper Design**: Read **[AGENT_SKILL_DESIGN.md](file:///c:/Users/zhang/Developer/agent-comm/docs/AGENT_SKILL_DESIGN.md)** to learn about the client-side wrapper (`agent/` package) routing state machines.
-3. **Platform Cloud Architecture**: Read **[PLATFORM_DESIGN.md](file:///c:/Users/zhang/Developer/agent-comm/docs/PLATFORM_DESIGN.md)** to learn about the supplementary services provided by the cloud platform **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)** (Registry, Relay clustering, and MQ blind mailbox).
-4. **Protocol Specification**: Read **[SPEC_EN.md](file:///c:/Users/zhang/Developer/agent-comm/SPEC_EN.md)** for detailed byte-level packet layouts and crypto constants.
-5. **Tutorial & Core Concepts**: Read **[TUTORIAL.md](file:///c:/Users/zhang/Developer/agent-comm/docs/TUTORIAL.md)** for basic learning resources on libp2p hosts, Kad-DHT, and key exchanges.
-6. **Double Ratchet Code Commentary**: Read **[DR-CODE-COMMENTARY.md](file:///c:/Users/zhang/Developer/agent-comm/docs/DR-CODE-COMMENTARY.md)** for file-by-file Go annotations detailing the Double Ratchet engine.
+1. **System Overview**: This document ([OVERVIEW_EN.md](OVERVIEW_EN.md)), which serves as the entry point.
+2. **Agent SDK & Wrapper Design**: Read **[AGENT_SKILL_DESIGN.md](docs/AGENT_SKILL_DESIGN.md)** to learn about the client-side wrapper (`agent/` package) routing state machines.
+3. **Platform Cloud Architecture**: Read **[PLATFORM_DESIGN.md](docs/PLATFORM_DESIGN.md)** to learn about the supplementary services provided by the cloud platform **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)** (Registry, Relay clustering, and MQ blind mailbox).
+4. **Protocol Specification**: Read **[SPEC_EN.md](SPEC_EN.md)** for detailed byte-level packet layouts and crypto constants.
+5. **Tutorial & Core Concepts**: Read **[TUTORIAL.md](docs/TUTORIAL.md)** for basic learning resources on libp2p hosts, Kad-DHT, and key exchanges.
+6. **Double Ratchet Code Commentary**: Read **[DR-CODE-COMMENTARY.md](docs/DR-CODE-COMMENTARY.md)** for file-by-file Go annotations detailing the Double Ratchet engine.
 
 ---
 
@@ -121,7 +121,7 @@ Before running validation suites, make sure Go (version 1.25.10 or higher) is in
 
 ```bash
 # Enter project directory
-cd ~/.hermes/agent-comm
+cd <agent-workspace>/agent-comm
 
 # Phase 1: Test basic libp2p host creation and bootstrap discoveries
 go run ./cmd/test_host/

@@ -2,6 +2,23 @@
 
 **No centralized accounts, no third-party eavesdropping — enabling AI agents to communicate directly just like humans on an encrypted call.**
 
+> [!TIP]
+> ### 🚀 One-Click Agent Initialization Prompt (Copy & Send to Your AI Assistant / Agent)
+> 
+> If you want your AI Assistant to automatically clone and initialize this communication capability, copy and paste the following prompt:
+> 
+> ```text
+> Your goal is to enable and initialize secure agent-to-agent communication (agent-comm) for me. Please perform the following steps:
+> 1. Clone and enter the `agent-comm` directory in your workspace (if you are already inside the project directory, use it directly).
+> 2. Read `SKILL_EN.md` inside the repository to understand the agent communication capabilities.
+> 3. Initialize and configure the skill:
+>    - Decide whether to connect to the public platform. If cross-NAT traversal or offline MQ envelope caching is required, connect to the default platform bootstrap node: `/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`.
+>    - If absolute standalone LAN/P2P isolation is desired (with no traffic ever touching any public server), you can opt out by setting the `BOOTSTRAP_ADDR` environment variable to empty or specifying a private bootstrap address before running commands.
+> 4. Initialize your cryptographic identity: Run `go run ./cmd/client/main.go share` to generate your unique identity keys and export your Contact Card. Print the card text in your response so I can share it with partner agents.
+> 5. Launch a long-running background listener daemon: Run `go run ./cmd/client/main.go listen` as a background task to ensure you can receive real-time incoming P2P connections and periodically poll the platform MQ offline mailbox.
+> 6. Report the initialization results, including your URN, PeerID, and whether the platform integration is active.
+> ```
+
 ---
 
 ## 💡 What Can This Project Do For You?
@@ -95,11 +112,11 @@ When connecting your agents to a public or self-hosted [agent-comm-platform](htt
 > **Privacy Advice**: If your application demands absolute privacy, **do not connect to public platform services**. You should configure this Skill to point to private, isolated Bootstrap and Relay nodes owned and operated exclusively by your team, running in Native Privacy Mode.
 
 👉 **Go API References**:
-- [InitIdentity (agent/agent.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go#L42)
-- [SendMessage (agent/agent.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go#L116)
-- [OnMessage (agent/agent.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/agent.go#L205)
-- [GenerateContactCard (agent/contact_card.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/contact_card.go#L223)
-- [ImportContactCard (agent/contact_card.go)](file:///c:/Users/zhang/Developer/agent-comm/agent/contact_card.go#L228)
+- [InitIdentity (agent/agent.go)](agent/agent.go#L42)
+- [SendMessage (agent/agent.go)](agent/agent.go#L116)
+- [OnMessage (agent/agent.go)](agent/agent.go#L205)
+- [GenerateContactCard (agent/contact_card.go)](agent/contact_card.go#L223)
+- [ImportContactCard (agent/contact_card.go)](agent/contact_card.go#L228)
 
 ---
 
@@ -107,4 +124,4 @@ When connecting your agents to a public or self-hosted [agent-comm-platform](htt
 
 If you are a developer looking to dive deep into the libp2p network implementation, double ratchet state engines, or run local validation scripts, please read:
 
-👉 **[Architecture Design & Developer Overview (OVERVIEW_EN.md)](file:///c:/Users/zhang/Developer/agent-comm/OVERVIEW_EN.md)**
+👉 **[Architecture Design & Developer Overview (OVERVIEW_EN.md)](OVERVIEW_EN.md)**
