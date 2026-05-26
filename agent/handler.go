@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/nousresearch/hermes-agent/agent-comm/dr"
 	"github.com/nousresearch/hermes-agent/agent-comm/session"
 	goproto "google.golang.org/protobuf/proto"
 	pb "github.com/nousresearch/hermes-agent/agent-comm/proto"
@@ -38,6 +39,39 @@ func (a *Agent) StartListening(ctx context.Context, handler func(urn string, msg
 		plaintext, err := a.Session.DecryptEnvelope(&env)
 		if err == nil {
 			handler(env.SenderUrn, string(plaintext))
+		}
+	})
+
+	// 1b. Listen for direct Double Ratchet streams
+	a.Host.SetStreamHandler(dr.ProtoID, func(stream network.Stream) {
+		defer stream.Close()
+
+		senderPeerID := stream.Conn().RemotePeer()
+
+		// Look up contact to get their URN and cache their static X25519 PK for the responder session
+		var senderURN string
+		contact, err := a.Contacts.GetByPeerID(senderPeerID.String())
+		if err == nil {
+			senderURN = contact.URN
+			a.Session.SetPeerX25519PK(senderPeerID, contact.X25519PK)
+		} else {
+			// Fallback: use PeerID as URN if not in contacts (though Double Ratchet requires contacts)
+			senderURN = "urn:hermes:peer:" + senderPeerID.String()
+		}
+
+		a.drPeersMu.Lock()
+		drSession, ok := a.drPeers[senderPeerID.String()]
+		if !ok {
+			// Create responder DRSession
+			drSession = dr.NewDRSessionResponder(ctx, a.Session, a.Keys, senderPeerID, senderURN)
+			a.drPeers[senderPeerID.String()] = drSession
+		}
+		a.drPeersMu.Unlock()
+
+		// Receive and decrypt
+		plaintext, err := drSession.Receive(ctx, stream)
+		if err == nil {
+			handler(senderURN, string(plaintext))
 		}
 	})
 

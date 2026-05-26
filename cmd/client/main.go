@@ -1,176 +1,460 @@
-// Client node: connects to bootstrap, registers, pulls offline messages, sends messages.
+// Client node: command line interface supporting subcommands and interactive shell.
 package main
 
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/host"
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/nousresearch/hermes-agent/agent-comm/agent"
 	"github.com/nousresearch/hermes-agent/agent-comm/contacts"
-	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
-	"github.com/nousresearch/hermes-agent/agent-comm/dht"
-	"github.com/nousresearch/hermes-agent/agent-comm/libp2p"
-	"github.com/nousresearch/hermes-agent/agent-comm/mq"
 	"github.com/nousresearch/hermes-agent/agent-comm/proto"
-	"github.com/nousresearch/hermes-agent/agent-comm/registry"
-	"github.com/nousresearch/hermes-agent/agent-comm/session"
 	"github.com/nousresearch/hermes-agent/agent-comm/wot"
+
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	goproto "google.golang.org/protobuf/proto"
 )
 
+// Default Configuration values
+const (
+	DefaultPlatformAddr = "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f"
+)
+
 func main() {
-	fmt.Println("=== agent-comm Client Node ===")
-	fmt.Println()
+	if len(os.Args) > 1 && (os.Args[1] == "help" || os.Args[1] == "--help" || os.Args[1] == "-h") {
+		printUsage()
+		return
+	}
 
 	ctx := context.Background()
 
-	// Step 1: Load or create persistent identity
+	// 1. Get configuration from environment variables
 	keysDir := os.Getenv("AGENT_KEYSDIR")
 	if keysDir == "" {
-		keysDir = "/tmp/client_keys"
-	}
-	keys, err := crypto.LoadOrCreateIdentity(keysDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load identity: %v\n", err)
-		os.Exit(1)
-	}
-
-	peerID, _ := keys.PeerID()
-	urn := keys.Ed25519.URN()
-	fmt.Printf("Identity:\n  URN: %s\n  PeerID: %s\n\n", urn, peerID)
-
-	// Step 2: Bootstrap node address
-	bootstrapAddr := os.Getenv("BOOTSTRAP_ADDR")
-	if bootstrapAddr == "" {
-		bootstrapAddr = "/ip4/127.0.0.1/tcp/45041/p2p/12D3KooWHTJsARN6DBRoscxnNg2vaQQhXHqFXBuzWEG65y3JjhDX"
-		fmt.Println("Using default bootstrap (set BOOTSTRAP_ADDR env to override)")
-	}
-	fmt.Printf("Bootstrap: %s\n\n", bootstrapAddr)
-
-	// Step 3: Create libp2p host
-	cfg := libp2p.Config{
-		ListenAddrs:  []string{"/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"},
-		EnableRelay:  true,
-		PrivKeyBytes: keys.Ed25519.PrivateKey,
-	}
-	h, err := libp2p.NewHost(cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create host: %v\n", err)
-		os.Exit(1)
-	}
-	defer h.Close()
-
-	fmt.Printf("Host: %s on %v\n\n", h.ID(), h.Addrs())
-
-	// Step 4: Connect to bootstrap
-	bootstrapInfo, err := peer.AddrInfoFromString(bootstrapAddr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to parse bootstrap: %v\n", err)
-		os.Exit(1)
-	}
-	h.Peerstore().AddAddrs(bootstrapInfo.ID, bootstrapInfo.Addrs, peerstore.TempAddrTTL)
-	connCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	if err := h.Connect(connCtx, *bootstrapInfo); err != nil {
-		cancel()
-		fmt.Fprintf(os.Stderr, "Failed to connect to bootstrap: %v\n", err)
-		os.Exit(1)
-	}
-	cancel()
-	fmt.Printf("Connected to bootstrap: %s\n\n", bootstrapInfo.ID)
-
-	// Step 5: DHT client
-	dhtCfg := dht.DHTConfig{Mode: dht.ModeClient, Bootstraps: []peer.AddrInfo{*bootstrapInfo}}
-	d, err := dht.NewDHT(ctx, h, dhtCfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create DHT: %v\n", err)
-		os.Exit(1)
-	}
-	defer d.Close()
-	dht.Bootstrap(ctx, d)
-
-	// Step 6: Register with bootstrap registry
-	regClient := registry.NewClient(h)
-	if err := regClient.Register(*bootstrapInfo, urn, h.Addrs(), keys.X25519PK); err != nil {
-		fmt.Printf("  [Note] Register: %v\n", err)
-	} else {
-		fmt.Printf("Registered with bootstrap registry: %s -> %s\n", urn, h.ID())
+		home, err := os.UserHomeDir()
+		if err == nil {
+			keysDir = filepath.Join(home, ".agent-comm", "keys")
+		} else {
+			keysDir = "/tmp/client_keys"
+		}
 	}
 
-	// Step 7: Session + MQ + WoT + Contacts setup
-	mgr := session.NewManager(h, keys)
-	mqClient := mq.NewClient(h)
-
-	// Contacts store
-	contactsDB := os.Getenv("CONTACTS_DB")
-	if contactsDB == "" {
-		contactsDB = "/tmp/client_contacts.db"
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = filepath.Join(keysDir, "agent_comm.db")
 	}
-	contactStore, err := contacts.NewStore(contactsDB)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to open contacts store: %v\n", err)
-		os.Exit(1)
-	}
-	defer contactStore.Close()
 
-	// WoT store
 	wotDB := os.Getenv("WOT_DB")
 	if wotDB == "" {
-		wotDB = "/tmp/client_wot.db"
+		wotDB = filepath.Join(keysDir, "wot.db")
 	}
-	wotStore, err := wot.NewStore(wotDB, keys)
+
+	bootstrapAddr := os.Getenv("BOOTSTRAP_ADDR")
+	if bootstrapAddr == "" {
+		bootstrapAddr = DefaultPlatformAddr
+	}
+
+	// 2. Parse bootstrap address info
+	bootstrapInfo, err := peer.AddrInfoFromString(bootstrapAddr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to open WoT store: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Failed to parse bootstrap address %q: %v\n", bootstrapAddr, err)
+		os.Exit(1)
+	}
+
+	// 3. Initialize High-level Agent
+	a, err := agent.InitIdentity(ctx, agent.Config{
+		KeysDir:        keysDir,
+		DBPath:         dbPath,
+		BootstrapNodes: []peer.AddrInfo{*bootstrapInfo},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to init agent: %v\n", err)
+		os.Exit(1)
+	}
+	defer a.Close()
+
+	// Make sure we connect to the bootstrap/platform node
+	a.Host.Peerstore().AddAddrs(bootstrapInfo.ID, bootstrapInfo.Addrs, peerstore.PermanentAddrTTL)
+	if err := a.Host.Connect(ctx, *bootstrapInfo); err != nil {
+		fmt.Printf("⚠️ Warning: Failed to connect to platform bootstrap node: %v\n", err)
+	}
+
+	// 4. Initialize WoT Store & Resolver
+	wotStore, err := wot.NewStore(wotDB, a.Keys)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to open WoT store: %v\n", err)
 		os.Exit(1)
 	}
 	defer wotStore.Close()
 
-	// Register our own keys so we can verify self-signed claims
-	wotStore.AddKnownPeer(urn, h.ID().String(), keys.X25519PK, keys.Ed25519.PublicKey)
+	// Register self in WoT store
+	wotStore.AddKnownPeer(a.Keys.Ed25519.URN(), a.Host.ID().String(), a.Keys.X25519PK, a.Keys.Ed25519.PublicKey)
+	wotResolver := wot.NewResolver(a.Host, wotStore)
+	wot.RegisterWOTHandler(a.Host, wotStore)
 
-	wotResolver := wot.NewResolver(h, wotStore)
-	wot.RegisterWOTHandler(h, wotStore)
-
-	// Handle incoming session streams
-	h.SetStreamHandler(session.ProtoID, func(stream network.Stream) {
-		handleSessionStream(stream, mgr)
-	})
-
-	// Pull offline messages on startup
-	go pullOfflineMessages(ctx, mgr, mqClient, *bootstrapInfo, urn)
-
-	// Print client info
-	fmt.Println("\n=== CLIENT INFO ===")
-	for _, addr := range h.Addrs() {
-		fmt.Printf("  %s/p2p/%s\n", addr.String(), h.ID())
+	// 5. Check for subcommand or run interactive loop
+	cmd := ""
+	if len(os.Args) > 1 {
+		cmd = os.Args[1]
 	}
-	fmt.Printf("==================\n\n")
 
-	// Interactive messaging loop
+	switch cmd {
+	case "share":
+		card, err := a.GenerateContactCard()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Error generating card: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(card)
+
+	case "import":
+		var cardText string
+		if len(os.Args) > 2 {
+			// Read from file
+			filePath := os.Args[2]
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				// If file read fails, try treating the argument as raw card text
+				cardText = filePath
+			} else {
+				cardText = string(data)
+			}
+		} else {
+			// Read from Stdin
+			fmt.Println("Paste the contact card text block below. Type 'END' on a new line when done:")
+			scanner := bufio.NewScanner(os.Stdin)
+			var lines []string
+			for scanner.Scan() {
+				txt := scanner.Text()
+				if strings.TrimSpace(txt) == "END" {
+					break
+				}
+				lines = append(lines, txt)
+			}
+			cardText = strings.Join(lines, "\n")
+		}
+
+		c, err := a.ImportContactCard(cardText, "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Error importing contact card: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✅ Successfully imported contact: %s (PeerID=%s)\n", c.URN, c.PeerID)
+
+	case "send":
+		if len(os.Args) < 4 {
+			fmt.Println("Usage: send <recipientURN> <message>")
+			os.Exit(1)
+		}
+		recipientURN := os.Args[2]
+		msgText := os.Args[3]
+
+		// Perform trust check
+		isTrusted := a.Contacts.IsTrusted(recipientURN)
+		if !isTrusted {
+			isTrusted = wotResolver.IsTrusted(recipientURN)
+		}
+		if !isTrusted {
+			fmt.Printf("⚠️ WARNING: %s is not in your trust graph.\n", recipientURN)
+			fmt.Println("To trust this peer, run: trust <urn>")
+		}
+
+		err = a.SendMessage(ctx, recipientURN, msgText)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to send message: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("✅ Message sent successfully (delivered or blind-stored on Platform MQ).")
+
+	case "pull":
+		pullOfflineMessages(ctx, a, *bootstrapInfo)
+
+	case "listen":
+		fmt.Printf("==================================================\n")
+		fmt.Printf("📡 Starting Daemon Listener Mode\n")
+		fmt.Printf("My URN: %s\n", a.Keys.Ed25519.URN())
+		fmt.Printf("My PeerID: %s\n", a.Host.ID())
+		fmt.Printf("==================================================\n\n")
+
+		// Register standard message callback
+		a.OnMessage(ctx, func(senderURN string, msg string) {
+			// Try to parse ChatMessage
+			var chatMsg proto.ChatMessage
+			if err := goproto.Unmarshal([]byte(msg), &chatMsg); err == nil {
+				if txt := chatMsg.GetText(); txt != nil {
+					fmt.Printf("[%s] 💬 %s\n", senderURN, txt.Text)
+					return
+				}
+			}
+			fmt.Printf("[%s] %s\n", senderURN, msg)
+		})
+
+		// Run periodic polling ticker in addition to callback listener
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		fmt.Println("Listening for direct connections and polling platform MQ (every 10s)... Press Ctrl+C to exit.")
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// Silent MQ poll and decryption (handled automatically by a.OnMessage,
+				// but let's trigger manual pull here to print updates directly to terminal)
+				envs, err := a.MQClient.Retrieve(ctx, *bootstrapInfo, a.Keys.Ed25519.URN())
+				if err == nil && len(envs) > 0 {
+					var toAck []string
+					for _, env := range envs {
+						if env.MessageId != "" {
+							toAck = append(toAck, env.MessageId)
+						}
+						plaintext, err := a.Session.DecryptEnvelope(env)
+						if err == nil {
+							var chatMsg proto.ChatMessage
+							if err := goproto.Unmarshal(plaintext, &chatMsg); err == nil {
+								if txt := chatMsg.GetText(); txt != nil {
+									fmt.Printf("[%s] 💬 %s (via MQ)\n", env.SenderUrn, txt.Text)
+								}
+							} else {
+								fmt.Printf("[%s] %s (via MQ)\n", env.SenderUrn, string(plaintext))
+							}
+						}
+					}
+					if len(toAck) > 0 {
+						_, _ = a.MQClient.Ack(ctx, *bootstrapInfo, toAck)
+					}
+				}
+			}
+		}
+
+	case "contacts":
+		list, _ := a.Contacts.List()
+		if len(list) == 0 {
+			fmt.Println("No contacts.")
+		}
+		for _, c := range list {
+			trusted := ""
+			if c.Trusted {
+				trusted = " [TRUSTED]"
+			}
+			fp := contacts.Fingerprint(c.X25519PK)
+			fmt.Printf("  %s%s (PeerID=%s, fp=%s)\n", c.URN, trusted, c.PeerID, fp)
+		}
+
+	case "trust":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: trust <urn>")
+			os.Exit(1)
+		}
+		targetURN := os.Args[2]
+		trustPeer(ctx, a, wotStore, bootstrapInfo, targetURN)
+
+	case "untrust":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: untrust <urn>")
+			os.Exit(1)
+		}
+		targetURN := os.Args[2]
+		if err := a.Contacts.SetTrusted(targetURN, false); err != nil {
+			fmt.Printf("❌ Error: %v\n", err)
+		} else {
+			fmt.Printf("✅ Untrusted: %s\n", targetURN)
+		}
+
+	case "claim":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: claim <subjectURN>")
+			os.Exit(1)
+		}
+		subjectURN := os.Args[2]
+		issueClaim(ctx, a, wotStore, bootstrapInfo, subjectURN)
+
+	case "trustpath":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: trustpath <urn>")
+			os.Exit(1)
+		}
+		targetURN := os.Args[2]
+		checkTrustPath(ctx, wotResolver, targetURN)
+
+	case "interactive":
+		runInteractiveLoop(ctx, a, wotStore, wotResolver, bootstrapInfo)
+
+	default:
+		if cmd != "" {
+			fmt.Printf("❌ Unknown command: %s\n\n", cmd)
+		}
+		printUsage()
+	}
+}
+
+func printUsage() {
+	fmt.Println("Usage: agent-comm <command> [arguments]")
+	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  send <recipientURN> <message>  — send an encrypted message (checks WoT trust)")
-	fmt.Println("  trust <urn>                    — mark a peer as directly trusted (bootstrap)")
-	fmt.Println("  untrust <urn>                  — remove trust mark")
-	fmt.Println("  claim <subjectURN>             — issue a TRUSTED claim about a peer (needs peer info)")
-	fmt.Println("  trustpath <urn>                — check if there's a trust path to URN")
-	fmt.Println("  contacts                      — list all contacts")
-	fmt.Println("  pull                          — pull offline messages")
-	fmt.Println("  share                         — generate and show my contact card")
-	fmt.Println("  import                        — paste and import a contact card")
-	fmt.Println("  importfile <path>             — import a contact card from a file")
-	fmt.Println("  quit                          — exit")
+	fmt.Println("  share                          - Generate and show my contact card")
+	fmt.Println("  import <file_or_text>          - Import contact card from file or raw text")
+	fmt.Println("  send <recipientURN> <message>  - Send an encrypted message (checks WoT trust)")
+	fmt.Println("  pull                           - Pull offline messages once and exit")
+	fmt.Println("  listen                         - Listen for direct connections and poll MQ continuously")
+	fmt.Println("  contacts                       - List all contacts")
+	fmt.Println("  trust <urn>                    - Mark a peer as directly trusted")
+	fmt.Println("  untrust <urn>                  - Remove trust status")
+	fmt.Println("  claim <subjectURN>             - Issue a TRUSTED WoT claim about a peer")
+	fmt.Println("  trustpath <urn>                - Resolve Web of Trust path to URN")
+	fmt.Println("  interactive                    - Start interactive menu shell")
+	fmt.Println("  help                           - Show this help menu")
+	fmt.Println()
+	fmt.Println("Environment Variables:")
+	fmt.Println("  BOOTSTRAP_ADDR                 - Platform Bootstrap Multiaddress")
+	fmt.Println("  AGENT_KEYSDIR                  - Identity keys storage path")
+	fmt.Println("  DB_PATH                        - Main SQLite storage database path")
+	fmt.Println("  WOT_DB                         - Web of Trust database path")
+}
+
+// ---- Helpers ----
+
+func pullOfflineMessages(ctx context.Context, a *agent.Agent, bootstrapNode peer.AddrInfo) {
+	envs, err := a.MQClient.Retrieve(ctx, bootstrapNode, a.Keys.Ed25519.URN())
+	if err != nil {
+		fmt.Printf("❌ MQ retrieve error: %v\n", err)
+		return
+	}
+	if len(envs) == 0 {
+		fmt.Println("ℹ️ No pending messages.")
+		return
+	}
+
+	fmt.Printf("📬 Retrieved %d message(s):\n", len(envs))
+	var toAck []string
+	for _, env := range envs {
+		if env.MessageId != "" {
+			toAck = append(toAck, env.MessageId)
+		}
+		plaintext, err := a.Session.DecryptEnvelope(env)
+		if err != nil {
+			fmt.Printf("  [decrypt] from %s FAILED: %v\n", env.SenderUrn, err)
+			continue
+		}
+		var msg proto.ChatMessage
+		if err := goproto.Unmarshal(plaintext, &msg); err != nil {
+			fmt.Printf("  from %s: [raw] %q (parse error: %v)\n", env.SenderUrn, string(plaintext), err)
+			continue
+		}
+		if txt := msg.GetText(); txt != nil {
+			fmt.Printf("  💬 from %s: %q (ts=%d)\n", env.SenderUrn, txt.Text, txt.Timestamp)
+		}
+	}
+
+	if len(toAck) > 0 {
+		deleted, err := a.MQClient.Ack(ctx, bootstrapNode, toAck)
+		if err != nil {
+			fmt.Printf("❌ MQ ack error: %v\n", err)
+		} else {
+			fmt.Printf("✅ MQ acked %d message(s)\n", deleted)
+		}
+	}
+}
+
+func trustPeer(ctx context.Context, a *agent.Agent, wotStore *wot.Store, bootstrap *peer.AddrInfo, targetURN string) {
+	if targetURN == a.Keys.Ed25519.URN() {
+		fmt.Println("❌ Cannot trust yourself.")
+		return
+	}
+
+	resolved, err := a.Registry.Resolve(*bootstrap, targetURN)
+	if err != nil {
+		fmt.Printf("❌ Resolve %s failed: %v\n", targetURN, err)
+		return
+	}
+
+	pubKey, err := resolved.ID.ExtractPublicKey()
+	if err != nil {
+		fmt.Printf("❌ Failed to extract public key: %v\n", err)
+		return
+	}
+	edPubKey, _ := pubKey.Raw()
+
+	wotStore.AddKnownPeer(targetURN, resolved.ID.String(), resolved.X25519PubKey, edPubKey)
+
+	c := &contacts.Contact{
+		URN:       targetURN,
+		PeerID:    resolved.ID.String(),
+		X25519PK:  resolved.X25519PubKey,
+		Ed25519PK: edPubKey,
+		Trusted:   true,
+	}
+	if err := a.Contacts.Add(c); err != nil {
+		fmt.Printf("❌ Failed to add trusted contact: %v\n", err)
+		return
+	}
+	fmt.Printf("✅ Marked %s as trusted.\n", targetURN)
+}
+
+func issueClaim(ctx context.Context, a *agent.Agent, wotStore *wot.Store, bootstrap *peer.AddrInfo, subjectURN string) {
+	if subjectURN == a.Keys.Ed25519.URN() {
+		fmt.Println("❌ Cannot issue claim about yourself.")
+		return
+	}
+
+	resolved, err := a.Registry.Resolve(*bootstrap, subjectURN)
+	if err != nil {
+		fmt.Printf("❌ Resolve %s failed: %v\n", subjectURN, err)
+		return
+	}
+
+	pubKey, err := resolved.ID.ExtractPublicKey()
+	if err != nil {
+		fmt.Printf("❌ Failed to extract public key: %v\n", err)
+		return
+	}
+	edPubKey, _ := pubKey.Raw()
+
+	wotStore.AddKnownPeer(subjectURN, resolved.ID.String(), resolved.X25519PubKey, edPubKey)
+
+	claim, err := wot.NewDirectTrustClaim(a.Keys, subjectURN, resolved.ID.String(), resolved.X25519PubKey)
+	if err != nil {
+		fmt.Printf("❌ Create claim failed: %v\n", err)
+		return
+	}
+
+	if err := wotStore.AddMyClaim(claim); err != nil {
+		fmt.Printf("❌ Store claim failed: %v\n", err)
+		return
+	}
+	fmt.Printf("✅ Issued WoT TRUSTED claim about %s\n", subjectURN)
+}
+
+func checkTrustPath(ctx context.Context, resolver *wot.Resolver, targetURN string) {
+	path, err := resolver.FindTrustPath(ctx, targetURN)
+	if err != nil {
+		fmt.Printf("❌ No trust path to %s: %v\n", targetURN, err)
+		return
+	}
+
+	fmt.Printf("✅ Found Trust Path to %s (depth=%d):\n", targetURN, path.Depth)
+	for i, c := range path.Claims {
+		fmt.Printf("  [%d] %s --TRUSTED--> %s\n", i, c.IssuerUrn, c.SubjectUrn)
+	}
+}
+
+// ---- Original Interactive menu shell ----
+func runInteractiveLoop(ctx context.Context, a *agent.Agent, wotStore *wot.Store, wotResolver *wot.Resolver, bootstrap *peer.AddrInfo) {
+	fmt.Println("=== agent-comm Interactive Menu ===")
+	fmt.Println("Type 'help' to see menu choices, 'quit' to exit.")
 	fmt.Println()
 
 	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
+	for {
+		fmt.Print("agent-comm> ")
+		if !scanner.Scan() {
+			break
+		}
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
@@ -180,360 +464,86 @@ func main() {
 
 		switch cmd {
 		case "quit", "exit":
-			fmt.Println("Goodbye.")
 			return
-
-		case "pull":
-			pullOfflineMessages(ctx, mgr, mqClient, *bootstrapInfo, urn)
-
+		case "help":
+			fmt.Println("Interactive Commands:")
+			fmt.Println("  share                         - Generate and show my contact card")
+			fmt.Println("  import                        - Paste and import a contact card")
+			fmt.Println("  send <recipientURN> <msg>     - Send an encrypted message")
+			fmt.Println("  pull                          - Pull offline messages once")
+			fmt.Println("  contacts                      - List all contacts")
+			fmt.Println("  trust <urn>                   - Trust a peer")
+			fmt.Println("  untrust <urn>                 - Untrust a peer")
+			fmt.Println("  claim <subjectURN>            - Issue trust claim about peer")
+			fmt.Println("  trustpath <urn>               - Check Web of Trust path to peer")
+			fmt.Println("  quit                          - Exit shell")
+		case "share":
+			card, _ := a.GenerateContactCard()
+			fmt.Println(card)
+		case "import":
+			fmt.Println("Paste the card block. Type 'END' on a new line when done:")
+			var lines []string
+			for scanner.Scan() {
+				t := scanner.Text()
+				if strings.TrimSpace(t) == "END" {
+					break
+				}
+				lines = append(lines, t)
+			}
+			cardText := strings.Join(lines, "\n")
+			c, err := a.ImportContactCard(cardText, "")
+			if err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+			} else {
+				fmt.Printf("✅ Imported contact: %s\n", c.URN)
+			}
 		case "send":
 			if len(parts) < 3 {
 				fmt.Println("Usage: send <recipientURN> <message>")
 				continue
 			}
 			recipientURN := parts[1]
-			msg := parts[2]
-			sendMessage(ctx, mgr, mqClient, *bootstrapInfo, keys, urn, h, contactStore, wotResolver, wotStore, recipientURN, msg)
-
+			msgText := parts[2]
+			err := a.SendMessage(ctx, recipientURN, msgText)
+			if err != nil {
+				fmt.Printf("❌ Failed to send: %v\n", err)
+			} else {
+				fmt.Println("✅ Message sent successfully.")
+			}
+		case "pull":
+			pullOfflineMessages(ctx, a, *bootstrap)
+		case "contacts":
+			list, _ := a.Contacts.List()
+			for _, c := range list {
+				fmt.Printf("  %s (Trusted=%v, PeerID=%s)\n", c.URN, c.Trusted, c.PeerID)
+			}
 		case "trust":
 			if len(parts) < 2 {
 				fmt.Println("Usage: trust <urn>")
 				continue
 			}
-			targetURN := parts[1]
-			trustPeer(ctx, h, bootstrapInfo, contactStore, wotStore, keys, targetURN)
-
+			trustPeer(ctx, a, wotStore, bootstrap, parts[1])
 		case "untrust":
 			if len(parts) < 2 {
 				fmt.Println("Usage: untrust <urn>")
 				continue
 			}
-			targetURN := parts[1]
-			if err := contactStore.SetTrusted(targetURN, false); err != nil {
-				fmt.Printf("Error: %v\n", err)
-			} else {
-				fmt.Printf("Untrusted: %s\n", targetURN)
-			}
-
+			_ = a.Contacts.SetTrusted(parts[1], false)
+			fmt.Printf("✅ Untrusted: %s\n", parts[1])
 		case "claim":
 			if len(parts) < 2 {
 				fmt.Println("Usage: claim <subjectURN>")
 				continue
 			}
-			subjectURN := parts[1]
-			issueClaim(ctx, h, bootstrapInfo, wotStore, keys, subjectURN)
-
+			issueClaim(ctx, a, wotStore, bootstrap, parts[1])
 		case "trustpath":
 			if len(parts) < 2 {
 				fmt.Println("Usage: trustpath <urn>")
 				continue
 			}
-			targetURN := parts[1]
-			checkTrustPath(ctx, wotResolver, wotStore, contactStore, keys, targetURN)
-
-		case "contacts":
-			list, _ := contactStore.List()
-			if len(list) == 0 {
-				fmt.Println("No contacts.")
-			}
-			for _, c := range list {
-				trusted := ""
-				if c.Trusted {
-					trusted = " [TRUSTED]"
-				}
-				fp := contacts.Fingerprint(c.X25519PK)
-				fmt.Printf("  %s%s (PeerID=%s, fp=%s)\n", c.URN, trusted, c.PeerID, fp)
-			}
-
-		case "share":
-			card, err := agent.GenerateContactCard(keys, h, []peer.AddrInfo{*bootstrapInfo})
-			if err != nil {
-				fmt.Printf("Error generating contact card: %v\n", err)
-			} else {
-				fmt.Println(card)
-			}
-
-		case "import":
-			fmt.Println("Paste the contact card text block below. Type 'END' on a new line when done:")
-			var lines []string
-			for scanner.Scan() {
-				txt := scanner.Text()
-				if strings.TrimSpace(txt) == "END" {
-					break
-				}
-				lines = append(lines, txt)
-			}
-			cardText := strings.Join(lines, "\n")
-			
-			fmt.Print("Enter display name for this contact (optional): ")
-			var displayName string
-			if scanner.Scan() {
-				displayName = strings.TrimSpace(scanner.Text())
-			}
-
-			c, err := agent.ImportContactCard(h, mgr, contactStore, cardText, displayName)
-			if err != nil {
-				fmt.Printf("Error importing contact card: %v\n", err)
-			} else {
-				fmt.Printf("Successfully imported contact: %s (PeerID=%s)\n", c.URN, c.PeerID)
-			}
-
-		case "importfile":
-			if len(parts) < 2 {
-				fmt.Println("Usage: importfile <path>")
-				continue
-			}
-			filePath := parts[1]
-			data, err := os.ReadFile(filePath)
-			if err != nil {
-				fmt.Printf("Error reading file: %v\n", err)
-				continue
-			}
-			
-			fmt.Print("Enter display name for this contact (optional): ")
-			var displayName string
-			if scanner.Scan() {
-				displayName = strings.TrimSpace(scanner.Text())
-			}
-
-			c, err := agent.ImportContactCard(h, mgr, contactStore, string(data), displayName)
-			if err != nil {
-				fmt.Printf("Error importing contact card: %v\n", err)
-			} else {
-				fmt.Printf("Successfully imported contact: %s (PeerID=%s)\n", c.URN, c.PeerID)
-			}
-
+			checkTrustPath(ctx, wotResolver, parts[1])
 		default:
-			fmt.Printf("Unknown command: %s\n", cmd)
-		}
-	}
-}
-
-// ---- Session handling ----
-
-func handleSessionStream(stream network.Stream, mgr *session.Manager) {
-	defer stream.Close()
-
-	sizeBuf := make([]byte, 4)
-	if _, err := stream.Read(sizeBuf); err != nil {
-		return
-	}
-	size := binary.BigEndian.Uint32(sizeBuf)
-	envBytes := make([]byte, size)
-	if _, err := stream.Read(envBytes); err != nil {
-		return
-	}
-
-	var env proto.EncryptedEnvelope
-	if err := goproto.Unmarshal(envBytes, &env); err != nil {
-		return
-	}
-
-	plaintext, err := mgr.DecryptEnvelope(&env)
-	if err != nil {
-		fmt.Printf("[session] from %s: decrypt FAILED: %v\n", env.SenderUrn, err)
-		return
-	}
-
-	var msg proto.ChatMessage
-	if err := goproto.Unmarshal(plaintext, &msg); err != nil {
-		fmt.Printf("[session] from %s: %q (parse error)\n", env.SenderUrn, string(plaintext))
-		return
-	}
-
-	if txt := msg.GetText(); txt != nil {
-		fmt.Printf("[session] from %s: %q\n", env.SenderUrn, txt.Text)
-	}
-}
-
-// ---- WoT commands ----
-
-// trustPeer resolves a peer's info from the registry and adds them as a trusted contact.
-// This is the bootstrap trust mechanism: direct manual trust.
-func trustPeer(ctx context.Context, h host.Host, bootstrap *peer.AddrInfo, contactStore *contacts.Store, wotStore *wot.Store, keys *crypto.IdentityKeys, targetURN string) {
-	if targetURN == keys.Ed25519.URN() {
-		fmt.Println("Cannot trust yourself.")
-		return
-	}
-
-	// Resolve from registry
-	resolved, err := registry.NewClient(h).Resolve(*bootstrap, targetURN)
-	if err != nil {
-		fmt.Printf("[trust] resolve %s failed: %v\n", targetURN, err)
-		return
-	}
-
-	// Add as known peer in WoT store (so we can verify their future claims)
-	wotStore.AddKnownPeer(targetURN, resolved.ID.String(), resolved.X25519PubKey, keys.Ed25519.PublicKey) // Note: we don't have their Ed25519 pubkey here yet
-
-	// Add as trusted contact
-	c := &contacts.Contact{
-		URN:         targetURN,
-		PeerID:      resolved.ID.String(),
-		X25519PK:    resolved.X25519PubKey,
-		Ed25519PK:   nil, // don't have it yet
-		DisplayName: "",
-		Trusted:     true,
-	}
-	if err := contactStore.Add(c); err != nil {
-		fmt.Printf("[trust] add contact failed: %v\n", err)
-		return
-	}
-	fmt.Printf("[trust] %s marked as TRUSTED (PeerID=%s)\n", targetURN, resolved.ID)
-}
-
-// issueClaim creates a TRUSTED claim about a subject.
-// The subject must already be known (we have their info from registry).
-func issueClaim(ctx context.Context, h host.Host, bootstrap *peer.AddrInfo, wotStore *wot.Store, keys *crypto.IdentityKeys, subjectURN string) {
-	if subjectURN == keys.Ed25519.URN() {
-		fmt.Println("Cannot issue a claim about yourself.")
-		return
-	}
-
-	// Resolve subject's info
-	resolved, err := registry.NewClient(h).Resolve(*bootstrap, subjectURN)
-	if err != nil {
-		fmt.Printf("[claim] resolve %s failed: %v\n", subjectURN, err)
-		return
-	}
-
-	// Add as known peer so we can reference them
-	wotStore.AddKnownPeer(subjectURN, resolved.ID.String(), resolved.X25519PubKey, keys.Ed25519.PublicKey)
-
-	// Create and sign the claim
-	claim, err := wot.NewDirectTrustClaim(keys, subjectURN, resolved.ID.String(), resolved.X25519PubKey)
-	if err != nil {
-		fmt.Printf("[claim] create failed: %v\n", err)
-		return
-	}
-
-	// Store our own claim
-	if err := wotStore.AddMyClaim(claim); err != nil {
-		fmt.Printf("[claim] store failed: %v\n", err)
-		return
-	}
-	fmt.Printf("[claim] Issued TRUSTED claim about %s (PeerID=%s)\n", subjectURN, resolved.ID)
-}
-
-// checkTrustPath checks if there's a trust path to the target URN.
-func checkTrustPath(ctx context.Context, resolver *wot.Resolver, store *wot.Store, contactStore *contacts.Store, keys *crypto.IdentityKeys, targetURN string) {
-	path, err := resolver.FindTrustPath(ctx, targetURN)
-	if err != nil {
-		fmt.Printf("[trustpath] No trust path to %s: %v\n", targetURN, err)
-		return
-	}
-
-	fmt.Printf("[trustpath] Path to %s (depth=%d):\n", targetURN, path.Depth)
-	for i, c := range path.Claims {
-		fmt.Printf("  [%d] %s --TRUSTED--> %s\n", i, c.IssuerUrn, c.SubjectUrn)
-	}
-	fmt.Printf("  Trusted pubkey: %x\n", path.TrustedPK[:8])
-}
-
-// ---- Message sending ----
-
-// sendMessage sends an encrypted message, checking WoT trust first.
-func sendMessage(ctx context.Context, mgr *session.Manager, mqClient *mq.Client, relay peer.AddrInfo, keys *crypto.IdentityKeys, myURN string, h host.Host, contactStore *contacts.Store, wotResolver *wot.Resolver, wotStore *wot.Store, recipientURN, plaintext string) {
-	// Resolve recipient via registry
-	resolved, err := registry.NewClient(mgr.Host()).Resolve(relay, recipientURN)
-	if err != nil {
-		fmt.Printf("[send] resolve %s failed: %v\n", recipientURN, err)
-		return
-	}
-	recipientPubKey := resolved.X25519PubKey
-	if len(recipientPubKey) != 32 {
-		fmt.Printf("[send] recipient X25519 pubkey invalid (len=%d)\n", len(recipientPubKey))
-		return
-	}
-
-	// --- WoT Trust Check ---
-	// Check 1: direct contact trust
-	isTrusted := contactStore.IsTrusted(recipientURN)
-
-	// Check 2: WoT trust path
-	if !isTrusted {
-		isTrusted = wotResolver.IsTrusted(recipientURN)
-	}
-
-	// Check 3: if we have this peer's X25519 in our contacts store, verify it matches
-	contactX25519, _, err := contactStore.GetPubkeys(recipientURN)
-	if err == nil && len(contactX25519) == 32 {
-		// Use the cached (trusted) pubkey
-		if string(recipientPubKey) != string(contactX25519) {
-			fmt.Printf("[send] WARNING: recipient pubkey differs from cached contact pubkey for %s\n", recipientURN)
-			fmt.Printf("[send] Cached:  %x\n", contactX25519[:8])
-			fmt.Printf("[send] Registry: %x\n", recipientPubKey[:8])
-			fmt.Printf("[send] Proceeding with registry pubkey...\n")
-		}
-	}
-
-	if !isTrusted {
-		fmt.Printf("[send] WARNING: %s is not in your trust graph.\n", recipientURN)
-		fmt.Printf("[send] Proceeding anyway (MITM risk). To trust: 'trust %s'\n", recipientURN)
-	}
-
-	// --- Send ---
-	addrInfo := peer.AddrInfo{ID: resolved.ID, Addrs: resolved.Addrs}
-	reply, err := mgr.SendMessage(ctx, addrInfo, recipientPubKey, plaintext)
-	if err != nil {
-		// Offline — store via MQ
-		fmt.Printf("[send] direct send failed (%v), storing via MQ relay...\n", err)
-
-		envelope, err := mgr.BuildEnvelope(recipientPubKey, plaintext)
-		if err != nil {
-			fmt.Printf("[send] build envelope: %v\n", err)
-			return
-		}
-		msgID, err := mqClient.Store(ctx, relay, recipientURN, envelope, 7)
-		if err != nil {
-			fmt.Printf("[send] MQ store failed: %v\n", err)
-			return
-		}
-		fmt.Printf("[send] stored via relay: msg_id=%s\n", msgID)
-		return
-	}
-	fmt.Printf("[send] -> %s: %q (reply: %q)\n", recipientURN, plaintext, reply)
-}
-
-// pullOfflineMessages retrieves and decrypts any pending messages from the relay.
-func pullOfflineMessages(ctx context.Context, mgr *session.Manager, mqClient *mq.Client, relay peer.AddrInfo, myURN string) {
-	envelopes, err := mqClient.Retrieve(ctx, relay, myURN)
-	if err != nil {
-		fmt.Printf("[mq] retrieve error: %v\n", err)
-		return
-	}
-	if len(envelopes) == 0 {
-		fmt.Println("[mq] no pending messages")
-		return
-	}
-
-	fmt.Printf("[mq] retrieved %d message(s):\n", len(envelopes))
-	var toAck []string
-	for _, env := range envelopes {
-		if env.MessageId != "" {
-			toAck = append(toAck, env.MessageId)
-		}
-		plaintext, err := mgr.DecryptEnvelope(env)
-		if err != nil {
-			fmt.Printf("  [decrypt] from %s FAILED: %v\n", env.SenderUrn, err)
-			continue
-		}
-		var msg proto.ChatMessage
-		if err := goproto.Unmarshal(plaintext, &msg); err != nil {
-			fmt.Printf("  from %s: %q (parse error: %v)\n", env.SenderUrn, string(plaintext), err)
-			continue
-		}
-		if txt := msg.GetText(); txt != nil {
-			fmt.Printf("  from %s: %q (ts=%d)\n", env.SenderUrn, txt.Text, txt.Timestamp)
-		}
-	}
-
-	if len(toAck) > 0 {
-		deleted, err := mqClient.Ack(ctx, relay, toAck)
-		if err != nil {
-			fmt.Printf("[mq] ack error: %v\n", err)
-		} else {
-			fmt.Printf("[mq] acked %d message(s) from relay\n", deleted)
+			fmt.Printf("❌ Unknown command: %s\n", cmd)
 		}
 	}
 }

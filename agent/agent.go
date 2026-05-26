@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/nousresearch/hermes-agent/agent-comm/contacts"
 	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
@@ -15,6 +16,8 @@ import (
 	"github.com/nousresearch/hermes-agent/agent-comm/session"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/multiformats/go-multiaddr"
 	"github.com/nousresearch/hermes-agent/agent-comm/dht"
 	kad "github.com/libp2p/go-libp2p-kad-dht"
 	"path/filepath"
@@ -34,7 +37,8 @@ type Agent struct {
 	BootstrapNodes []peer.AddrInfo
 	DRStore        *dr.DRStore
 
-	
+	drPeers        map[string]*dr.DRSession
+	drPeersMu      sync.RWMutex
 }
 
 // InitIdentity initializes or loads the Agent's cryptographic identity,
@@ -96,6 +100,7 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 		Registry:       registry.NewClient(h),
 		DHT:            d,
 		BootstrapNodes: cfg.BootstrapNodes,
+		drPeers:        make(map[string]*dr.DRSession),
 	}
 
 	// Try to register self with bootstrap registries
@@ -140,12 +145,14 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 	
 	// Wait for fastest successful registry result
 	found := false
+	var targetAddrs []multiaddr.Multiaddr
 	for i := 0; i < len(a.BootstrapNodes); i++ {
 		r := <-resChan
 		if r.err == nil && r.res != nil && len(r.res.X25519PubKey) == 32 {
 			fmt.Printf("[Agent] Discovery won by: %s\n", r.src)
 			targetID = r.res.ID
 			recipientPubKey = r.res.X25519PubKey
+			targetAddrs = r.res.Addrs
 			found = true
 			break
 		}
@@ -153,6 +160,11 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 
 	if !found {
 		return fmt.Errorf("failed to discover peer %s", recipientURN)
+	}
+
+	// Add resolved addresses to peerstore so host knows how to dial this peer
+	if len(targetAddrs) > 0 {
+		a.Host.Peerstore().AddAddrs(targetID, targetAddrs, peerstore.TempAddrTTL)
 	}
 
 	// Add to Session

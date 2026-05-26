@@ -123,6 +123,31 @@ func (s *Store) Get(urn string) (*Contact, error) {
 	return &c, nil
 }
 
+// GetByPeerID retrieves a contact by their libp2p PeerID.
+func (s *Store) GetByPeerID(peerID string) (*Contact, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row := s.db.QueryRow(`
+		SELECT urn, peer_id, x25519_pk, ed25519_pk, display_name, trusted, first_seen, last_seen
+		FROM contacts WHERE peer_id = ?`, peerID)
+
+	var c Contact
+	var trusted int
+	var firstSeen, lastSeen int64
+	err := row.Scan(&c.URN, &c.PeerID, &c.X25519PK, &c.Ed25519PK, &c.DisplayName, &trusted, &firstSeen, &lastSeen)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("contact not found for peer ID: %s", peerID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	c.Trusted = trusted == 1
+	c.FirstSeen = time.Unix(firstSeen, 0)
+	c.LastSeen = time.Unix(lastSeen, 0)
+	return &c, nil
+}
+
 // GetPubkeys returns both public keys for a contact.
 func (s *Store) GetPubkeys(urn string) (x25519, ed25519 []byte, err error) {
 	c, err := s.Get(urn)
