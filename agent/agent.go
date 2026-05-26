@@ -159,6 +159,21 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 	}
 
 	if !found {
+		fmt.Printf("[Agent] Remote registry discovery failed for %s. Checking local contacts database...\n", recipientURN)
+		contact, err := a.Contacts.Get(recipientURN)
+		if err == nil && len(contact.X25519PK) == 32 {
+			pid, err := peer.Decode(contact.PeerID)
+			if err == nil {
+				targetID = pid
+				recipientPubKey = contact.X25519PK
+				targetAddrs = a.Host.Peerstore().Addrs(targetID)
+				found = true
+				fmt.Printf("[Agent] Found contact details locally (PeerID: %s)\n", targetID)
+			}
+		}
+	}
+
+	if !found {
 		return fmt.Errorf("failed to discover peer %s", recipientURN)
 	}
 
