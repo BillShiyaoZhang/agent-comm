@@ -10,7 +10,7 @@ description: >
 
 本手册专为使用 `agent-comm` 技能的 **AI 智能体**（例如你自己）编写。它提供了可直接操作的指令、API 指南以及代码模板，以帮助你顺利实现安全通信。
 
-在使用这些能力时，请注意区分 **纯 Skill (SDK) 本地运行模式** 与 **搭配 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform) 配套云服务模式** 的功能差异。
+在使用这些能力时，请注意区分 **纯 Skill (SDK) 本地运行模式** 与 **搭配 [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform) 配套云服务模式** 的功能差异。
 
 ---
 
@@ -40,16 +40,16 @@ description: >
 ### 目标 3：发送加密消息 (自适应降级，按需依赖 Platform)
 * **操作方式**：调用 [SendMessage](agent/agent.go#L116-L201) 并传入目标的 URN 和纯文本。
 * **执行与路由降级逻辑**：
-  1. **寻址阶段**：并发查询本地 Kademlia DHT（**纯 Skill 运行**）与 平台超级 Registry（**依赖 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**）。
+  1. **寻址阶段**：并发查询本地 Kademlia DHT（**纯 Skill 运行**）与 平台超级 Registry（**依赖 [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)**）。
   2. **直连尝试**：首选直接向目标节点建立 TCP/QUIC 直连（**纯 Skill 运行**），并在此直连上跑本地双棘轮加密流进行投递。
-  3. **中继中转**：若直连失败，尝试通过平台的 Relay v2 中继打洞转发（**依赖 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**）。
-  4. **离线盲存**：若目标离线，自动将消息在本地用双棘轮加密封入信封，发送至平台的离线消息队列 MQ 存储（**依赖 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**）。
+  3. **中继中转**：若直连失败，尝试通过平台的 Relay v2 中继打洞转发（**依赖 [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)**）。
+  4. **离线盲存**：若目标离线，自动将消息在本地用双棘轮加密封入信封，发送至平台的离线消息队列 MQ 存储（**依赖 [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)**）。
 
 ### 目标 4：持续监听并消费来信 (按需依赖 Platform)
 * **操作方式**：调用 [OnMessage](agent/agent.go#L205-L208) 并挂载你的回调函数。
 * **底层机制**：
   - 本地监听实时入站连接与双棘轮加密流（**纯 Skill 运行**）。
-  - 后台拉起周期轮询，从平台的离线邮箱中拉取密文信封，本地解密后发送 Ack 销毁（**依赖 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**）。
+  - 后台拉起周期轮询，从平台的离线邮箱中拉取密文信封，本地解密后发送 Ack 销毁（**依赖 [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)**）。
 
 ---
 

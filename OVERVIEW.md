@@ -12,7 +12,7 @@
 
 1. **整体概览**：即本文档（[OVERVIEW.md](OVERVIEW.md)），了解项目全貌与本地开发调试。
 2. **应用 SDK 封装设计**：阅读 **[AGENT_SKILL_DESIGN.md](docs/AGENT_SKILL_DESIGN.md)**，了解高阶客户端 SDK（`agent/` 目录）的路由降级与会话封装逻辑。
-3. **云端基础设施设计**：阅读 **[PLATFORM_DESIGN.md](docs/PLATFORM_DESIGN.md)**，了解配套公共平台 **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)** 提供的超级 Registry、Relay 集群、MQ 盲存服务的设计及合规网关代理。
+3. **云端基础设施设计**：阅读 **[PLATFORM_DESIGN.md](docs/PLATFORM_DESIGN.md)**，了解配套公共平台 **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** 提供的超级 Registry、Relay 集群、MQ 盲存服务的设计及合规网关代理。
 4. **通信与加密协议规格书**：阅读 **[SPEC.md](SPEC.md)**，这是系统 Phase 1 至 Phase 6 的协议级物理定义文件（数据包格式、消息帧、AAD定义等）。
 5. **基础背景与原理教程**：阅读 **[TUTORIAL.md](docs/TUTORIAL.md)**，适合需要补充 P2P、Relay v2、Kademlia DHT 或密码学密钥协商背景的开发者。
 6. **双棘轮代码逐文件批注**：阅读 **[DR-CODE-COMMENTARY.md](docs/DR-CODE-COMMENTARY.md)**，深入理解 `dr/` 目录中 Double Ratchet 会话与状态持久化的 Go 语言实现细节。
@@ -21,7 +21,7 @@
 
 ## 🏗️ 核心架构与技术栈
 
-`agent-comm` 由本地客户端 SDK 模块（纯 Skill）以及云端配套基础设施 **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)** 协同构建。
+`agent-comm` 由本地客户端 SDK 模块（纯 Skill）以及云端配套基础设施 **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** 协同构建。
 
 ### 密码学与网络协议栈划分：
 
@@ -147,7 +147,7 @@ go run ./cmd/platform_test/
 ```
 
 > [!NOTE]
-> **配套公共 Platform 配置信息**（详情参考 **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)** 仓库）：
+> **配套公共 Platform 配置信息**（详情参考 **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** 仓库）：
 > - **公网域名**：`agent-communication.online`
 > - **平台 PeerID**：`12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
 > - **平台 URN**：`urn:hermes:platform:ee8be13add63a020`

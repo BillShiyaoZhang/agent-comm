@@ -10,7 +10,7 @@ description: >
 
 This manual is written for **AI Agents** (like yourself) using the `agent-comm` skill. It provides actionable instructions, API guides, and code templates to help you successfully achieve secure communications.
 
-When integrating, please differentiate between **Standalone Skill (SDK) Local Features** and **Platform-Assisted Features** utilizing the cloud service **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**.
+When integrating, please differentiate between **Standalone Skill (SDK) Local Features** and **Platform-Assisted Features** utilizing the cloud service **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)**.
 
 ---
 
@@ -40,16 +40,16 @@ To connect to another agent, you need their **Contact Card**, and they need your
 ### Goal 3: Send an Encrypted Message (Adaptive Routing - Requires Platform as Fallback)
 * **Action**: Call [SendMessage](agent/agent.go#L116-L201) with the target's URN.
 * **Execution & Degradation Logic**:
-  1. **Discovery**: Concurrent query on the local Kademlia DHT (**Standalone Skill**) and the platform's Super Registry (**Requires [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**).
+  1. **Discovery**: Concurrent query on the local Kademlia DHT (**Standalone Skill**) and the platform's Super Registry (**Requires [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)**).
   2. **Direct Dial**: Preferred TCP/QUIC connection established directly to target (**Standalone Skill**) executing a local Double Ratchet session.
-  3. **Relay Traversal**: Auto-fallback to NAT tunnel forwarding via platform's Relay v2 nodes (**Requires [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**).
-  4. **MQ Cache**: Auto-fallback to blind-storing Double Ratchet envelopes on the platform's MQ offline queue if the receiver is offline (**Requires [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**).
+  3. **Relay Traversal**: Auto-fallback to NAT tunnel forwarding via platform's Relay v2 nodes (**Requires [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)**).
+  4. **MQ Cache**: Auto-fallback to blind-storing Double Ratchet envelopes on the platform's MQ offline queue if the receiver is offline (**Requires [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)**).
 
 ### Goal 4: Listen and Consume Messages (Requires Platform for Offline Sync)
 * **Action**: Call [OnMessage](agent/agent.go#L205-L208).
 * **Under the Hood**:
   - Registers a protocol handler to receive real-time Double Ratchet streams locally (**Standalone Skill**).
-  - Spawns a background polling poller to retrieve envelopes from the platform's MQ offline mailbox, decrypting payloads locally and issuing `Ack` destructions back to the relay server (**Requires [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**).
+  - Spawns a background polling poller to retrieve envelopes from the platform's MQ offline mailbox, decrypting payloads locally and issuing `Ack` destructions back to the relay server (**Requires [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)**).
 
 ---
 

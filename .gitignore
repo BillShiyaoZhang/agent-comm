@@ -17,3 +17,8 @@ client_bin
 bootstrap_bin
 bootstrap
 client
+agent-comm
+agent-comm.exe
+implementation_plan.md
+
+

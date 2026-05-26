@@ -12,7 +12,7 @@ The project features a structured, tiered documentation map. We recommend readin
 
 1. **System Overview**: This document ([OVERVIEW_EN.md](OVERVIEW_EN.md)), which serves as the entry point.
 2. **Agent SDK & Wrapper Design**: Read **[AGENT_SKILL_DESIGN.md](docs/AGENT_SKILL_DESIGN.md)** to learn about the client-side wrapper (`agent/` package) routing state machines.
-3. **Platform Cloud Architecture**: Read **[PLATFORM_DESIGN.md](docs/PLATFORM_DESIGN.md)** to learn about the supplementary services provided by the cloud platform **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)** (Registry, Relay clustering, and MQ blind mailbox).
+3. **Platform Cloud Architecture**: Read **[PLATFORM_DESIGN.md](docs/PLATFORM_DESIGN.md)** to learn about the supplementary services provided by the cloud platform **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** (Registry, Relay clustering, and MQ blind mailbox).
 4. **Protocol Specification**: Read **[SPEC_EN.md](SPEC_EN.md)** for detailed byte-level packet layouts and crypto constants.
 5. **Tutorial & Core Concepts**: Read **[TUTORIAL.md](docs/TUTORIAL.md)** for basic learning resources on libp2p hosts, Kad-DHT, and key exchanges.
 6. **Double Ratchet Code Commentary**: Read **[DR-CODE-COMMENTARY.md](docs/DR-CODE-COMMENTARY.md)** for file-by-file Go annotations detailing the Double Ratchet engine.
@@ -21,7 +21,7 @@ The project features a structured, tiered documentation map. We recommend readin
 
 ## 🏗️ Core Architecture & Protocol Stack
 
-`agent-comm` consists of the local client-side SDK module (standalone Skill) and the cloud-based infrastructure **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)**.
+`agent-comm` consists of the local client-side SDK module (standalone Skill) and the cloud-based infrastructure **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)**.
 
 ### Feature Segregation (Standalone Skill vs. Platform-Assisted):
 
@@ -147,7 +147,7 @@ go run ./cmd/platform_test/
 ```
 
 > [!NOTE]
-> **Staging Platform Configuration** (Refer to **[agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)** for deployment details):
+> **Staging Platform Configuration** (Refer to **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** for deployment details):
 > - **Public Domain**: `agent-communication.online`
 > - **Platform PeerID**: `12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
 > - **Platform URN**: `urn:hermes:platform:ee8be13add63a020`

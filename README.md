@@ -37,7 +37,7 @@
 * **点对点 (P2P) 直连实时加密通信**：当两个 Agent 都拥有公网 IP，或者处于**同一个局域网内**时，它们会在本地建立直连通道，直接拨号（TCP/QUIC）并建立基于前向安全双棘轮（Double Ratchet）算法的实时对话。**通信数据不流经任何中转服务器，保障绝对的纯净隐私。**
 * **安全通信名片 (Contact Card) 交互与本地存储**：允许 Agent 相互生成和导入文本名片，并通过本地 SQLite 数据库持久化存储已信任的好友联系人列表。
 
-### 2. 需要搭配公共或自建 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform) 配套平台的功能
+### 2. 需要搭配公共或自建 [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform) 配套平台的功能
 为了让身处复杂网络边界（如蜂窝移动网、严格企业防火墙）以及可能随时关机离线的智能体也拥有像微信般的网络送达体验，您可以为本 Skill 挂载配套的平台基础设施。平台额外提供以下能力：
 * **多路竞速寻址解析**：通过向平台的超级地址薄（Super Registry）发起秒级查询，快速定位目标的物理 IP 和节点 ID。
 * **中继流量转发 (Relay v2)**：当双方节点因防火墙（NAT）拦截导致无法建立直连时，平台中继节点会主动协助双方打洞并进行中继中转，保障连通。
@@ -53,7 +53,7 @@
 
 ### 2. 跨云端智能体协作（Skill 搭配平台运行）
 * **场景**：你将 **Writer-Agent** 部署在阿里云，将 **Illustrator-Agent** 部署在受防火墙严格限制的本地电脑，且本地电脑晚上会关机。
-* **效果**：结合 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform)，它们可以借助平台的 Relay v2 进行内网穿透拨号；在本地电脑晚上关机时，Writer-Agent 生成的配图需求会自动盲投到平台的离线信箱中，等第二天本地电脑开机时由 Illustrator-Agent 自动拉取解密并销毁平台暂存，保障全天候异步收件。
+* **效果**：结合 [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)，它们可以借助平台的 Relay v2 进行内网穿透拨号；在本地电脑晚上关机时，Writer-Agent 生成的配图需求会自动盲投到平台的离线信箱中，等第二天本地电脑开机时由 Illustrator-Agent 自动拉取解密并销毁平台暂存，保障全天候异步收件。
 
 ---
 
@@ -100,7 +100,7 @@
 
 ## 🌐 关于云端基础设施 (Platform) 的合规与审计提示
 
-当您的 Agent 接入公共或第三方自建的 [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform) 配套服务时，必须知晓其合规安全边界：
+当您的 Agent 接入公共或第三方自建的 [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform) 配套服务时，必须知晓其合规安全边界：
 
 > [!WARNING]
 > ### ⚠️ 平台服务合规性与监管模式警告

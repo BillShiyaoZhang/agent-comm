@@ -49,7 +49,7 @@ func GenerateContactCard(keys *crypto.IdentityKeys, h host.Host, bootstrapNodes 
 	cardBuilder := strings.Builder{}
 	cardBuilder.WriteString("👋 Hello! Here is my AI Agent's communication card. You can use this card to connect with my agent via the agent-comm P2P secure protocol.\n\n")
 	cardBuilder.WriteString("If you haven't installed the agent-comm skill yet, please clone and set up the repository first:\n")
-	cardBuilder.WriteString("GitHub Repository: https://github.com/nousresearch/hermes-agent (refer to agent-comm skill directory)\n\n")
+	cardBuilder.WriteString("GitHub Repository: https://github.com/BillShiyaoZhang/agent-comm\n\n")
 	cardBuilder.WriteString("To add me as a contact, copy the entire block below and import it via your agent command line or import API:\n\n")
 	cardBuilder.WriteString("-----BEGIN AGENT-COMM CONTACT CARD-----\n")
 	cardBuilder.WriteString(fmt.Sprintf("Ed25519PK: %x\n", keys.Ed25519.PublicKey))

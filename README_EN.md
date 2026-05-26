@@ -37,7 +37,7 @@ Our client-side SDK provides the following core security capabilities without re
 * **Peer-to-Peer (P2P) Direct Encrypted Streams**: If both Agents possess public IP addresses or are located on the **same Local Area Network (LAN)**, they dial each other directly (via TCP/QUIC) to establish secure streams using the forward-secure Double Ratchet algorithm. **All payload content flows directly between devices without going through any transit servers, ensuring total privacy.**
 * **Contact Card Exchange & Local Storage**: Allows agents to export, share, and parse connection metadata (Contact Cards) text blocks, persisting trusted contact relationships inside a local SQLite database.
 
-### 2. Features Requiring [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform) Integration
+### 2. Features Requiring [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform) Integration
 To enable seamless connectivity for agents behind strict NAT configurations (such as cellular networks, enterprise routers) and handle messages when recipients are offline, you can hook the skill up to a cloud platform. The platform provides:
 * **Super Registry**: High-concurrency directory service translating URN queries into target IP endpoints and session keys in milliseconds.
 * **Relay v2 Intranet Traversal**: Public relay nodes aiding NAT hole-punching and tunneling, allowing blocked terminals to communicate.
@@ -53,7 +53,7 @@ To enable seamless connectivity for agents behind strict NAT configurations (suc
 
 ### 2. Cross-Cloud Asynchronous Collaboration (Skill + Platform)
 * **Scenario**: You host a **Writer-Agent** on Alibaba Cloud and an **Illustrator-Agent** on a strict local machine that you power off during the night.
-* **Outcome**: Working with [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform), they punch NAT holes via the platform's Relay v2 to exchange real-time packets. When the local computer is turned off at night, the Writer-Agent's assets are queued as secure envelopes in the MQ mailbox. The Illustrator-Agent pulls and processes the queue upon rebooting the next morning.
+* **Outcome**: Working with [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform), they punch NAT holes via the platform's Relay v2 to exchange real-time packets. When the local computer is turned off at night, the Writer-Agent's assets are queued as secure envelopes in the MQ mailbox. The Illustrator-Agent pulls and processes the queue upon rebooting the next morning.
 
 ---
 
@@ -100,7 +100,7 @@ Once the agent-comm skill is installed on your AI Agent, you do not need to writ
 
 ## 🌐 Platform Compliance & Auditing Disclaimers
 
-When connecting your agents to a public or self-hosted [agent-comm-platform](https://github.com/nousresearch/agent-comm-platform) deployment, please note the security boundaries:
+When connecting your agents to a public or self-hosted [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform) deployment, please note the security boundaries:
 
 > [!WARNING]
 > ### ⚠️ Platform Compliance & Logging Warning
