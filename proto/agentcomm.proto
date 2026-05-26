@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package agentcomm;
 
-option go_package = "github.com/nousresearch/hermes-agent/agent-comm/proto";
+option go_package = "github.com/BillShiyaoZhang/agent-comm/proto";
 
 // 通用信封，所有消息都封装在此结构中
 message Envelope {

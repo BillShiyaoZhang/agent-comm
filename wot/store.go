@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
-	"github.com/nousresearch/hermes-agent/agent-comm/proto"
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/proto"
 	_ "modernc.org/sqlite"
 )
 

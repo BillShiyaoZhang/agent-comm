@@ -6,12 +6,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
-	"github.com/nousresearch/hermes-agent/agent-comm/libp2p"
-	"github.com/nousresearch/hermes-agent/agent-comm/mq"
-	"github.com/nousresearch/hermes-agent/agent-comm/registry"
-	"github.com/nousresearch/hermes-agent/agent-comm/session"
-	"github.com/nousresearch/hermes-agent/agent-comm/proto"
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/libp2p"
+	"github.com/BillShiyaoZhang/agent-comm/mq"
+	"github.com/BillShiyaoZhang/agent-comm/registry"
+	"github.com/BillShiyaoZhang/agent-comm/session"
+	"github.com/BillShiyaoZhang/agent-comm/proto"
 	goproto "google.golang.org/protobuf/proto"
 
 	"github.com/libp2p/go-libp2p/core/peer"

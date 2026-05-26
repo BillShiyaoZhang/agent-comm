@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/nousresearch/hermes-agent/agent-comm/libp2p"
+	"github.com/BillShiyaoZhang/agent-comm/libp2p"
 )
 
 func main() {

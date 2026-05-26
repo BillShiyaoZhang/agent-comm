@@ -10,7 +10,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/multiformats/go-multiaddr"
-	agentpb "github.com/nousresearch/hermes-agent/agent-comm/proto"
+	agentpb "github.com/BillShiyaoZhang/agent-comm/proto"
 	goproto "google.golang.org/protobuf/proto"
 )
 

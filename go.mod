@@ -1,4 +1,4 @@
-module github.com/nousresearch/hermes-agent/agent-comm
+module github.com/BillShiyaoZhang/agent-comm
 
 go 1.25.0
 

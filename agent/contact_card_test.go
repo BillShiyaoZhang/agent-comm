@@ -7,10 +7,10 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
-	"github.com/nousresearch/hermes-agent/agent-comm/contacts"
-	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
-	p2phost "github.com/nousresearch/hermes-agent/agent-comm/libp2p"
-	"github.com/nousresearch/hermes-agent/agent-comm/session"
+	"github.com/BillShiyaoZhang/agent-comm/contacts"
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	p2phost "github.com/BillShiyaoZhang/agent-comm/libp2p"
+	"github.com/BillShiyaoZhang/agent-comm/session"
 )
 
 func TestContactCardGenerateParseImport(t *testing.T) {

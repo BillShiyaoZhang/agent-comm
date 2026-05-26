@@ -5,20 +5,20 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/nousresearch/hermes-agent/agent-comm/contacts"
-	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/contacts"
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	
-	p2p "github.com/nousresearch/hermes-agent/agent-comm/libp2p"
-	"github.com/nousresearch/hermes-agent/agent-comm/mq"
-	"github.com/nousresearch/hermes-agent/agent-comm/registry"
-	"github.com/nousresearch/hermes-agent/agent-comm/dr"
+	p2p "github.com/BillShiyaoZhang/agent-comm/libp2p"
+	"github.com/BillShiyaoZhang/agent-comm/mq"
+	"github.com/BillShiyaoZhang/agent-comm/registry"
+	"github.com/BillShiyaoZhang/agent-comm/dr"
 
-	"github.com/nousresearch/hermes-agent/agent-comm/session"
+	"github.com/BillShiyaoZhang/agent-comm/session"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/multiformats/go-multiaddr"
-	"github.com/nousresearch/hermes-agent/agent-comm/dht"
+	"github.com/BillShiyaoZhang/agent-comm/dht"
 	kad "github.com/libp2p/go-libp2p-kad-dht"
 	"path/filepath"
 )

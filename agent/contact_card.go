@@ -14,9 +14,9 @@ import (
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/multiformats/go-multiaddr"
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
-	"github.com/nousresearch/hermes-agent/agent-comm/contacts"
-	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
-	"github.com/nousresearch/hermes-agent/agent-comm/session"
+	"github.com/BillShiyaoZhang/agent-comm/contacts"
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/session"
 )
 
 // ContactCardInfo holds the parsed fields from an agent-comm contact card.

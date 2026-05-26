@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/crypto/curve25519"
 
-	"github.com/nousresearch/hermes-agent/agent-comm/dr"
+	"github.com/BillShiyaoZhang/agent-comm/dr"
 )
 
 // Simple Double Ratchet test without real crypto

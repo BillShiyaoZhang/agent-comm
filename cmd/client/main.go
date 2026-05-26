@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nousresearch/hermes-agent/agent-comm/agent"
-	"github.com/nousresearch/hermes-agent/agent-comm/contacts"
-	"github.com/nousresearch/hermes-agent/agent-comm/proto"
-	"github.com/nousresearch/hermes-agent/agent-comm/wot"
+	"github.com/BillShiyaoZhang/agent-comm/agent"
+	"github.com/BillShiyaoZhang/agent-comm/contacts"
+	"github.com/BillShiyaoZhang/agent-comm/proto"
+	"github.com/BillShiyaoZhang/agent-comm/wot"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"

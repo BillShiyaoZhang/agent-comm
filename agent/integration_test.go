@@ -8,12 +8,12 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
-	"github.com/nousresearch/hermes-agent/agent-comm/contacts"
-	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
-	p2phost "github.com/nousresearch/hermes-agent/agent-comm/libp2p"
-	"github.com/nousresearch/hermes-agent/agent-comm/mq"
-	pb "github.com/nousresearch/hermes-agent/agent-comm/proto"
-	"github.com/nousresearch/hermes-agent/agent-comm/registry"
+	"github.com/BillShiyaoZhang/agent-comm/contacts"
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	p2phost "github.com/BillShiyaoZhang/agent-comm/libp2p"
+	"github.com/BillShiyaoZhang/agent-comm/mq"
+	pb "github.com/BillShiyaoZhang/agent-comm/proto"
+	"github.com/BillShiyaoZhang/agent-comm/registry"
 	goproto "google.golang.org/protobuf/proto"
 )
 
@@ -38,14 +38,18 @@ func TestAgentHybridIntegration(t *testing.T) {
 	defer platformHost.Close()
 
 	// Start Registry server
-	regServer := registry.NewServer(platformHost)
+	regServer := registry.NewServer(platformHost, registry.NewInMemoryStore())
 	regServer.Register()
 	platformURN := platformKeys.Ed25519.URN()
 	regServer.HandleRegister(platformURN, platformHost.ID(), platformHost.Addrs(), platformKeys.X25519PK)
 
 	// Start MQ server
 	platformMQDb := filepath.Join(t.TempDir(), "platform_mq.db")
-	mqServer, err := mq.NewServer(platformHost, platformMQDb)
+	sqliteStore, err := mq.NewSQLiteStore(platformMQDb)
+	if err != nil {
+		t.Fatalf("failed to create sqlite store: %v", err)
+	}
+	mqServer, err := mq.NewServer(platformHost, sqliteStore)
 	if err != nil {
 		t.Fatalf("failed to start MQ server: %v", err)
 	}

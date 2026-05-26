@@ -1,6 +1,6 @@
 #!/bin/bash
 sed -i '' -e '14i\
-	"github.com/nousresearch/hermes-agent/agent-comm/dr"\
+	"github.com/BillShiyaoZhang/agent-comm/dr"\
 ' agent/agent.go
 
 sed -i '' -e '/BootstrapNodes \[\]peer.AddrInfo/a\

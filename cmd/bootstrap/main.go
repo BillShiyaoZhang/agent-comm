@@ -11,12 +11,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
-	"github.com/nousresearch/hermes-agent/agent-comm/dht"
-	"github.com/nousresearch/hermes-agent/agent-comm/libp2p"
-	"github.com/nousresearch/hermes-agent/agent-comm/mq"
-	"github.com/nousresearch/hermes-agent/agent-comm/registry"
-	"github.com/nousresearch/hermes-agent/agent-comm/wot"
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/dht"
+	"github.com/BillShiyaoZhang/agent-comm/libp2p"
+	"github.com/BillShiyaoZhang/agent-comm/mq"
+	"github.com/BillShiyaoZhang/agent-comm/registry"
+	"github.com/BillShiyaoZhang/agent-comm/wot"
 )
 
 func main() {
@@ -93,7 +93,7 @@ func main() {
 	fmt.Println()
 
 	// Step 4: Start URN registry server
-	regServer := registry.NewServer(h)
+	regServer := registry.NewServer(h, registry.NewInMemoryStore())
 	regServer.Register()
 	regServer.HandleRegister(urn, h.ID(), h.Addrs(), keys.X25519PK)
 	fmt.Printf("Registry server started on %s\n", registry.ProtoID)
@@ -105,7 +105,12 @@ func main() {
 	if dbPath == "" {
 		dbPath = "/tmp/relay_mq.db"
 	}
-	mqServer, err := mq.NewServer(h, dbPath)
+	sqliteStore, err := mq.NewSQLiteStore(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create MQ sqlite store: %v\n", err)
+		os.Exit(1)
+	}
+	mqServer, err := mq.NewServer(h, sqliteStore)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create MQ server: %v\n", err)
 		os.Exit(1)

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package proto;
 
-option go_package = "github.com/nousresearch/hermes-agent/agent-comm/proto";
+option go_package = "github.com/BillShiyaoZhang/agent-comm/proto";
 
 import "proto/envelope.proto";
 

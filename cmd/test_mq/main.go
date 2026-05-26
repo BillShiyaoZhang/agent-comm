@@ -11,13 +11,13 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
-	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
-	"github.com/nousresearch/hermes-agent/agent-comm/dht"
-	"github.com/nousresearch/hermes-agent/agent-comm/libp2p"
-	"github.com/nousresearch/hermes-agent/agent-comm/mq"
-	"github.com/nousresearch/hermes-agent/agent-comm/proto"
-	"github.com/nousresearch/hermes-agent/agent-comm/registry"
-	"github.com/nousresearch/hermes-agent/agent-comm/session"
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/dht"
+	"github.com/BillShiyaoZhang/agent-comm/libp2p"
+	"github.com/BillShiyaoZhang/agent-comm/mq"
+	"github.com/BillShiyaoZhang/agent-comm/proto"
+	"github.com/BillShiyaoZhang/agent-comm/registry"
+	"github.com/BillShiyaoZhang/agent-comm/session"
 	goproto "google.golang.org/protobuf/proto"
 )
 
@@ -49,11 +49,12 @@ func main() {
 	defer relayDHT.Close()
 	dht.Bootstrap(ctx, relayDHT)
 
-	regServer := registry.NewServer(relayHost)
+	regServer := registry.NewServer(relayHost, registry.NewInMemoryStore())
 	regServer.Register()
 	regServer.HandleRegister(relayURN, relayHost.ID(), relayHost.Addrs(), relayKeys.X25519PK)
 
-	mqServer, _ := mq.NewServer(relayHost, "/tmp/mq_relay_db")
+	sqliteStore, _ := mq.NewSQLiteStore("/tmp/mq_relay_db")
+	mqServer, _ := mq.NewServer(relayHost, sqliteStore)
 	defer mqServer.Close()
 
 	fmt.Printf("Relay: URN=%s PeerID=%s\n", relayURN, relayHost.ID())

@@ -11,7 +11,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/multiformats/go-multiaddr"
-	agentpb "github.com/nousresearch/hermes-agent/agent-comm/proto"
+	agentpb "github.com/BillShiyaoZhang/agent-comm/proto"
 	goproto "google.golang.org/protobuf/proto"
 )
 
@@ -19,20 +19,99 @@ const ProtoID = "/hermes/agent-comm/registry/1.0.0"
 
 // RegistryEntry holds the full registration info for a URN.
 type RegistryEntry struct {
-	Info        peer.AddrInfo
+	Info         peer.AddrInfo
 	X25519PubKey []byte // X25519 public key for ECIES
+}
+
+// Store defines the registry database backend interface.
+type Store interface {
+	Register(urn, peerID string, addrs []string, x25519PubKey []byte) (bool, string)
+	Resolve(urn string) (peerID string, addrs []string, x25519PubKey []byte, found bool)
+}
+
+// InMemoryStore is the default in-memory registry database.
+type InMemoryStore struct {
+	mu sync.RWMutex
+	账册 map[string]RegistryEntry
+}
+
+// NewInMemoryStore creates a new InMemoryStore.
+func NewInMemoryStore() *InMemoryStore {
+	return &InMemoryStore{账册: make(map[string]RegistryEntry)}
+}
+
+// Register adds or updates a registration entry.
+func (s *InMemoryStore) Register(urn, peerID string, addrs []string, x25519PubKey []byte) (bool, string) {
+	if urn == "" || peerID == "" {
+		return false, "urn and peer_id are required"
+	}
+	pid, err := peer.Decode(peerID)
+	if err != nil {
+		return false, fmt.Sprintf("invalid peer_id: %v", err)
+	}
+	var maddrs []multiaddr.Multiaddr
+	for _, a := range addrs {
+		m, err := multiaddr.NewMultiaddr(a)
+		if err != nil {
+			continue
+		}
+		maddrs = append(maddrs, m)
+	}
+
+	s.mu.Lock()
+	s.账册[urn] = RegistryEntry{
+		Info:         peer.AddrInfo{ID: pid, Addrs: maddrs},
+		X25519PubKey: x25519PubKey,
+	}
+	s.mu.Unlock()
+	return true, ""
+}
+
+// Resolve looks up the entry for a URN.
+func (s *InMemoryStore) Resolve(urn string) (string, []string, []byte, bool) {
+	s.mu.RLock()
+	entry, ok := s.账册[urn]
+	s.mu.RUnlock()
+	if !ok {
+		return "", nil, nil, false
+	}
+	addrs := make([]string, len(entry.Info.Addrs))
+	for i, a := range entry.Info.Addrs {
+		addrs[i] = a.String()
+	}
+	return entry.Info.ID.String(), addrs, entry.X25519PubKey, true
+}
+
+// ListURNs returns all registered URNs.
+func (s *InMemoryStore) ListURNs() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	urns := make([]string, 0, len(s.账册))
+	for urn := range s.账册 {
+		urns = append(urns, urn)
+	}
+	return urns
+}
+
+// HandleRegister registers an entry directly with peer types.
+func (s *InMemoryStore) HandleRegister(urn string, pid peer.ID, addrs []multiaddr.Multiaddr, x25519PubKey []byte) {
+	s.mu.Lock()
+	s.账册[urn] = RegistryEntry{
+		Info:         peer.AddrInfo{ID: pid, Addrs: addrs},
+		X25519PubKey: x25519PubKey,
+	}
+	s.mu.Unlock()
 }
 
 // Server handles URN registration and resolution via libp2p streams.
 type Server struct {
 	host  host.Host
-	mu    sync.RWMutex
-	账册 map[string]RegistryEntry
+	store Store
 }
 
-// NewServer creates a registry server attached to the given host.
-func NewServer(h host.Host) *Server {
-	return &Server{host: h, 账册: make(map[string]RegistryEntry)}
+// NewServer creates a registry server attached to the given host and store.
+func NewServer(h host.Host, store Store) *Server {
+	return &Server{host: h, store: store}
 }
 
 // HandleStream services a registry request over a libp2p stream.
@@ -73,64 +152,34 @@ func (s *Server) HandleStream(stream network.Stream) {
 }
 
 func (s *Server) handleRegister(r *agentpb.RegisterRequest) (bool, string) {
-	if r.Urn == "" || r.PeerId == "" {
-		return false, "urn and peer_id are required"
-	}
-	pid, err := peer.Decode(r.PeerId)
-	if err != nil {
-		return false, fmt.Sprintf("invalid peer_id: %v", err)
-	}
-	var addrs []multiaddr.Multiaddr
-	for _, a := range r.Addrs {
-		m, err := multiaddr.NewMultiaddr(a)
-		if err != nil {
-			continue
-		}
-		addrs = append(addrs, m)
-	}
-
-	s.mu.Lock()
-	s.账册[r.Urn] = RegistryEntry{
-		Info:         peer.AddrInfo{ID: pid, Addrs: addrs},
-		X25519PubKey: r.X25519Pubkey,
-	}
-	s.mu.Unlock()
-	return true, ""
+	return s.store.Register(r.Urn, r.PeerId, r.Addrs, r.X25519Pubkey)
 }
 
 func (s *Server) handleResolve(r *agentpb.ResolveRequest) (string, []string, []byte, bool) {
-	s.mu.RLock()
-	entry, ok := s.账册[r.Urn]
-	s.mu.RUnlock()
-	if !ok {
-		return "", nil, nil, false
-	}
-	addrs := make([]string, len(entry.Info.Addrs))
-	for i, a := range entry.Info.Addrs {
-		addrs[i] = a.String()
-	}
-	return entry.Info.ID.String(), addrs, entry.X25519PubKey, true
+	return s.store.Resolve(r.Urn)
 }
 
-// ListURNs returns all registered URNs.
+// ListURNs returns all registered URNs from the underlying store.
 func (s *Server) ListURNs() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	urns := make([]string, 0, len(s.账册))
-	for urn := range s.账册 {
-		urns = append(urns, urn)
+	if lister, ok := s.store.(interface{ ListURNs() []string }); ok {
+		return lister.ListURNs()
 	}
-	return urns
+	return nil
 }
 
-// HandleRegister registers a URN -> PeerID/addrs mapping locally (used by the bootstrap for its own entry).
+// HandleRegister registers a URN -> PeerID/addrs mapping locally.
 func (s *Server) HandleRegister(urn string, pid peer.ID, addrs []multiaddr.Multiaddr, x25519PubKey []byte) {
-	s.mu.Lock()
-	s.账册[urn] = RegistryEntry{
-		Info:         peer.AddrInfo{ID: pid, Addrs: addrs},
-		X25519PubKey: x25519PubKey,
+	if regger, ok := s.store.(interface {
+		HandleRegister(urn string, pid peer.ID, addrs []multiaddr.Multiaddr, x25519PubKey []byte)
+	}); ok {
+		regger.HandleRegister(urn, pid, addrs, x25519PubKey)
+	} else {
+		addrsStrs := make([]string, len(addrs))
+		for i, a := range addrs {
+			addrsStrs[i] = a.String()
+		}
+		s.store.Register(urn, pid.String(), addrsStrs, x25519PubKey)
 	}
-	s.mu.Unlock()
 }
 
 // Register sets the stream handler on the host.

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nousresearch/hermes-agent/agent-comm/dr"
+	"github.com/BillShiyaoZhang/agent-comm/dr"
 )
 
 func main() {

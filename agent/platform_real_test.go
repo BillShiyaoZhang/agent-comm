@@ -9,8 +9,8 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
-	"github.com/nousresearch/hermes-agent/agent-comm/contacts"
-	pb "github.com/nousresearch/hermes-agent/agent-comm/proto"
+	"github.com/BillShiyaoZhang/agent-comm/contacts"
+	pb "github.com/BillShiyaoZhang/agent-comm/proto"
 	goproto "google.golang.org/protobuf/proto"
 )
 

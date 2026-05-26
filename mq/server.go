@@ -13,22 +13,27 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/nousresearch/hermes-agent/agent-comm/proto"
+	"github.com/BillShiyaoZhang/agent-comm/proto"
 	goproto "google.golang.org/protobuf/proto"
 	_ "modernc.org/sqlite"
 )
 
 const ProtoID = "/hermes/agent-comm/mq/1.0.0"
 
-// Server implements the relay-side MQ storage service.
-// It persists encrypted message blobs in SQLite, keyed by recipient URN.
-type Server struct {
-	host host.Host
-	db   *sql.DB
+// Store defines the message queue database backend interface.
+type Store interface {
+	StoreEnvelope(ctx context.Context, recipientURN string, env *proto.EncryptedEnvelope, expiryUnix int64) (string, error)
+	Retrieve(ctx context.Context, recipientURN string) ([]*proto.EncryptedEnvelope, error)
+	Ack(ctx context.Context, messageIDs []string) (int, error)
 }
 
-// NewServer creates a new MQ relay server.
-func NewServer(h host.Host, dbPath string) (*Server, error) {
+// SQLiteStore is an SQLite-backed implementation of Store.
+type SQLiteStore struct {
+	db *sql.DB
+}
+
+// NewSQLiteStore opens (or creates) the MQ database.
+func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -40,13 +45,136 @@ func NewServer(h host.Host, dbPath string) (*Server, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 
-	s := &Server{host: h, db: db}
-
-	// Register stream handler
-	h.SetStreamHandler(ProtoID, s.handleStream)
+	s := &SQLiteStore{db: db}
 
 	// Start background expiry cleanup
 	go s.cleanupLoop()
+
+	return s, nil
+}
+
+// Close closes the database connection.
+func (s *SQLiteStore) Close() error {
+	return s.db.Close()
+}
+
+func (s *SQLiteStore) StoreEnvelope(ctx context.Context, recipientURN string, env *proto.EncryptedEnvelope, expiryUnix int64) (string, error) {
+	if recipientURN == "" {
+		return "", fmt.Errorf("recipient_urn is required")
+	}
+	if env == nil {
+		return "", fmt.Errorf("payload is required")
+	}
+
+	// Use message_id from envelope if set, otherwise generate
+	msgID := env.MessageId
+	if msgID == "" {
+		// Generate a message ID
+		msgID = fmt.Sprintf("msg-%d-%d", time.Now().UnixNano(), time.Now().UnixNano()%10000)
+	}
+
+	expiry := expiryUnix
+	if expiry == 0 {
+		// Default 7-day TTL
+		expiry = time.Now().Add(7 * 24 * time.Hour).Unix()
+	}
+
+	payloadBytes, err := goproto.Marshal(env)
+	if err != nil {
+		return "", fmt.Errorf("marshal payload: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx,
+		"INSERT INTO messages (id, recipient, payload, expiry, stored_at) VALUES (?, ?, ?, ?, ?)",
+		msgID, recipientURN, payloadBytes, expiry, time.Now().Unix(),
+	)
+	if err != nil {
+		return "", fmt.Errorf("insert: %w", err)
+	}
+
+	return msgID, nil
+}
+
+func (s *SQLiteStore) Retrieve(ctx context.Context, recipientURN string) ([]*proto.EncryptedEnvelope, error) {
+	if recipientURN == "" {
+		return nil, fmt.Errorf("recipient_urn is required")
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT id, payload FROM messages WHERE recipient = ? AND (expiry = 0 OR expiry > ?)",
+		recipientURN, time.Now().Unix(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	var envelopes []*proto.EncryptedEnvelope
+	for rows.Next() {
+		var id string
+		var payload []byte
+		if err := rows.Scan(&id, &payload); err != nil {
+			continue
+		}
+		var env proto.EncryptedEnvelope
+		if err := goproto.Unmarshal(payload, &env); err != nil {
+			continue // corrupted entry, skip
+		}
+		envelopes = append(envelopes, &env)
+	}
+
+	// If nothing found, return empty but ok
+	if envelopes == nil {
+		envelopes = []*proto.EncryptedEnvelope{}
+	}
+
+	return envelopes, nil
+}
+
+func (s *SQLiteStore) Ack(ctx context.Context, messageIDs []string) (int, error) {
+	if len(messageIDs) == 0 {
+		return 0, fmt.Errorf("message_ids required")
+	}
+
+	// Build query: DELETE FROM messages WHERE id IN (?,?,...)
+	query := "DELETE FROM messages WHERE id IN (?" + makeString(',', len(messageIDs)-1) + ")"
+	args := make([]interface{}, len(messageIDs))
+	for i, id := range messageIDs {
+		args[i] = id
+	}
+
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("delete: %w", err)
+	}
+
+	deleted, _ := result.RowsAffected()
+	return int(deleted), nil
+}
+
+func (s *SQLiteStore) cleanupLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if _, err := s.db.Exec("DELETE FROM messages WHERE expiry > 0 AND expiry < ?", time.Now().Unix()); err != nil {
+			log.Printf("[mq] cleanup error: %v", err)
+		}
+	}
+}
+
+// Server implements the relay-side MQ storage service.
+type Server struct {
+	host  host.Host
+	store Store
+}
+
+// NewServer creates a new MQ relay server.
+func NewServer(h host.Host, store Store) (*Server, error) {
+	s := &Server{host: h, store: store}
+
+	// Register stream handler
+	h.SetStreamHandler(ProtoID, s.handleStream)
 
 	return s, nil
 }
@@ -63,9 +191,12 @@ CREATE INDEX IF NOT EXISTS idx_recipient ON messages(recipient);
 CREATE INDEX IF NOT EXISTS idx_expiry ON messages(expiry);
 `
 
-// Close closes the server.
+// Close closes the server (noop if store closed independently).
 func (s *Server) Close() error {
-	return s.db.Close()
+	if closer, ok := s.store.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 // handleStream services a single MQ request/response exchange.
@@ -122,30 +253,9 @@ func (s *Server) handleStore(ctx context.Context, req *proto.StoreRequest) *prot
 		return errorResp("payload is required")
 	}
 
-	// Use message_id from envelope if set, otherwise generate
-	msgID := req.Payload.MessageId
-	if msgID == "" {
-		// Generate a message ID
-		msgID = fmt.Sprintf("msg-%d-%d", time.Now().UnixNano(), time.Now().UnixNano()%10000)
-	}
-
-	expiry := req.ExpiryUnix
-	if expiry == 0 {
-		// Default 7-day TTL
-		expiry = time.Now().Add(7 * 24 * time.Hour).Unix()
-	}
-
-	payloadBytes, err := goproto.Marshal(req.Payload)
+	msgID, err := s.store.StoreEnvelope(ctx, req.RecipientUrn, req.Payload, req.ExpiryUnix)
 	if err != nil {
-		return errorResp(fmt.Sprintf("marshal payload: %v", err))
-	}
-
-	_, err = s.db.ExecContext(ctx,
-		"INSERT INTO messages (id, recipient, payload, expiry, stored_at) VALUES (?, ?, ?, ?, ?)",
-		msgID, req.RecipientUrn, payloadBytes, expiry, time.Now().Unix(),
-	)
-	if err != nil {
-		return errorResp(fmt.Sprintf("insert: %v", err))
+		return errorResp(err.Error())
 	}
 
 	return &proto.MQResponse{
@@ -158,32 +268,9 @@ func (s *Server) handleRetrieve(ctx context.Context, req *proto.RetrieveRequest)
 		return errorResp("recipient_urn is required")
 	}
 
-	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, payload FROM messages WHERE recipient = ? AND (expiry = 0 OR expiry > ?)",
-		req.RecipientUrn, time.Now().Unix(),
-	)
+	envelopes, err := s.store.Retrieve(ctx, req.RecipientUrn)
 	if err != nil {
-		return errorResp(fmt.Sprintf("query: %v", err))
-	}
-	defer rows.Close()
-
-	var envelopes []*proto.EncryptedEnvelope
-	for rows.Next() {
-		var id string
-		var payload []byte
-		if err := rows.Scan(&id, &payload); err != nil {
-			continue
-		}
-		var env proto.EncryptedEnvelope
-		if err := goproto.Unmarshal(payload, &env); err != nil {
-			continue // corrupted entry, skip
-		}
-		envelopes = append(envelopes, &env)
-	}
-
-	// If nothing found, return empty but ok
-	if envelopes == nil {
-		envelopes = []*proto.EncryptedEnvelope{}
+		return errorResp(err.Error())
 	}
 
 	return &proto.MQResponse{
@@ -196,32 +283,13 @@ func (s *Server) handleAck(ctx context.Context, req *proto.AckRequest) *proto.MQ
 		return errorResp("message_ids required")
 	}
 
-	// Build query: DELETE FROM messages WHERE id IN (?,?,...)
-	query := "DELETE FROM messages WHERE id IN (?" + makeString(',', len(req.MessageIds)-1) + ")"
-	args := make([]interface{}, len(req.MessageIds))
-	for i, id := range req.MessageIds {
-		args[i] = id
-	}
-
-	result, err := s.db.ExecContext(ctx, query, args...)
+	deleted, err := s.store.Ack(ctx, req.MessageIds)
 	if err != nil {
-		return errorResp(fmt.Sprintf("delete: %v", err))
+		return errorResp(err.Error())
 	}
 
-	deleted, _ := result.RowsAffected()
 	return &proto.MQResponse{
 		Op: &proto.MQResponse_Ack{Ack: &proto.AckResponse{Ok: true, DeletedCount: int32(deleted)}},
-	}
-}
-
-func (s *Server) cleanupLoop() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		if _, err := s.db.Exec("DELETE FROM messages WHERE expiry > 0 AND expiry < ?", time.Now().Unix()); err != nil {
-			log.Printf("[mq] cleanup error: %v", err)
-		}
 	}
 }
 

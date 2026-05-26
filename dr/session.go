@@ -16,9 +16,9 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
-	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
-	"github.com/nousresearch/hermes-agent/agent-comm/proto"
-	"github.com/nousresearch/hermes-agent/agent-comm/session"
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/proto"
+	"github.com/BillShiyaoZhang/agent-comm/session"
 	"golang.org/x/crypto/curve25519"
 	goproto "google.golang.org/protobuf/proto"
 )

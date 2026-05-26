@@ -12,11 +12,11 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
-	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
-	"github.com/nousresearch/hermes-agent/agent-comm/dr"
-	"github.com/nousresearch/hermes-agent/agent-comm/libp2p"
-	"github.com/nousresearch/hermes-agent/agent-comm/registry"
-	"github.com/nousresearch/hermes-agent/agent-comm/session"
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/dr"
+	"github.com/BillShiyaoZhang/agent-comm/libp2p"
+	"github.com/BillShiyaoZhang/agent-comm/registry"
+	"github.com/BillShiyaoZhang/agent-comm/session"
 )
 
 type drSessionEntry struct {
@@ -54,7 +54,7 @@ func main() {
 	fmt.Printf("Node A listening on: %v\n", hostA.Addrs())
 
 	// Registry server on A
-	regA := registry.NewServer(hostA)
+	regA := registry.NewServer(hostA, registry.NewInMemoryStore())
 	regA.Register()
 	regA.HandleRegister(keysA.Ed25519.URN(), hostA.ID(), hostA.Addrs(), keysA.X25519PK)
 	fmt.Println("Node A registry server ready")

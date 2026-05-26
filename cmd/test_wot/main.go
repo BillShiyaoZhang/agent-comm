@@ -8,10 +8,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/nousresearch/hermes-agent/agent-comm/crypto"
-	"github.com/nousresearch/hermes-agent/agent-comm/libp2p"
-	"github.com/nousresearch/hermes-agent/agent-comm/proto"
-	"github.com/nousresearch/hermes-agent/agent-comm/wot"
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/libp2p"
+	"github.com/BillShiyaoZhang/agent-comm/proto"
+	"github.com/BillShiyaoZhang/agent-comm/wot"
 )
 
 func main() {

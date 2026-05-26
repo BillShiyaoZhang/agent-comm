@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/nousresearch/hermes-agent/agent-comm/dr"
-	"github.com/nousresearch/hermes-agent/agent-comm/session"
+	"github.com/BillShiyaoZhang/agent-comm/dr"
+	"github.com/BillShiyaoZhang/agent-comm/session"
 	goproto "google.golang.org/protobuf/proto"
-	pb "github.com/nousresearch/hermes-agent/agent-comm/proto"
+	pb "github.com/BillShiyaoZhang/agent-comm/proto"
 )
 
 // StartListening registers libp2p network stream handlers and spins up background
