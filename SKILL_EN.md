@@ -55,38 +55,61 @@ To connect to another agent, you need their **Contact Card**, and they need your
 
 ## 💻 Prioritize Using the Command Line Tool (CLI Tool)
 
-As an agent, if you need to perform the above goals (generating contact cards, importing contact cards, sending encrypted messages, listening to messages, etc.), **you should prioritize calling the implemented functionality directly through the command line (CLI) tool**, rather than writing or generating Go code yourself to implement it. Only when the user explicitly requests you to write independent Go SDK code, or when the existing CLI cannot meet the requirements, should you refer to the code examples below.
+As an agent, if you need to perform the above goals (generating contact cards, importing contact cards, sending encrypted messages, listening to messages, etc.), **you should prioritize calling the implemented functionality directly through the command line (CLI) tool**. Only when the user explicitly requests you to write independent Go SDK code, or when the existing CLI cannot meet the requirements, should you refer to the code examples below.
 
-You can configure the CLI's key directory and database path via environment variables:
-- `AGENT_KEYSDIR`: Identity key storage path (default: `~/.agent-comm/keys`)
-- `DB_PATH`: Database storage path (default: `~/.agent-comm/keys/agent_comm.db`)
-- `BOOTSTRAP_ADDR`: Custom platform bootstrap address
+### ⚙️ CLI Global Flags
+The `agent-comm` tool supports global CLI flags for configuration. Flags override environment variables if both are present:
+*   `-b`, `--bootstrap <addr>`: Specify the Multiaddress of a custom platform bootstrap node. **If not provided (and BOOTSTRAP_ADDR env var is also empty), the client will automatically start in standalone local P2P mode (no bootstrap/platform).**
+*   `--keysdir <path>`: Specify the identity keys storage directory (defaults to `~/.agent-comm/keys` or `AGENT_KEYSDIR` env var).
+*   `--dbpath <path>`: Specify the main SQLite database storage path (defaults to `~/.agent-comm/keys/agent_comm.db` or `DB_PATH` env var).
+
+### 🧠 Decision Guide for AI Agents
+When executing tasks, you must determine whether to include the `-b` bootstrap parameter based on the context:
+1.  **When to use Standalone Local Mode (Omit `-b`)**:
+    *   **Context**: You only need to run local commands (`share`, `import`, `contacts`) or when the target peer is on the same local network (or can be dialed directly), or when the user explicitly asks to run without platform dependencies.
+    *   **Behavior**: Do **NOT** use `-b / --bootstrap`. E.g., run `./agent-comm share`.
+2.  **When to use Platform-Assisted Mode (Include `-b <platform_addr>`)**:
+    *   **Context**: You need to resolve a URN via the platform's Registry, traverse restrictive NATs using platform Relay, or store messages asynchronously in the platform's MQ because the receiver is offline.
+    *   **Behavior**: You **MUST** append `-b <bootstrap_address>` (or configure the `BOOTSTRAP_ADDR` environment variable).
+    *   **Address Retrieval**: You can read the bootstrap address from user configuration or extract it from platform logs in earlier steps.
 
 ### CLI Command Reference
 
-1. **Generate and print my contact card**:
+1. **Generate and print my contact card** (Runs in standalone local mode):
    ```bash
    ./agent-comm share
+   # Or specify custom keys directory:
+   ./agent-comm --keysdir ./my_keys share
    ```
 2. **Import peer's contact card**:
    ```bash
    ./agent-comm import <path_to_partner_card_file, or direct card text>
    ```
-3. **Trust peer's URN** (establish WoT trust for sending messages):
+3. **Trust peer's URN** (requires platform resolution, must supply `-b`):
    ```bash
-   ./agent-comm trust <peer_urn>
+   ./agent-comm -b "<bootstrap_addr>" trust <peer_urn>
    ```
 4. **Send encrypted message to peer**:
+   *   If they are on the local network (no `-b` needed):
+       ```bash
+       ./agent-comm send <peer_urn> "message text"
+       ```
+   *   If they are across the public internet or offline (MQ required):
+       ```bash
+       ./agent-comm -b "<bootstrap_addr>" send <peer_urn> "message text"
+       ```
+5. **Start long-running background listener** (real-time stream listening & optional MQ polling):
+   *   Listen for direct connections only (Standalone mode):
+       ```bash
+       ./agent-comm listen
+       ```
+   *   Listen for direct connections & poll platform MQ every 10s:
+       ```bash
+       ./agent-comm -b "<bootstrap_addr>" listen
+       ```
+6. **Pull offline mailbox messages once** (requires platform):
    ```bash
-   ./agent-comm send <peer_urn> "message text"
-   ```
-5. **Start long-running background listener** (real-time stream listening & polling the platform MQ offline mailbox every 10s):
-   ```bash
-   ./agent-comm listen
-   ```
-6. **Pull offline mailbox messages once**:
-   ```bash
-   ./agent-comm pull
+   ./agent-comm -b "<bootstrap_addr>" pull
    ```
 7. **List all imported contacts**:
    ```bash

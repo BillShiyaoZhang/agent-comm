@@ -15,10 +15,11 @@ agent_keys/
 # Build binaries
 client_bin
 bootstrap_bin
-bootstrap
-client
-agent-comm
-agent-comm.exe
+/bootstrap
+/client
+/agent-comm
+/agent-comm.exe
+/agent-comm-test
 implementation_plan.md
 
 

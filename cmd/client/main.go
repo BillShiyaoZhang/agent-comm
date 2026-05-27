@@ -20,21 +20,65 @@ import (
 	goproto "google.golang.org/protobuf/proto"
 )
 
-// Default Configuration values
-const (
-	DefaultPlatformAddr = "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f"
-)
-
 func main() {
+	ctx := context.Background()
+
+	// 1. Parse global configuration flags from os.Args
+	var customBootstrap string
+	var customKeysDir string
+	var customDBPath string
+
+	newArgs := []string{os.Args[0]}
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		if arg == "--bootstrap" || arg == "-b" {
+			if i+1 < len(os.Args) {
+				customBootstrap = os.Args[i+1]
+				i++
+			} else {
+				fmt.Fprintf(os.Stderr, "❌ Error: --bootstrap / -b requires an argument\n")
+				os.Exit(1)
+			}
+		} else if strings.HasPrefix(arg, "--bootstrap=") {
+			customBootstrap = strings.TrimPrefix(arg, "--bootstrap=")
+		} else if strings.HasPrefix(arg, "-b=") {
+			customBootstrap = strings.TrimPrefix(arg, "-b=")
+		} else if arg == "--keysdir" {
+			if i+1 < len(os.Args) {
+				customKeysDir = os.Args[i+1]
+				i++
+			} else {
+				fmt.Fprintf(os.Stderr, "❌ Error: --keysdir requires an argument\n")
+				os.Exit(1)
+			}
+		} else if strings.HasPrefix(arg, "--keysdir=") {
+			customKeysDir = strings.TrimPrefix(arg, "--keysdir=")
+		} else if arg == "--dbpath" {
+			if i+1 < len(os.Args) {
+				customDBPath = os.Args[i+1]
+				i++
+			} else {
+				fmt.Fprintf(os.Stderr, "❌ Error: --dbpath requires an argument\n")
+				os.Exit(1)
+			}
+		} else if strings.HasPrefix(arg, "--dbpath=") {
+			customDBPath = strings.TrimPrefix(arg, "--dbpath=")
+		} else {
+			newArgs = append(newArgs, arg)
+		}
+	}
+	os.Args = newArgs
+
 	if len(os.Args) > 1 && (os.Args[1] == "help" || os.Args[1] == "--help" || os.Args[1] == "-h") {
 		printUsage()
 		return
 	}
 
-	ctx := context.Background()
-
-	// 1. Get configuration from environment variables
+	// 2. Resolve final configurations (CLI flags override environment variables)
 	keysDir := os.Getenv("AGENT_KEYSDIR")
+	if customKeysDir != "" {
+		keysDir = customKeysDir
+	}
 	if keysDir == "" {
 		home, err := os.UserHomeDir()
 		if err == nil {
@@ -45,6 +89,9 @@ func main() {
 	}
 
 	dbPath := os.Getenv("DB_PATH")
+	if customDBPath != "" {
+		dbPath = customDBPath
+	}
 	if dbPath == "" {
 		dbPath = filepath.Join(keysDir, "agent_comm.db")
 	}
@@ -55,22 +102,30 @@ func main() {
 	}
 
 	bootstrapAddr := os.Getenv("BOOTSTRAP_ADDR")
-	if bootstrapAddr == "" {
-		bootstrapAddr = DefaultPlatformAddr
+	if customBootstrap != "" {
+		bootstrapAddr = customBootstrap
 	}
 
-	// 2. Parse bootstrap address info
-	bootstrapInfo, err := peer.AddrInfoFromString(bootstrapAddr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to parse bootstrap address %q: %v\n", bootstrapAddr, err)
-		os.Exit(1)
+	var bootstrapNodes []peer.AddrInfo
+	var bootstrapInfo *peer.AddrInfo
+
+	if bootstrapAddr != "" {
+		var err error
+		bootstrapInfo, err = peer.AddrInfoFromString(bootstrapAddr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to parse bootstrap address %q: %v\n", bootstrapAddr, err)
+			os.Exit(1)
+		}
+		bootstrapNodes = []peer.AddrInfo{*bootstrapInfo}
+	} else {
+		fmt.Println("ℹ️ Running in standalone local mode (no bootstrap/platform configured).")
 	}
 
 	// 3. Initialize High-level Agent
 	a, err := agent.InitIdentity(ctx, agent.Config{
 		KeysDir:        keysDir,
 		DBPath:         dbPath,
-		BootstrapNodes: []peer.AddrInfo{*bootstrapInfo},
+		BootstrapNodes: bootstrapNodes,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to init agent: %v\n", err)
@@ -78,10 +133,12 @@ func main() {
 	}
 	defer a.Close()
 
-	// Make sure we connect to the bootstrap/platform node
-	a.Host.Peerstore().AddAddrs(bootstrapInfo.ID, bootstrapInfo.Addrs, peerstore.PermanentAddrTTL)
-	if err := a.Host.Connect(ctx, *bootstrapInfo); err != nil {
-		fmt.Printf("⚠️ Warning: Failed to connect to platform bootstrap node: %v\n", err)
+	// Make sure we connect to the bootstrap/platform node if configured
+	if bootstrapInfo != nil {
+		a.Host.Peerstore().AddAddrs(bootstrapInfo.ID, bootstrapInfo.Addrs, peerstore.PermanentAddrTTL)
+		if err := a.Host.Connect(ctx, *bootstrapInfo); err != nil {
+			fmt.Printf("⚠️ Warning: Failed to connect to platform bootstrap node: %v\n", err)
+		}
 	}
 
 	// 4. Initialize WoT Store & Resolver
@@ -172,6 +229,10 @@ func main() {
 		fmt.Println("✅ Message sent successfully (delivered or blind-stored on Platform MQ).")
 
 	case "pull":
+		if bootstrapInfo == nil {
+			fmt.Fprintln(os.Stderr, "❌ Error: 'pull' command requires a bootstrap platform address (use -b or BOOTSTRAP_ADDR).")
+			os.Exit(1)
+		}
 		pullOfflineMessages(ctx, a, *bootstrapInfo)
 
 	case "listen":
@@ -179,6 +240,11 @@ func main() {
 		fmt.Printf("📡 Starting Daemon Listener Mode\n")
 		fmt.Printf("My URN: %s\n", a.Keys.Ed25519.URN())
 		fmt.Printf("My PeerID: %s\n", a.Host.ID())
+		if bootstrapInfo != nil {
+			fmt.Printf("Bootstrap Platform: %s\n", bootstrapAddr)
+		} else {
+			fmt.Printf("Bootstrap Platform: NONE (Standalone Local Mode)\n")
+		}
 		fmt.Printf("==================================================\n\n")
 
 		// Register standard message callback
@@ -198,12 +264,20 @@ func main() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
-		fmt.Println("Listening for direct connections and polling platform MQ (every 10s)... Press Ctrl+C to exit.")
+		if bootstrapInfo != nil {
+			fmt.Println("Listening for direct connections and polling platform MQ (every 10s)... Press Ctrl+C to exit.")
+		} else {
+			fmt.Println("Listening for direct connections (standalone local P2P mode)... Press Ctrl+C to exit.")
+		}
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if bootstrapInfo == nil {
+					continue
+				}
 				// Silent MQ poll and decryption (handled automatically by a.OnMessage,
 				// but let's trigger manual pull here to print updates directly to terminal)
 				envs, err := a.MQClient.Retrieve(ctx, *bootstrapInfo, a.Keys.Ed25519.URN())
@@ -252,6 +326,10 @@ func main() {
 			os.Exit(1)
 		}
 		targetURN := os.Args[2]
+		if bootstrapInfo == nil {
+			fmt.Fprintln(os.Stderr, "❌ Error: 'trust' command requires a bootstrap platform address for resolution (use -b or BOOTSTRAP_ADDR).")
+			os.Exit(1)
+		}
 		trustPeer(ctx, a, wotStore, bootstrapInfo, targetURN)
 
 	case "untrust":
@@ -272,6 +350,10 @@ func main() {
 			os.Exit(1)
 		}
 		subjectURN := os.Args[2]
+		if bootstrapInfo == nil {
+			fmt.Fprintln(os.Stderr, "❌ Error: 'claim' command requires a bootstrap platform address for resolution (use -b or BOOTSTRAP_ADDR).")
+			os.Exit(1)
+		}
 		issueClaim(ctx, a, wotStore, bootstrapInfo, subjectURN)
 
 	case "trustpath":
@@ -294,23 +376,28 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("Usage: agent-comm <command> [arguments]")
+	fmt.Println("Usage: agent-comm [global flags] <command> [arguments]")
+	fmt.Println()
+	fmt.Println("Global Flags (Optional):")
+	fmt.Println("  -b, --bootstrap <addr>         - Platform Bootstrap Multiaddress (e.g. /dns4/.../p2p/...)")
+	fmt.Println("  --keysdir <path>               - Identity keys storage path")
+	fmt.Println("  --dbpath <path>                - Main SQLite storage database path")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  share                          - Generate and show my contact card")
 	fmt.Println("  import <file_or_text>          - Import contact card from file or raw text")
 	fmt.Println("  send <recipientURN> <message>  - Send an encrypted message (checks WoT trust)")
-	fmt.Println("  pull                           - Pull offline messages once and exit")
+	fmt.Println("  pull                           - Pull offline messages once and exit (requires bootstrap)")
 	fmt.Println("  listen                         - Listen for direct connections and poll MQ continuously")
 	fmt.Println("  contacts                       - List all contacts")
-	fmt.Println("  trust <urn>                    - Mark a peer as directly trusted")
+	fmt.Println("  trust <urn>                    - Mark a peer as directly trusted (requires bootstrap)")
 	fmt.Println("  untrust <urn>                  - Remove trust status")
-	fmt.Println("  claim <subjectURN>             - Issue a TRUSTED WoT claim about a peer")
+	fmt.Println("  claim <subjectURN>             - Issue a TRUSTED WoT claim about a peer (requires bootstrap)")
 	fmt.Println("  trustpath <urn>                - Resolve Web of Trust path to URN")
 	fmt.Println("  interactive                    - Start interactive menu shell")
 	fmt.Println("  help                           - Show this help menu")
 	fmt.Println()
-	fmt.Println("Environment Variables:")
+	fmt.Println("Environment Variables (Optional):")
 	fmt.Println("  BOOTSTRAP_ADDR                 - Platform Bootstrap Multiaddress")
 	fmt.Println("  AGENT_KEYSDIR                  - Identity keys storage path")
 	fmt.Println("  DB_PATH                        - Main SQLite storage database path")
@@ -511,6 +598,10 @@ func runInteractiveLoop(ctx context.Context, a *agent.Agent, wotStore *wot.Store
 				fmt.Println("✅ Message sent successfully.")
 			}
 		case "pull":
+			if bootstrap == nil {
+				fmt.Println("❌ Error: 'pull' requires a bootstrap platform address.")
+				continue
+			}
 			pullOfflineMessages(ctx, a, *bootstrap)
 		case "contacts":
 			list, _ := a.Contacts.List()
@@ -520,6 +611,10 @@ func runInteractiveLoop(ctx context.Context, a *agent.Agent, wotStore *wot.Store
 		case "trust":
 			if len(parts) < 2 {
 				fmt.Println("Usage: trust <urn>")
+				continue
+			}
+			if bootstrap == nil {
+				fmt.Println("❌ Error: 'trust' requires a bootstrap platform address for resolution.")
 				continue
 			}
 			trustPeer(ctx, a, wotStore, bootstrap, parts[1])
@@ -533,6 +628,10 @@ func runInteractiveLoop(ctx context.Context, a *agent.Agent, wotStore *wot.Store
 		case "claim":
 			if len(parts) < 2 {
 				fmt.Println("Usage: claim <subjectURN>")
+				continue
+			}
+			if bootstrap == nil {
+				fmt.Println("❌ Error: 'claim' requires a bootstrap platform address for resolution.")
 				continue
 			}
 			issueClaim(ctx, a, wotStore, bootstrap, parts[1])

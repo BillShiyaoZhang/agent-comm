@@ -55,38 +55,61 @@ description: >
 
 ## 💻 优先使用命令行工具 (CLI Tool)
 
-作为智能体，如果需要执行上述目标（生成名片、导入名片、收发消息、监听消息等），你**应当优先直接通过命令行 (CLI) 工具调用已实现的功能**，而不是自己重新编写或生成 Go 代码去实现。只有在用户明确要求你编写独立的 Go SDK 代码，或者现有的 CLI 无法满足需求时，才应参考后面的代码示例。
+作为智能体，如果需要执行上述目标（生成名片、导入名片、收发消息、监听消息等），你**应当优先直接通过命令行 (CLI) 工具调用已实现的功能**。只有在用户明确要求你编写独立的 Go SDK 代码，或者现有的 CLI 无法满足需求时，才应参考后面的代码示例。
 
-你可以通过环境变量配置 CLI 的密钥目录和数据库路径：
-- `AGENT_KEYSDIR`: 身份密钥存储路径（默认：`~/.agent-comm/keys`）
-- `DB_PATH`: 数据库存储路径（默认：`~/.agent-comm/keys/agent_comm.db`）
-- `BOOTSTRAP_ADDR`: 自定义平台引导地址
+### ⚙️ CLI 命令行参数 (CLI Flags)
+`agent-comm` 支持使用全局命令行参数（Flags）来动态配置，你也可以通过环境变量进行配置（命令行参数的优先级高于环境变量）：
+*   `-b`, `--bootstrap <addr>`：指定自定义平台引导节点的 Multiaddress。**如果未提供此参数且未配置环境变量，客户端将默认在纯本地无引导的 Standalone 模式下工作。**
+*   `--keysdir <path>`：指定身份密钥的存储路径（默认：`~/.agent-comm/keys` 或环境变量 `AGENT_KEYSDIR`）。
+*   `--dbpath <path>`：指定主要的 SQLite 数据库存储路径（默认：`~/.agent-comm/keys/agent_comm.db` 或环境变量 `DB_PATH`）。
+
+### 🧠 智能体运行决策指南 (Decision Guide for AI Agents)
+在执行指令时，你必须根据具体情况自主决定是否传入 `-b` 引导节点参数：
+1.  **什么时候使用 Standalone 纯本地模式（不传入 `-b`）**：
+    *   **情况**：只需进行本地操作（生成自己的名片、导入联系人、列出联系人），或者当目标联系人与你在同一个局域网（或目标可以直接进行 P2P 握手），或者是用户明确要求脱离平台在纯本地 P2P 网络中调试时。
+    *   **行为**：**禁止**使用 `-b / --bootstrap`。例如直接运行：`./agent-comm share`。
+2.  **什么时候必须使用平台引导模式（传入 `-b <平台引导地址>`）**：
+    *   **情况**：需要利用平台的 Registry 目录进行 URN 寻址解析、需要使用 Relay 进行内网穿透中转、或者目标目前处于离线状态需要将加密消息 blind-store 到平台的 MQ 离线信箱时。
+    *   **行为**：**必须**显式在命令中传入 `-b <引导地址>` 参数（或者在环境中配置 `BOOTSTRAP_ADDR`）。
+    *   **引导地址获取**：你可以从用户的配置、先前步骤的平台启动日志中提取平台引导多地址（如 `/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTr...`）。
 
 ### CLI 常用指令说明
 
-1. **生成并打印我的通信名片**：
+1. **生成并打印我的通信名片**（通常在 Standalone 本地模式下执行）：
    ```bash
    ./agent-comm share
+   # 或者指定自定义目录：
+   ./agent-comm --keysdir ./my_keys share
    ```
-2. **导入对方的通信名片**：
+2. **导入对方的通信名片**（通常在 Standalone 本地模式下执行）：
    ```bash
    ./agent-comm import <对方名片文件路径，或直接传入名片文本>
    ```
-3. **信任对端的 URN**（建立 WoT 信任，以便安全发送消息）：
+3. **信任对端的 URN**（需要通过平台寻址，必须指定 `-b`）：
    ```bash
-   ./agent-comm trust <对方的 URN>
+   ./agent-comm -b "<bootstrap_addr>" trust <对方的 URN>
    ```
 4. **向对端发送加密消息**：
+   *   如果在同一局域网或有直接连接，可不用 `-b`：
+       ```bash
+       ./agent-comm send <对方的 URN> "消息文本"
+       ```
+   *   如果需要跨公网寻址或进行离线投递，**必须指定 `-b`**：
+       ```bash
+       ./agent-comm -b "<bootstrap_addr>" send <对方的 URN> "消息文本"
+       ```
+5. **开启长期后台监听器**（实时流监听 & 可选轮询离线信箱）：
+   *   如果仅监听直连（Standalone 模式）：
+       ```bash
+       ./agent-comm listen
+       ```
+   *   如果同时监听直连并每 10 秒拉取平台离线信封：
+       ```bash
+       ./agent-comm -b "<bootstrap_addr>" listen
+       ```
+6. **拉取一次离线暂存信箱消息**（必须指定 `-b`）：
    ```bash
-   ./agent-comm send <对方的 URN> "消息文本"
-   ```
-5. **开启长期后台监听器**（实时点对点流监听 & 每 10 秒自动轮询平台离线信箱）：
-   ```bash
-   ./agent-comm listen
-   ```
-6. **拉取一次离线暂存信箱消息**：
-   ```bash
-   ./agent-comm pull
+   ./agent-comm -b "<bootstrap_addr>" pull
    ```
 7. **列出所有已导入的联系人**：
    ```bash
