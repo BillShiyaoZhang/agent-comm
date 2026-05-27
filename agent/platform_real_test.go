@@ -16,7 +16,7 @@ import (
 
 const (
 	RealPlatformDomain = "agent-communication.online"
-	RealPlatformPeerID = "12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f"
+	RealPlatformPeerID = "12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn"
 	RemoteAgentURN     = "urn:hermes:agent:VBYEE9xFV6AiTZQcsvbBEz"
 )
 

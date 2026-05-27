@@ -4,7 +4,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/multiformats/go-multiaddr"
 	goproto "google.golang.org/protobuf/proto"
 )
 
@@ -106,6 +109,18 @@ func main() {
 		bootstrapAddr = customBootstrap
 	}
 
+	if bootstrapAddr != "" {
+		if !strings.Contains(bootstrapAddr, "/p2p/") && !strings.Contains(bootstrapAddr, "/ipfs/") {
+			fmt.Println("ℹ️ Bootstrap address missing PeerID. Resolving dynamically...")
+			resolved, err := resolveBootstrapAddress(ctx, bootstrapAddr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "❌ Failed to resolve PeerID for %q: %v\n", bootstrapAddr, err)
+				os.Exit(1)
+			}
+			bootstrapAddr = resolved
+		}
+	}
+
 	var bootstrapNodes []peer.AddrInfo
 	var bootstrapInfo *peer.AddrInfo
 
@@ -138,6 +153,30 @@ func main() {
 		a.Host.Peerstore().AddAddrs(bootstrapInfo.ID, bootstrapInfo.Addrs, peerstore.PermanentAddrTTL)
 		if err := a.Host.Connect(ctx, *bootstrapInfo); err != nil {
 			fmt.Printf("⚠️ Warning: Failed to connect to platform bootstrap node: %v\n", err)
+			fmt.Println("🔄 Attempting to dynamically resolve latest Bootstrap PeerID from platform...")
+			newAddr, resolveErr := resolveBootstrapAddress(ctx, bootstrapAddr)
+			if resolveErr == nil && newAddr != bootstrapAddr {
+				newInfo, parseErr := peer.AddrInfoFromString(newAddr)
+				if parseErr == nil {
+					fmt.Printf("✅ Resolved updated bootstrap address: %s\n", newAddr)
+					a.Host.Peerstore().AddAddrs(newInfo.ID, newInfo.Addrs, peerstore.PermanentAddrTTL)
+					if retryErr := a.Host.Connect(ctx, *newInfo); retryErr == nil {
+						fmt.Println("✅ Successfully connected to updated platform bootstrap node!")
+						bootstrapInfo = newInfo
+						a.BootstrapNodes = []peer.AddrInfo{*newInfo}
+						// Register self with the new bootstrap registry
+						go func() {
+							_ = a.Registry.Register(*newInfo, a.Keys.Ed25519.URN(), a.Host.Addrs(), a.Keys.X25519PK)
+						}()
+					} else {
+						fmt.Printf("❌ Retry connection to resolved address failed: %v\n", retryErr)
+					}
+				} else {
+					fmt.Printf("❌ Failed to parse resolved bootstrap address: %v\n", parseErr)
+				}
+			} else {
+				fmt.Printf("❌ Dynamic bootstrap resolution failed or address unchanged: %v\n", resolveErr)
+			}
 		}
 	}
 
@@ -645,4 +684,90 @@ func runInteractiveLoop(ctx context.Context, a *agent.Agent, wotStore *wot.Store
 			fmt.Printf("❌ Unknown command: %s\n", cmd)
 		}
 	}
+}
+
+// resolveBootstrapAddress dynamically resolves the PeerID of the platform node.
+// It extracts the host name from the bootstrap address and queries its HTTP API for the PeerID.
+func resolveBootstrapAddress(ctx context.Context, bootstrapAddr string) (string, error) {
+	// Parse multiaddr to extract host/IP
+	ma, err := multiaddr.NewMultiaddr(bootstrapAddr)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse multiaddress: %w", err)
+	}
+
+	var host string
+	multiaddr.ForEach(ma, func(c multiaddr.Component) bool {
+		switch c.Protocol().Code {
+		case multiaddr.P_DNS, multiaddr.P_DNS4, multiaddr.P_DNS6, multiaddr.P_DNSADDR:
+			host = c.Value()
+		case multiaddr.P_IP4, multiaddr.P_IP6:
+			host = c.Value()
+		}
+		return true
+	})
+
+	if host == "" {
+		return "", fmt.Errorf("could not extract host or IP from bootstrap address %q", bootstrapAddr)
+	}
+
+	// Try querying the platform REST API
+	// 1. https://<host>/api/v1/bootstrap (production SSL)
+	// 2. http://<host>/api/v1/bootstrap (production HTTP)
+	// 3. http://<host>:8080/api/v1/bootstrap (default raw port)
+	urls := []string{
+		"https://" + host + "/api/v1/bootstrap",
+		"http://" + host + "/api/v1/bootstrap",
+		"http://" + host + ":8080/api/v1/bootstrap",
+	}
+
+	var resolvedPeerID string
+	var lastErr error
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	for _, url := range urls {
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("HTTP status %d", resp.StatusCode)
+			continue
+		}
+
+		var bRes BootstrapResponse
+		if err := json.NewDecoder(resp.Body).Decode(&bRes); err != nil {
+			lastErr = err
+			continue
+		}
+
+		if bRes.PeerID != "" {
+			resolvedPeerID = bRes.PeerID
+			break
+		}
+	}
+
+	if resolvedPeerID == "" {
+		return "", fmt.Errorf("failed to resolve PeerID via HTTP APIs: %w", lastErr)
+	}
+
+	// Replace or append /p2p/ segment
+	if idx := strings.Index(bootstrapAddr, "/p2p/"); idx != -1 {
+		return bootstrapAddr[:idx] + "/p2p/" + resolvedPeerID, nil
+	}
+	if idx := strings.Index(bootstrapAddr, "/ipfs/"); idx != -1 {
+		return bootstrapAddr[:idx] + "/p2p/" + resolvedPeerID, nil
+	}
+	return bootstrapAddr + "/p2p/" + resolvedPeerID, nil
+}
+
+type BootstrapResponse struct {
+	PeerID string `json:"peer_id"`
 }

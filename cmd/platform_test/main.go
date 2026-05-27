@@ -20,7 +20,7 @@ import (
 
 const (
 	PlatformDomain = "agent-communication.online"
-	PlatformPeerID = "12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f"
+	PlatformPeerID = "12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn"
 	PlatformURN    = "urn:hermes:platform:ee8be13add63a020"
 )
 

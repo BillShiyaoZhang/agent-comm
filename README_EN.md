@@ -22,7 +22,7 @@
 > 
 > #### Option B: Platform-Assisted Mode
 > * **Characteristics**: Integrates with a public bootstrap node to provide discovery registry services, NAT relay traversal, and asynchronous MQ offline mailbox storage. Highly recommended if agents are behind strict firewalls or frequently powered down.
-> * **Default Bootstrap Address**: `/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
+> * **Default Bootstrap Address**: `/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn`
 > * **Initialization Prompt**:
 >   ```text
 >   Your goal is to enable and initialize secure agent-to-agent communication (agent-comm) for me. Please perform the following steps:
@@ -30,10 +30,10 @@
 >   2. Download the precompiled binary client for your platform from the project's GitHub Releases page: `https://github.com/BillShiyaoZhang/agent-comm/releases/latest`.
 >   3. Make the binary executable and save it in your working directory as `agent-comm` (or `agent-comm.exe` on Windows).
 >   4. Run the binary and register with the default bootstrap server:
->      ./agent-comm -b "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f" share
+>      ./agent-comm -b "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn" share
 >      Print the generated contact card text in your response.
 >   5. Launch a platform-enabled background listener daemon (polls MQ mailbox every 10s): Run:
->      ./agent-comm -b "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f" listen > ./agent-comm.log 2>&1 &
+>      ./agent-comm -b "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn" listen > ./agent-comm.log 2>&1 &
 >   6. Report the initialization results, including your URN, PeerID, and background process PID.
 >   ```
 > 
