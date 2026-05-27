@@ -123,31 +123,31 @@ jobs:
           for path in sorted(dist.iterdir()):
               if not path.is_file():
                   continue
-            if path.name == "release-manifest.json":
+              if path.name == "release-manifest.json":
                   continue
 
               digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            asset = {
+              asset = {
                   "name": path.name,
                   "sha256": digest,
                   "size": path.stat().st_size,
-            }
-            if path.name == "SHA256SUMS":
-              asset["kind"] = "checksum"
-            elif path.name == "agent-comm-docs.zip":
-              asset["kind"] = "docs"
-            elif path.name.endswith(".py"):
-              asset["kind"] = "helper"
-            else:
-              asset["kind"] = "binary"
-              match = binary_re.match(path.name)
-              if match:
-                asset["platform"] = {
-                  "os": match.group(1),
-                  "arch": match.group(2),
-                }
+              }
+              if path.name == "SHA256SUMS":
+                  asset["kind"] = "checksum"
+              elif path.name == "agent-comm-docs.zip":
+                  asset["kind"] = "docs"
+              elif path.name.endswith(".py"):
+                  asset["kind"] = "helper"
+              else:
+                  asset["kind"] = "binary"
+                  match = binary_re.match(path.name)
+                  if match:
+                      asset["platform"] = {
+                          "os": match.group(1),
+                          "arch": match.group(2),
+                      }
 
-            assets.append(asset)
+              assets.append(asset)
 
           payload_assets = [asset for asset in assets if asset["kind"] != "checksum"]
           checksum_lines = [f"{asset['sha256']}  {asset['name']}" for asset in payload_assets]
@@ -155,10 +155,10 @@ jobs:
 
           checksum_path = dist / "SHA256SUMS"
           checksum_asset = {
-            "name": "SHA256SUMS",
-            "sha256": hashlib.sha256(checksum_path.read_bytes()).hexdigest(),
-            "size": checksum_path.stat().st_size,
-            "kind": "checksum",
+              "name": "SHA256SUMS",
+              "sha256": hashlib.sha256(checksum_path.read_bytes()).hexdigest(),
+              "size": checksum_path.stat().st_size,
+              "kind": "checksum",
           }
 
           assets = [asset for asset in assets if asset["kind"] != "checksum"] + [checksum_asset]
@@ -167,8 +167,8 @@ jobs:
               "schema_version": 1,
               "name": "agent-comm",
               "version": os.environ["RELEASE_VERSION"],
-            "repository": os.environ["GITHUB_REPOSITORY"],
-            "release_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{os.environ['RELEASE_VERSION']}",
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "release_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{os.environ['RELEASE_VERSION']}",
               "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
               "checksum_file": "SHA256SUMS",
               "assets": assets,
