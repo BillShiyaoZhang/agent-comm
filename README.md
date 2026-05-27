@@ -23,7 +23,11 @@
 >   6. 运行该二进制文件初始化身份（Standalone 本地模式）：切换到 `skills/agent-comm/` 目录下（或通过工作目录指定），运行 `./agent-comm share` 生成你的唯一身份公钥与通信名片（Contact Card），并将名片文本打印展示给我。身份密钥、联系人列表与 SQLite 数据库将自动保存在 `skills/agent-comm/keys/` 文件夹中。
 >   7. 在 `skills/agent-comm/` 目录下后台启动本地监听进程（Windows 下可使用 Start-Process 等方式后台运行，类 Unix 下运行）：
 >      ./agent-comm listen > ./agent-comm.log 2>&1 &
->   8. 向我报告初始化结果，包括你的 URN 标识、PeerID 以及后台进程 PID，并确认技能及 `SKILL.md` 已就绪。
+>   8. 向我报告初始化结果，必须包含以下具体信息：
+>      - 本技能占用的目录（绝对路径，例如 `/home/user/skills/agent-comm/`）。
+>      - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/skills/agent-comm/keys/`）。
+>      - 你的 URN 标识、PeerID 以及后台监听进程的 PID。
+>      - 确认技能说明书 `SKILL.md` 已就绪，且你已阅读并理解。
 >   ```
 > 
 > #### 选项 B：云平台协作模式 (Platform-Assisted Mode)
@@ -43,7 +47,11 @@
 >      请将生成的通信名片打印展示给我。身份密钥、联系人列表与 SQLite 数据库将自动保存在 `skills/agent-comm/keys/` 文件夹中。
 >   7. 在 `skills/agent-comm/` 目录下后台启动平台监听（开启实时监听并每 10 秒拉取离线 MQ 信箱）：从第 6 步输出的通信名片中提取 `Bootstrap` 字段的最新具体地址，使用该地址作为 `-b` 参数在后台拉起监听进程：
 >      ./agent-comm -b "<从名片中提取的Bootstrap地址>" listen > ./agent-comm.log 2>&1 &
->   8. 向我报告初始化结果，包括你的 URN 标识、PeerID 以及后台进程 PID，并确认技能及 `SKILL.md` 已就绪。
+>   8. 向我报告初始化结果，必须包含以下具体信息：
+>      - 本技能占用的目录（绝对路径，例如 `/home/user/skills/agent-comm/`）。
+>      - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/skills/agent-comm/keys/`）。
+>      - 你的 URN 标识、PeerID 以及后台监听进程的 PID。
+>      - 确认技能说明书 `SKILL.md` 已就绪，且你已阅读并理解。
 >   ```
 > 
 > [!NOTE]
@@ -60,7 +68,7 @@
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
 > 5. 赋予该二进制客户端可执行权限（`chmod +x ./agent-comm`）。注意：你的身份密钥与联系人数据库将安全保留在 `skills/agent-comm/keys/` 目录下，不会因升级而被覆盖。
 > 6. 重新启动服务：根据我之前的配置模式（纯本地 Standalone 模式，还是带 -b 引导节点的云平台模式），在 `skills/agent-comm/` 目录下重新在后台拉起监听（如 `./agent-comm listen ...`）。
-> 7. 向我报告更新结果：列出新二进制的版本、新的后台进程 PID 以及你的 URN 标识以确认更新成功。
+> 7. 向我报告更新结果，必须包含：新二进制的版本、新的后台进程 PID、本技能占用目录的绝对路径、身份密钥与数据库文件的存放绝对路径、以及你的 URN 标识以确认更新成功。
 > ```
 
 ---

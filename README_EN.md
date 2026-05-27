@@ -22,7 +22,11 @@
 >   5. Ensure the binary has executable permissions (for Linux/macOS, run `chmod +x skills/agent-comm/agent-comm`).
 >   6. Run the binary to initialize your identity (Standalone local mode): switch to the `skills/agent-comm/` directory, and run `./agent-comm share` to generate your unique cryptographic identity and export your Contact Card. Print the card text in your response. Your identity keys, contact list, and local SQLite database will be automatically saved in the `skills/agent-comm/keys/` directory.
 >   7. Launch a local background listener daemon inside `skills/agent-comm/`: Run `./agent-comm listen > ./agent-comm.log 2>&1 &` in the background (on Windows, use Start-Process to run in the background).
->   8. Report the initialization results, including your URN, PeerID, background process PID, and confirm that the skill and `SKILL.md` are ready.
+>   8. Report the initialization results, which must include:
+>      - The absolute directory path of this skill folder (e.g., `/home/user/skills/agent-comm/`).
+>      - The absolute directory path where your identity keys and database files are stored (e.g., `/home/user/skills/agent-comm/keys/`).
+>      - Your URN, PeerID, and background process PID.
+>      - Confirm that the manual `SKILL.md` is ready and that you have read and understood it.
 >   ```
 > 
 > #### Option B: Platform-Assisted Mode
@@ -42,7 +46,11 @@
 >      Print the generated contact card text in your response. Your identity keys, contact list, and local SQLite database will be automatically saved in the `skills/agent-comm/keys/` directory.
 >   7. Launch a platform-enabled background listener daemon inside `skills/agent-comm/` (polls MQ mailbox every 10s): Extract the latest address from the `Bootstrap` field of the contact card generated in step 6, and use it as the `-b` argument to run:
 >      ./agent-comm -b "<extracted_bootstrap_address>" listen > ./agent-comm.log 2>&1 &
->   8. Report the initialization results, including your URN, PeerID, background process PID, and confirm that the skill and `SKILL.md` are ready.
+>   8. Report the initialization results, which must include:
+>      - The absolute directory path of this skill folder (e.g., `/home/user/skills/agent-comm/`).
+>      - The absolute directory path where your identity keys and database files are stored (e.g., `/home/user/skills/agent-comm/keys/`).
+>      - Your URN, PeerID, and background process PID.
+>      - Confirm that the manual `SKILL.md` is ready and that you have read and understood it.
 >   ```
 > 
 > [!NOTE]
@@ -59,7 +67,7 @@
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
 > 5. Ensure the binary has executable permissions (`chmod +x ./agent-comm`). Note: Your identity keys and contact database will remain safe in the `skills/agent-comm/keys/` directory and will not be overwritten by the upgrade.
 > 6. Restart the background listener daemon: Depending on the previous execution mode, relaunch the daemon in the background from the `skills/agent-comm/` directory using the same configuration (e.g., `./agent-comm listen ...`).
-> 7. Report the update results, including the new binary version, new background process PID, and your URN to confirm the upgrade.
+> 7. Report the update results, which must include: the new binary version, new background process PID, the absolute path of this skill folder, the absolute path of the identity keys and databases folder, and your URN to confirm the upgrade.
 > ```
 
 ---
