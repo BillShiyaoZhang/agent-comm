@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*' # 仅在推送版本 tag (例如 v1.0.0) 时触发
+  workflow_dispatch: # 允许手动触发
+
 
 permissions:
   contents: write
