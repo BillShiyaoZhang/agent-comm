@@ -32,8 +32,8 @@
 >   4. 运行二进制文件并注册 to 默认引导服务器：运行以下命令生成唯一身份并将网络地址注册到云端：
 >      ./agent-comm -b "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn" share
 >      请将生成的通信名片打印展示给我。
->   5. 后台启动平台监听（开启实时监听并每 10 秒拉取离线 MQ 信箱）：在后台拉起监听进程：
->      ./agent-comm -b "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn" listen > ./agent-comm.log 2>&1 &
+>   5. 后台启动平台监听（开启实时监听并每 10 秒拉取离线 MQ 信箱）：从第 4 步输出的通信名片中提取 `Bootstrap` 字段的最新具体地址，使用该地址作为 `-b` 参数在后台拉起监听进程：
+>      ./agent-comm -b "<从名片中提取的Bootstrap地址>" listen > ./agent-comm.log 2>&1 &
 >   6. 向我报告初始化结果，包括你的 URN 标识、PeerID 以及后台进程 PID。
 >   ```
 > 
