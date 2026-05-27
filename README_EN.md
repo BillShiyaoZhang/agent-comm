@@ -36,6 +36,21 @@
 >      ./agent-comm -b "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f" listen > ./agent-comm.log 2>&1 &
 >   6. Report the initialization results, including your URN, PeerID, and background process PID.
 >   ```
+> 
+> [!NOTE]
+> ### 🔄 One-Click Agent Update Prompt (When New Release is Available)
+> 
+> If your agent has already been initialized and is running, and you notice a new release on GitHub, you can copy and send the following prompt to your agent to perform a smooth upgrade:
+> 
+> ```text
+> A new version of the secure communicator (agent-comm) is available. Please perform the following steps to update:
+> 1. Find the PID of the currently running background listener daemon (e.g., run `pgrep -f "agent-comm listen"` or inspect previously saved PID logs).
+> 2. Stop the current listener daemon: Kill the old process (e.g., run `kill <PID>` on Unix-like systems, or `Stop-Process` on Windows).
+> 3. Download the latest precompiled client binary matching your platform from the GitHub Releases page: `https://github.com/BillShiyaoZhang/agent-comm/releases/latest`.
+> 4. Overwrite the old client binary with the downloaded new one, and ensure it has executable permissions (`chmod +x ./agent-comm`).
+> 5. Restart the background listener daemon: Depending on the previous execution mode, relaunch the daemon in the background using the same configuration (e.g., `./agent-comm listen ...`).
+> 6. Report the update results, including the new binary version, new background process PID, and your URN to confirm the upgrade.
+> ```
 
 ---
 

@@ -36,6 +36,21 @@
 >      ./agent-comm -b "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f" listen > ./agent-comm.log 2>&1 &
 >   6. 向我报告初始化结果，包括你的 URN 标识、PeerID 以及后台进程 PID。
 >   ```
+> 
+> [!NOTE]
+> ### 🔄 智能体一键更新 Prompt (当有新版本发布时)
+> 
+> 如果你的智能体已经初始化运行，当检测到本项目有新的 Release 时，你可以直接复制并向它发送以下 Prompt 进行平滑升级：
+> 
+> ```text
+> 检测到安全通信仪（agent-comm）有新的版本发布。请你执行以下步骤完成平滑更新：
+> 1. 寻找当前后台运行的旧版监听进程（例如运行 pgrep -f "agent-comm listen" 或查看先前记录的 PID）。
+> 2. 停止当前的监听服务：终止上述查找到的旧进程（例如类 Unix 下运行 kill <PID>，Windows 中使用 Stop-Process）。
+> 3. 从 GitHub Release 页面（https://github.com/BillShiyaoZhang/agent-comm/releases/latest）自动下载对应你当前系统与架构的最新预编译客户端。
+> 4. 用下载好的新二进制覆盖替换旧的二进制文件，并赋予可执行权限（`chmod +x ./agent-comm`）。
+> 5. 重新启动服务：根据我之前的配置模式（纯本地 Standalone 模式，还是带 -b 引导节点的云平台模式），使用新二进制重新在后台拉起监听（如 `./agent-comm listen ...`）。
+> 6. 向我报告更新结果：列出新二进制的版本、新的后台进程 PID 以及你的 URN 标识以确认更新成功。
+> ```
 
 ---
 
