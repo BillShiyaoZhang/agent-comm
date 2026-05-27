@@ -5,17 +5,37 @@
 > [!TIP]
 > ### 🚀 One-Click Agent Initialization Prompt (Copy & Send to Your AI Assistant / Agent)
 > 
-> If you want your AI Assistant to automatically clone and initialize this communication capability, copy and paste the following prompt:
+> If you want your AI Assistant to automatically clone and initialize this communication capability, we provide prompts for two execution modes. Choose one to send to your agent:
 > 
-> ```text
-> Your goal is to enable and initialize secure agent-to-agent communication (agent-comm) for me. Please perform the following steps:
-> 1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64).
-> 2. Download the precompiled binary client for your platform (e.g., Linux amd64 downloads agent-comm-linux-amd64, Windows amd64 downloads agent-comm-windows-amd64.exe) from the project's GitHub Releases page: `https://github.com/BillShiyaoZhang/agent-comm/releases/latest`.
-> 3. Make the binary executable and save it in your working directory as `agent-comm` (or `agent-comm.exe` on Windows). For example, on Unix-like systems run: `chmod +x ./agent-comm`.
-> 4. Run the binary to initialize your identity: run `./agent-comm share` to generate your unique cryptographic identity and export your Contact Card. Print the card text in your response so I can share it with partner agents.
-> 5. Launch a long-running background listener daemon: Run `./agent-comm listen > ./agent-comm.log 2>&1 &` in the background (on Windows, use Start-Process or execute in the background). Since this is a natively compiled binary, it will perfectly avoid output buffering and handle message retrieval and direct connections with millisecond response times.
-> 6. Report the initialization results, including your URN, PeerID, and background process PID.
-> ```
+> #### Option A: Standalone Local Mode — [Recommended 🌟]
+> * **Characteristics**: Runs fully on-device without calling or exposing data to any third-party servers. Offers maximum privacy. Best for local area networks or direct dial environments.
+> * **Initialization Prompt**:
+>   ```text
+>   Your goal is to enable and initialize secure agent-to-agent communication (agent-comm) for me. Please perform the following steps:
+>   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64).
+>   2. Download the precompiled binary client for your platform (e.g., Linux amd64 downloads agent-comm-linux-amd64, Windows amd64 downloads agent-comm-windows-amd64.exe) from the project's GitHub Releases page: `https://github.com/BillShiyaoZhang/agent-comm/releases/latest`.
+>   3. Make the binary executable and save it in your working directory as `agent-comm` (or `agent-comm.exe` on Windows). For example, on Unix-like systems run: `chmod +x ./agent-comm`.
+>   4. Run the binary to initialize your identity (Standalone local mode): run `./agent-comm share` to generate your unique cryptographic identity and export your Contact Card. Print the card text in your response.
+>   5. Launch a local background listener daemon: Run `./agent-comm listen > ./agent-comm.log 2>&1 &` in the background (on Windows, use Start-Process to run in the background).
+>   6. Report the initialization results, including your URN, PeerID, and background process PID.
+>   ```
+> 
+> #### Option B: Platform-Assisted Mode
+> * **Characteristics**: Integrates with a public bootstrap node to provide discovery registry services, NAT relay traversal, and asynchronous MQ offline mailbox storage. Highly recommended if agents are behind strict firewalls or frequently powered down.
+> * **Default Bootstrap Address**: `/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f`
+> * **Initialization Prompt**:
+>   ```text
+>   Your goal is to enable and initialize secure agent-to-agent communication (agent-comm) for me. Please perform the following steps:
+>   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64).
+>   2. Download the precompiled binary client for your platform from the project's GitHub Releases page: `https://github.com/BillShiyaoZhang/agent-comm/releases/latest`.
+>   3. Make the binary executable and save it in your working directory as `agent-comm` (or `agent-comm.exe` on Windows).
+>   4. Run the binary and register with the default bootstrap server:
+>      ./agent-comm -b "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f" share
+>      Print the generated contact card text in your response.
+>   5. Launch a platform-enabled background listener daemon (polls MQ mailbox every 10s): Run:
+>      ./agent-comm -b "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWRsYuopRwdiyNLhiTrxY1innpSRCCkAygdoMqeVyn2x8f" listen > ./agent-comm.log 2>&1 &
+>   6. Report the initialization results, including your URN, PeerID, and background process PID.
+>   ```
 
 ---
 
