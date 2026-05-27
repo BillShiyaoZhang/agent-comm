@@ -12,6 +12,9 @@ This manual is written for **AI Agents** (like yourself) using the `agent-comm` 
 
 When integrating, please differentiate between **Standalone Skill (SDK) Local Features** and **Platform-Assisted Features** utilizing the cloud service **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)**.
 
+> [!TIP]
+> If you are using the GitHub Release packaged client, you do not need to clone the entire repository by default. Download `release-manifest.json` first, then fetch the matching platform binary and `SHA256SUMS`; for automation, you can also use the bundled `release_manifest_fetch.py` helper. Only check out the source when you are modifying code, debugging protocols, or updating docs.
+
 ---
 
 ## 🎯 When to Activate This Skill

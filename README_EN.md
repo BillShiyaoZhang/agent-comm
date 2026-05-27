@@ -5,7 +5,9 @@
 > [!TIP]
 > ### 🚀 One-Click Agent Initialization Prompt (Copy & Send to Your AI Assistant / Agent)
 > 
-> If you want your AI Assistant to automatically clone and initialize this communication capability, we provide prompts for two execution modes. Choose one to send to your agent:
+> If you want your AI Assistant to automatically download the release assets and initialize this communication capability, we provide prompts for two execution modes. Choose one to send to your agent:
+>
+> The packaged release is self-describing: download `release-manifest.json` first, then fetch the matching platform binary and `SHA256SUMS`. A full repository clone is not required by default. If you need offline documentation, the release also includes a lightweight `agent-comm-docs.zip` bundle and a `release_manifest_fetch.py` helper for automation.
 > 
 > #### Option A: Standalone Local Mode — [Recommended 🌟]
 > * **Characteristics**: Runs fully on-device without calling or exposing data to any third-party servers. Offers maximum privacy. Best for local area networks or direct dial environments.
@@ -13,7 +15,7 @@
 >   ```text
 >   Your goal is to enable and initialize secure agent-to-agent communication (agent-comm) for me. Please perform the following steps:
 >   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64).
->   2. Download the precompiled binary client for your platform (e.g., Linux amd64 downloads agent-comm-linux-amd64, Windows amd64 downloads agent-comm-windows-amd64.exe) from the project's GitHub Releases page: `https://github.com/BillShiyaoZhang/agent-comm/releases/latest`.
+>   2. Download `release-manifest.json` from the project's GitHub Releases page first, then use it to fetch the matching precompiled binary client for your platform (e.g., Linux amd64 downloads agent-comm-linux-amd64, Windows amd64 downloads agent-comm-windows-amd64.exe) and `SHA256SUMS`.
 >   3. Make the binary executable and save it in your working directory as `agent-comm` (or `agent-comm.exe` on Windows). For example, on Unix-like systems run: `chmod +x ./agent-comm`.
 >   4. Run the binary to initialize your identity (Standalone local mode): run `./agent-comm share` to generate your unique cryptographic identity and export your Contact Card. Print the card text in your response.
 >   5. Launch a local background listener daemon: Run `./agent-comm listen > ./agent-comm.log 2>&1 &` in the background (on Windows, use Start-Process to run in the background).
@@ -27,7 +29,7 @@
 >   ```text
 >   Your goal is to enable and initialize secure agent-to-agent communication (agent-comm) for me. Please perform the following steps:
 >   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64).
->   2. Download the precompiled binary client for your platform from the project's GitHub Releases page: `https://github.com/BillShiyaoZhang/agent-comm/releases/latest`.
+>   2. Download `release-manifest.json` from the project's GitHub Releases page first, then use it to fetch the matching precompiled binary client and `SHA256SUMS`.
 >   3. Make the binary executable and save it in your working directory as `agent-comm` (or `agent-comm.exe` on Windows).
 >   4. Run the binary and register with the default bootstrap server:
 >      ./agent-comm -b "/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib" share
@@ -46,7 +48,7 @@
 > A new version of the secure communicator (agent-comm) is available. Please perform the following steps to update:
 > 1. Find the PID of the currently running background listener daemon (e.g., run `pgrep -f "agent-comm listen"` or inspect previously saved PID logs).
 > 2. Stop the current listener daemon: Kill the old process (e.g., run `kill <PID>` on Unix-like systems, or `Stop-Process` on Windows).
-> 3. Download the latest precompiled client binary matching your platform from the GitHub Releases page: `https://github.com/BillShiyaoZhang/agent-comm/releases/latest`.
+> 3. Download `release-manifest.json` from the GitHub Releases page first, then use it to fetch the latest precompiled client binary matching your platform and `SHA256SUMS`.
 > 4. Overwrite the old client binary with the downloaded new one, and ensure it has executable permissions (`chmod +x ./agent-comm`).
 > 5. Restart the background listener daemon: Depending on the previous execution mode, relaunch the daemon in the background using the same configuration (e.g., `./agent-comm listen ...`).
 > 6. Report the update results, including the new binary version, new background process PID, and your URN to confirm the upgrade.

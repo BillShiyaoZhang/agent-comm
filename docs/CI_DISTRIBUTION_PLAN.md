@@ -13,11 +13,24 @@
 
 通过 **GitHub CI** 自动化构建，我们将为多平台提供预编译好的单文件二进制包。智能体或用户只需直接下载对应系统的文件即可**毫秒级启动**，且彻底解决输出刷新延迟的问题。
 
+## 📦 Release 资产契约
+
+每个 GitHub Release 默认应当包含以下最小资产：
+- 对应平台的预编译二进制文件。
+- `SHA256SUMS` 校验文件，用于快速验证下载完整性。
+- `release-manifest.json` 机器可读清单，告诉 agent 应该下载哪些资产。
+- `agent-comm-docs.zip` 轻量文档包，包含 README 与 skill 手册，方便离线 agent 直接阅读运行说明。
+- `release_manifest_fetch.py` 自动化辅助脚本，方便 agent 在只拿到 manifest 后继续下载其余资产。
+
+正常运行时，agent 只需要先读取 `release-manifest.json`，再下载匹配平台的二进制和校验文件，不需要 clone 整个仓库。
+
+其中二进制资产会带有 `kind` 与 `platform` 元数据，便于自动化脚本无需猜测文件名就能选中正确目标。
+
 ---
 
 ## 🛠️ GitHub Actions 自动化工作流配置
 
-在项目根目录下创建 `.github/workflows/release.yml`，即可在每次推送版本 Tag（例如 `v1.0.0`）时，自动触发多平台交叉编译并创建 GitHub Release。
+在项目根目录下创建 `.github/workflows/release.yml`，即可在每次推送版本 Tag（例如 `v1.0.0`）时，自动触发多平台交叉编译并创建 GitHub Release。实际发布时还会额外生成 `SHA256SUMS`、`release-manifest.json`，以及一个轻量的 `agent-comm-docs.zip` 文档包和 `release_manifest_fetch.py` 辅助脚本，让 release 资产可以被 agent 直接消费。
 
 以下是完整的 workflow 配置模板：
 
@@ -119,7 +132,7 @@ jobs:
 ```text
 你的目标是为我启用并初始化安全智能体通信（agent-comm）。请依次执行以下步骤：
 1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64）。
-2. 从项目的 GitHub Release 页面（例如 https://github.com/BillShiyaoZhang/agent-comm/releases/latest）自动下载对应平台的预编译二进制客户端（例如 agent-comm-linux-amd64）。
+2. 从项目的 GitHub Release 页面先下载 `release-manifest.json`，根据其中的清单自动定位并下载对应平台的预编译二进制客户端和 `SHA256SUMS`。
 3. 赋予该二进制文件可执行权限，并将其保存在你的工作目录中：`chmod +x ./agent-comm`。
 4. 运行二进制文件初始化身份：运行 `./agent-comm share` 生成你的唯一身份公钥与通信名片（Contact Card），并将名片文本打印展示给我，以便我分享给其他合作智能体。
 5. 后台启动长期监听：在后台拉起监听进程 `./agent-comm listen > ./agent-comm.log 2>&1 &`。由于这是原生编译的二进制，它将完美规约标准输出缓冲，实现毫秒级拉取与直连消息的响应。
@@ -127,6 +140,8 @@ jobs:
 ```
 
 ---
+
+在当前实现中，GitHub Release 上传的资产已经包含二进制、`SHA256SUMS` 和 `release-manifest.json`，因此 agent 可以完全依赖 release 资产完成初始化，不需要先检出源码。
 
 ## 📈 方案优势总结
 

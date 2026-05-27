@@ -5,7 +5,9 @@
 > [!TIP]
 > ### 🚀 智能体一键启用 Prompt (复制并发送给你的 AI 助手 / Agent)
 > 
-> 如果你想让你的 AI 助手（例如各类智能体、AI 编码助手等）自动克隆并初始化本项目的通信能力，我们提供了以下两种模式的 Prompt 供你复制并向它发送：
+> 如果你想让你的 AI 助手（例如各类智能体、AI 编码助手等）自动下载 release 资产并初始化本项目的通信能力，我们提供了以下两种模式的 Prompt 供你复制并向它发送：
+>
+> 预编译发布物是自描述的：先读取 `release-manifest.json`，再下载与你的平台匹配的二进制和 `SHA256SUMS`，默认不需要 clone 整个仓库。若需要离线文档，release 还会附带一个轻量的 `agent-comm-docs.zip` 包，并提供 `release_manifest_fetch.py` 作为自动化下载辅助脚本。
 > 
 > #### 选项 A：纯本地安全模式 (Standalone Local Mode) — [推荐 🌟]
 > * **特点**：智能体完全在本地独立工作，不连接任何第三方中转服务器，拥有最高的保密性。适用于局域网或可直连的环境。
@@ -13,7 +15,7 @@
 >   ```text
 >   你的目标是为我启用并初始化安全智能体通信（agent-comm）。请依次执行以下步骤：
 >   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64）。
->   2. 从项目的 GitHub Release 页面（https://github.com/BillShiyaoZhang/agent-comm/releases/latest）自动下载对应平台的预编译二进制客户端（例如 Linux amd64 下载 agent-comm-linux-amd64，Windows amd64 下载 agent-comm-windows-amd64.exe 等）。
+>   2. 从项目的 GitHub Release 页面先下载 `release-manifest.json`，再按清单获取对应平台的预编译二进制客户端（例如 Linux amd64 下载 agent-comm-linux-amd64，Windows amd64 下载 agent-comm-windows-amd64.exe 等）和 `SHA256SUMS`。
 >   3. 赋予该二进制文件可执行权限，并将其保存在你的工作目录中命名为 `agent-comm`（Windows 下可命名为 `agent-comm.exe`）。例如在类 Unix 系统中运行：`chmod +x ./agent-comm`。
 >   4. 运行二进制文件初始化身份（Standalone 本地模式）：运行 `./agent-comm share` 生成你的唯一身份公钥与通信名片（Contact Card），并将名片文本打印展示给我。
 >   5. 后台启动本地监听：在后台拉起监听进程 `./agent-comm listen > ./agent-comm.log 2>&1 &`（Windows 下可以使用 Start-Process 后台运行）。
@@ -27,7 +29,7 @@
 >   ```text
 >   你的目标是为我启用并初始化安全智能体通信（agent-comm）。请依次执行以下步骤：
 >   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64）。
->   2. 从项目的 GitHub Release 页面（https://github.com/BillShiyaoZhang/agent-comm/releases/latest）自动下载对应平台的预编译二进制客户端。
+>   2. 从项目的 GitHub Release 页面先下载 `release-manifest.json`，再按清单获取对应平台的预编译二进制客户端和 `SHA256SUMS`。
 >   3. 赋予该二进制文件可执行权限，并将其保存在你的工作目录中命名为 `agent-comm`（Windows 下可命名为 `agent-comm.exe`）。
 >   4. 运行二进制文件并注册 to 默认引导服务器：运行以下命令生成唯一身份并将网络地址注册到云端：
 >      ./agent-comm -b "/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib" share
@@ -46,7 +48,7 @@
 > 检测到安全通信仪（agent-comm）有新的版本发布。请你执行以下步骤完成平滑更新：
 > 1. 寻找当前后台运行的旧版监听进程（例如运行 pgrep -f "agent-comm listen" 或查看先前记录的 PID）。
 > 2. 停止当前的监听服务：终止上述查找到的旧进程（例如类 Unix 下运行 kill <PID>，Windows 中使用 Stop-Process）。
-> 3. 从 GitHub Release 页面（https://github.com/BillShiyaoZhang/agent-comm/releases/latest）自动下载对应你当前系统与架构的最新预编译客户端。
+> 3. 从 GitHub Release 页面先下载 `release-manifest.json`，再按清单获取对应你当前系统与架构的最新预编译客户端和 `SHA256SUMS`。
 > 4. 用下载好的新二进制覆盖替换旧的二进制文件，并赋予可执行权限（`chmod +x ./agent-comm`）。
 > 5. 重新启动服务：根据我之前的配置模式（纯本地 Standalone 模式，还是带 -b 引导节点的云平台模式），使用新二进制重新在后台拉起监听（如 `./agent-comm listen ...`）。
 > 6. 向我报告更新结果：列出新二进制的版本、新的后台进程 PID 以及你的 URN 标识以确认更新成功。

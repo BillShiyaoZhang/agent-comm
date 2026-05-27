@@ -12,6 +12,9 @@ description: >
 
 在使用这些能力时，请注意区分 **纯 Skill (SDK) 本地运行模式** 与 **搭配 [agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform) 配套云服务模式** 的功能差异。
 
+> [!TIP]
+> 如果你只是使用 GitHub Release 发布的客户端来运行这个技能，默认不需要 clone 整个仓库。优先下载 `release-manifest.json`，再按清单获取对应平台的二进制和 `SHA256SUMS`；如需自动化下载，也可以直接使用 release 里附带的 `release_manifest_fetch.py`。只有在修改源码、调试协议或更新文档时才需要源码检出。
+
 ---
 
 ## 🎯 技能激活时机

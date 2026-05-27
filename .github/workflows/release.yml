@@ -75,6 +75,110 @@ jobs:
           find build-artifacts -type f -exec cp {} release-dist/ \;
           ls -la release-dist/
 
+      - name: Prepare Release Helper
+        run: |
+          cp tools/release_manifest_fetch.py release-dist/release_manifest_fetch.py
+          ls -la release-dist/
+
+      - name: Package Docs Bundle
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+
+          root = Path(".")
+          dist = Path("release-dist")
+          bundle = dist / "agent-comm-docs.zip"
+          docs = [
+              "README.md",
+              "README_EN.md",
+              "SKILL.md",
+              "SKILL_EN.md",
+              "docs/CI_DISTRIBUTION_PLAN.md",
+          ]
+
+          with ZipFile(bundle, "w", compression=ZIP_DEFLATED) as archive:
+              for relative_path in docs:
+                  path = root / relative_path
+                  if path.is_file():
+                      archive.write(path, arcname=relative_path)
+          PY
+
+      - name: Generate Release Metadata
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          dist = Path("release-dist")
+          assets = []
+          binary_re = re.compile(r"^agent-comm-(linux|windows|darwin)-(amd64|arm64)(?:\.exe)?$")
+
+          for path in sorted(dist.iterdir()):
+              if not path.is_file():
+                  continue
+            if path.name == "release-manifest.json":
+                  continue
+
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            asset = {
+                  "name": path.name,
+                  "sha256": digest,
+                  "size": path.stat().st_size,
+            }
+            if path.name == "SHA256SUMS":
+              asset["kind"] = "checksum"
+            elif path.name == "agent-comm-docs.zip":
+              asset["kind"] = "docs"
+            elif path.name.endswith(".py"):
+              asset["kind"] = "helper"
+            else:
+              asset["kind"] = "binary"
+              match = binary_re.match(path.name)
+              if match:
+                asset["platform"] = {
+                  "os": match.group(1),
+                  "arch": match.group(2),
+                }
+
+            assets.append(asset)
+
+          payload_assets = [asset for asset in assets if asset["kind"] != "checksum"]
+          checksum_lines = [f"{asset['sha256']}  {asset['name']}" for asset in payload_assets]
+          (dist / "SHA256SUMS").write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
+
+          checksum_path = dist / "SHA256SUMS"
+          checksum_asset = {
+            "name": "SHA256SUMS",
+            "sha256": hashlib.sha256(checksum_path.read_bytes()).hexdigest(),
+            "size": checksum_path.stat().st_size,
+            "kind": "checksum",
+          }
+
+          assets = [asset for asset in assets if asset["kind"] != "checksum"] + [checksum_asset]
+
+          manifest = {
+              "schema_version": 1,
+              "name": "agent-comm",
+              "version": os.environ["RELEASE_VERSION"],
+            "repository": os.environ["GITHUB_REPOSITORY"],
+            "release_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{os.environ['RELEASE_VERSION']}",
+              "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "checksum_file": "SHA256SUMS",
+              "assets": assets,
+          }
+          (dist / "release-manifest.json").write_text(
+              json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
       - name: Create GitHub Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
