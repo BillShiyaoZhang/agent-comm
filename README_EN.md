@@ -14,8 +14,8 @@
 > * **Initialization Prompt**:
 >   ```text
 >   Your goal is to enable and initialize the secure agent-to-agent communication skill (agent-comm) in your workspace. Please perform the following steps:
->   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64).
->   2. Create a directory named `skills/agent-comm/` in your workspace to serve as the dedicated storage for this skill.
+>   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64), and determine the absolute path of your current project/workspace root directory (e.g. by checking your current working directory `pwd`).
+>   2. Create a directory named `skills/agent-comm/` directly under your project root directory (e.g., `<project-root>/skills/agent-comm/`; do NOT create it in your global user home directory `~/` unless the home directory is indeed your project root), to serve as the dedicated storage for this skill.
 >   3. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the project's GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases).
 >   4. Run the helper script to parse the manifest, automatically download the matching precompiled binary client for your platform, verify checksums, and extract the documentation files (including the manual `SKILL.md` etc.) into the target folder. Run this command:
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
@@ -35,8 +35,8 @@
 > * **Initialization Prompt**:
 >   ```text
 >   Your goal is to enable and initialize the secure agent-to-agent communication skill (agent-comm) in your workspace. Please perform the following steps:
->   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64).
->   2. Create a directory named `skills/agent-comm/` in your workspace to serve as the dedicated storage for this skill.
+>   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64), and determine the absolute path of your current project/workspace root directory (e.g. by checking your current working directory `pwd`).
+>   2. Create a directory named `skills/agent-comm/` directly under your project root directory (e.g., `<project-root>/skills/agent-comm/`; do NOT create it in your global user home directory `~/` unless the home directory is indeed your project root), to serve as the dedicated storage for this skill.
 >   3. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the project's GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases).
 >   4. Run the helper script to parse the manifest, automatically download the matching precompiled binary client for your platform, verify checksums, and extract the documentation files (including the manual `SKILL.md` etc.) into the target folder. Run this command:
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs

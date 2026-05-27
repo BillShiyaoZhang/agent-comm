@@ -14,8 +14,8 @@
 > * **初始化 Prompt**：
 >   ```text
 >   你的目标是在工作区中为我启用并初始化安全智能体通信技能（agent-comm）。请依次执行以下步骤：
->   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64）。
->   2. 在工作区中创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
+>   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64），并确认你当前所在的项目/工作区根目录的绝对路径（可通过 `pwd` 或当前环境元数据获取）。
+>   2. 在上述项目根目录下（例如：`<项目根目录>/skills/agent-comm/`，严禁在全局的用户家目录 `~/` 下创建，除非家目录就是你的当前项目根目录）创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
 >   3. 从项目的 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`。
 >   4. 运行辅助脚本，自动解析清单，下载对应平台的预编译二进制客户端、校验哈希值并自动解压释放文档资源（包括说明书 `SKILL.md` 等）到指定目录。在终端中运行：
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
@@ -36,8 +36,8 @@
 > * **初始化 Prompt**：
 >   ```text
 >   你的目标是在工作区中为我启用并初始化安全智能体通信技能（agent-comm）。请依次执行以下步骤：
->   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64）。
->   2. 在工作区中创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
+>   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64），并确认你当前所在的项目/工作区根目录的绝对路径（可通过 `pwd` 或当前环境元数据获取）。
+>   2. 在上述项目根目录下（例如：`<项目根目录>/skills/agent-comm/`，严禁在全局的用户家目录 `~/` 下创建，除非家目录就是你的当前项目根目录）创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
 >   3. 从项目的 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`。
 >   4. 运行辅助脚本，自动解析清单，下载对应平台的预编译二进制客户端、校验哈希值并自动解压释放文档资源（包括说明书 `SKILL.md` 等）到指定目录。在终端中运行：
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
