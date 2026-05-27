@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	RealPlatformDomain = "agent-communication.online"
-	RealPlatformPeerID = "12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn"
+	RealPlatformDomain = "8.130.40.38"
+	RealPlatformPeerID = "12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib"
 	RemoteAgentURN     = "urn:hermes:agent:VBYEE9xFV6AiTZQcsvbBEz"
 )
 
@@ -29,7 +29,7 @@ func TestRealPlatformLifecycle(t *testing.T) {
 	defer cancel()
 
 	// 1. Set up platform address info
-	quicMaddrStr := "/dns4/" + RealPlatformDomain + "/udp/45041/quic-v1/p2p/" + RealPlatformPeerID
+	quicMaddrStr := "/ip4/" + RealPlatformDomain + "/udp/45041/quic-v1/p2p/" + RealPlatformPeerID
 	platformAddrInfo, err := peer.AddrInfoFromString(quicMaddrStr)
 	if err != nil {
 		t.Fatalf("failed to parse platform multiaddr: %v", err)

@@ -127,7 +127,7 @@ func TestAgentHybridIntegration(t *testing.T) {
 	}
 
 	// Wait a moment for background registrations to finish
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 
 	urnA := agentA.Keys.Ed25519.URN()
 	urnB := agentB.Keys.Ed25519.URN()

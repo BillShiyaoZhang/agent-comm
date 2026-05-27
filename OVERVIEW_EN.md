@@ -147,12 +147,12 @@ go run ./cmd/platform_test/
 ```
 
 > [!NOTE]
-> **Staging Platform Configuration** (Refer to **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** for deployment details):
-> - **Public Domain**: `agent-communication.online`
-> - **Platform PeerID**: `12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn`
+> **Staging Platform Configuration** (Note: Domain is currently down, please use IP instead. Refer to **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** for deployment details):
+> - **Public IP**: `8.130.40.38` (Replacing original domain `agent-communication.online`)
+> - **Platform PeerID**: `12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
 > - **Platform URN**: `urn:hermes:platform:ee8be13add63a020`
-> - **Recommended QUIC Bootstrap**: `/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn`
-> - **Backup TCP Bootstrap**: `/dns4/agent-communication.online/tcp/45041/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn`
+> - **Recommended QUIC Bootstrap**: `/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
+> - **Backup TCP Bootstrap**: `/ip4/8.130.40.38/tcp/45041/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
 
 ---
 

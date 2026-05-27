@@ -3,15 +3,22 @@
 package mq
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"time"
 
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
-	"github.com/BillShiyaoZhang/agent-comm/proto"
 	goproto "google.golang.org/protobuf/proto"
 )
 
@@ -176,4 +183,188 @@ func readMQResponse(r io.Reader) (*proto.MQResponse, error) {
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
 	return &resp, nil
+}
+
+// HTTPClient stores, retrieves and acknowledges messages via the HTTP REST API.
+type HTTPClient struct {
+	BaseURL string
+	Keys    *crypto.IdentityKeys
+}
+
+// NewHTTPClient creates a new MQ HTTP client.
+func NewHTTPClient(baseURL string, keys *crypto.IdentityKeys) *HTTPClient {
+	return &HTTPClient{
+		BaseURL: baseURL,
+		Keys:    keys,
+	}
+}
+
+type storeReq struct {
+	RecipientURN string `json:"recipient_urn"`
+	ExpiryUnix   int64  `json:"expiry_unix"`
+	PayloadProto []byte `json:"payload_proto"`
+}
+
+// Store sends an encrypted envelope to the platform MQ using HTTP signature verification.
+func (c *HTTPClient) Store(ctx context.Context, recipientURN string, envelope *proto.EncryptedEnvelope, ttlDays int) (string, error) {
+	expiry := int64(0)
+	if ttlDays > 0 {
+		expiry = time.Now().Add(time.Duration(ttlDays) * 24 * time.Hour).Unix()
+	}
+
+	payloadProto, err := goproto.Marshal(envelope)
+	if err != nil {
+		return "", fmt.Errorf("marshal envelope: %w", err)
+	}
+
+	reqObj := storeReq{
+		RecipientURN: recipientURN,
+		ExpiryUnix:   expiry,
+		PayloadProto: payloadProto,
+	}
+
+	bodyBytes, err := json.Marshal(reqObj)
+	if err != nil {
+		return "", fmt.Errorf("marshal JSON: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/api/v1/mq/store", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Sign the body and inject into Authorization header
+	payloadSig := ed25519.Sign(c.Keys.Ed25519.PrivateKey, bodyBytes)
+	req.Header.Set("Authorization", "Ed25519 "+hex.EncodeToString(payloadSig)+":"+hex.EncodeToString(c.Keys.Ed25519.PublicKey))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("HTTP status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+
+	if res["ok"] != true {
+		return "", fmt.Errorf("store failed: ok is not true")
+	}
+
+	msgID, _ := res["message_id"].(string)
+	return msgID, nil
+}
+
+type msgItem struct {
+	MessageID    string `json:"message_id"`
+	PayloadProto []byte `json:"payload_proto"`
+}
+
+type retrieveResp struct {
+	Count    int       `json:"count"`
+	Messages []msgItem `json:"messages"`
+}
+
+// Retrieve fetches all pending messages for a recipient from the platform MQ using HTTP signature verification.
+func (c *HTTPClient) Retrieve(ctx context.Context, recipientURN string) ([]*proto.EncryptedEnvelope, error) {
+	timestamp := time.Now().Unix()
+
+	// Generate signature over "mq-retrieve|<urn>|<timestamp 8 bytes big-endian>"
+	tsBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(tsBuf, uint64(timestamp))
+	msg := append([]byte("mq-retrieve|"+recipientURN+"|"), tsBuf...)
+	sig := ed25519.Sign(c.Keys.Ed25519.PrivateKey, msg)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/api/v1/mq/retrieve", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("X-URN", recipientURN)
+	req.Header.Set("X-Timestamp", fmt.Sprintf("%d", timestamp))
+	req.Header.Set("X-Pubkey", hex.EncodeToString(c.Keys.Ed25519.PublicKey))
+	req.Header.Set("X-Signature", hex.EncodeToString(sig))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var res retrieveResp
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	var envelopes []*proto.EncryptedEnvelope
+	for _, item := range res.Messages {
+		var env proto.EncryptedEnvelope
+		if err := goproto.Unmarshal(item.PayloadProto, &env); err != nil {
+			continue // skip corrupted envelope
+		}
+		envelopes = append(envelopes, &env)
+	}
+
+	return envelopes, nil
+}
+
+type ackReq struct {
+	MessageIDs []string `json:"message_ids"`
+}
+
+// Ack deletes successfully processed messages from the platform MQ.
+func (c *HTTPClient) Ack(ctx context.Context, messageIDs []string) (int, error) {
+	if len(messageIDs) == 0 {
+		return 0, nil
+	}
+
+	reqObj := ackReq{
+		MessageIDs: messageIDs,
+	}
+
+	bodyBytes, err := json.Marshal(reqObj)
+	if err != nil {
+		return 0, fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/api/v1/mq/ack", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return 0, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("HTTP status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return 0, fmt.Errorf("decode response: %w", err)
+	}
+
+	if res["ok"] != true {
+		return 0, fmt.Errorf("ack failed: ok is not true")
+	}
+
+	deletedFloat, _ := res["deleted"].(float64)
+	return int(deletedFloat), nil
 }

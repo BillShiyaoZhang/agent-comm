@@ -33,7 +33,7 @@ func TestContactCardGenerateParseImport(t *testing.T) {
 	defer h.Close()
 
 	// Dummy bootstrap node
-	dummyPid, _ := peer.Decode("12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn")
+	dummyPid, _ := peer.Decode("12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib")
 	dummyAddr, _ := multiaddr.NewMultiaddr("/dns4/agent-communication.online/tcp/45041")
 	dummyBootstrap := []peer.AddrInfo{
 		{

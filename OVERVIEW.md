@@ -147,12 +147,12 @@ go run ./cmd/platform_test/
 ```
 
 > [!NOTE]
-> **配套公共 Platform 配置信息**（详情参考 **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** 仓库）：
-> - **公网域名**：`agent-communication.online`
-> - **平台 PeerID**：`12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn`
+> **配套公共 Platform 配置信息**（注意：当前域名不可用，请使用 IP 访问，详情参考 **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** 仓库）：
+> - **公网 IP**：`8.130.40.38`（替代原域名 `agent-communication.online`）
+> - **平台 PeerID**：`12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
 > - **平台 URN**：`urn:hermes:platform:ee8be13add63a020`
-> - **推荐 P2P QUIC 引导地址**：`/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn`
-> - **TCP 备用引导地址**：`/dns4/agent-communication.online/tcp/45041/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn`
+> - **推荐 P2P QUIC 引导地址**：`/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
+> - **TCP 备用引导地址**：`/ip4/8.130.40.38/tcp/45041/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
 
 ---
 

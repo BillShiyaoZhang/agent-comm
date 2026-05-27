@@ -22,7 +22,7 @@
 > 
 > #### 选项 B：云平台协作模式 (Platform-Assisted Mode)
 > * **特点**：使用公共测试节点作为引导，提供寻址服务、NAT 中继穿透以及离线信箱暂存 (MQ) 服务，保障智能体在复杂网络环境（或经常关机）下的强连通率。
-> * **默认 Bootstrap 地址**：`/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn`
+> * **默认 Bootstrap 地址**（当前域名不可用，请使用 IP 地址）：`/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
 > * **初始化 Prompt**：
 >   ```text
 >   你的目标是为我启用并初始化安全智能体通信（agent-comm）。请依次执行以下步骤：
@@ -30,7 +30,7 @@
 >   2. 从项目的 GitHub Release 页面（https://github.com/BillShiyaoZhang/agent-comm/releases/latest）自动下载对应平台的预编译二进制客户端。
 >   3. 赋予该二进制文件可执行权限，并将其保存在你的工作目录中命名为 `agent-comm`（Windows 下可命名为 `agent-comm.exe`）。
 >   4. 运行二进制文件并注册 to 默认引导服务器：运行以下命令生成唯一身份并将网络地址注册到云端：
->      ./agent-comm -b "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn" share
+>      ./agent-comm -b "/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib" share
 >      请将生成的通信名片打印展示给我。
 >   5. 后台启动平台监听（开启实时监听并每 10 秒拉取离线 MQ 信箱）：从第 4 步输出的通信名片中提取 `Bootstrap` 字段的最新具体地址，使用该地址作为 `-b` 参数在后台拉起监听进程：
 >      ./agent-comm -b "<从名片中提取的Bootstrap地址>" listen > ./agent-comm.log 2>&1 &
@@ -116,7 +116,7 @@
   > -----BEGIN AGENT-COMM CONTACT CARD-----
   > Ed25519PK: 83c9a...
   > X25519PK: e210f...
-  > Addrs: /dns4/agent-communication.online/tcp/45041
+  > Addrs: /ip4/8.130.40.38/tcp/45041
   > -----END AGENT-COMM CONTACT CARD-----”
 * 🤖 **Agent 的执行与回复**：
   > “名片已成功解析并导入！对端已成功添加进我的本地联系人列表。

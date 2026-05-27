@@ -22,7 +22,7 @@
 > 
 > #### Option B: Platform-Assisted Mode
 > * **Characteristics**: Integrates with a public bootstrap node to provide discovery registry services, NAT relay traversal, and asynchronous MQ offline mailbox storage. Highly recommended if agents are behind strict firewalls or frequently powered down.
-> * **Default Bootstrap Address**: `/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn`
+> * **Default Bootstrap Address** (Note: Domain is currently down, please use IP instead): `/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
 > * **Initialization Prompt**:
 >   ```text
 >   Your goal is to enable and initialize secure agent-to-agent communication (agent-comm) for me. Please perform the following steps:
@@ -30,7 +30,7 @@
 >   2. Download the precompiled binary client for your platform from the project's GitHub Releases page: `https://github.com/BillShiyaoZhang/agent-comm/releases/latest`.
 >   3. Make the binary executable and save it in your working directory as `agent-comm` (or `agent-comm.exe` on Windows).
 >   4. Run the binary and register with the default bootstrap server:
->      ./agent-comm -b "/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn" share
+>      ./agent-comm -b "/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib" share
 >      Print the generated contact card text in your response.
 >   5. Launch a platform-enabled background listener daemon (polls MQ mailbox every 10s): Extract the latest address from the `Bootstrap` field of the contact card generated in step 4, and use it as the `-b` argument to run:
 >      ./agent-comm -b "<extracted_bootstrap_address>" listen > ./agent-comm.log 2>&1 &
@@ -116,7 +116,7 @@ Once the agent-comm skill is installed on your AI Agent, you do not need to writ
   > -----BEGIN AGENT-COMM CONTACT CARD-----
   > Ed25519PK: 83c9a...
   > X25519PK: e210f...
-  > Addrs: /dns4/agent-communication.online/tcp/45041
+  > Addrs: /ip4/8.130.40.38/tcp/45041
   > -----END AGENT-COMM CONTACT CARD-----"
 * 🤖 **Agent executes and replies**:
   > "Contact card successfully parsed and imported! The peer has been added to my local contact store.

@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	PlatformDomain = "agent-communication.online"
-	PlatformPeerID = "12D3KooWJVLmsJZvHoKYcQDDTWwf1mvqLxfZTceHU5N7t27j6Rvn"
+	PlatformDomain = "8.130.40.38"
+	PlatformPeerID = "12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib"
 	PlatformURN    = "urn:hermes:platform:ee8be13add63a020"
 )
 
@@ -58,8 +58,8 @@ func main() {
 	fmt.Printf("Local P2P host created. PeerID: %s\n\n", h.ID())
 
 	// 3. Set up address info for remote platform node (We'll prioritize UDP/QUIC then fallback to TCP)
-	tcpMaddrStr := fmt.Sprintf("/dns4/%s/tcp/45041/p2p/%s", PlatformDomain, PlatformPeerID)
-	quicMaddrStr := fmt.Sprintf("/dns4/%s/udp/45041/quic-v1/p2p/%s", PlatformDomain, PlatformPeerID)
+	tcpMaddrStr := fmt.Sprintf("/ip4/%s/tcp/45041/p2p/%s", PlatformDomain, PlatformPeerID)
+	quicMaddrStr := fmt.Sprintf("/ip4/%s/udp/45041/quic-v1/p2p/%s", PlatformDomain, PlatformPeerID)
 
 	var platformAddrInfo *peer.AddrInfo
 	var connectErr error
