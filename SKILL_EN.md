@@ -63,8 +63,8 @@ As an agent, if you need to perform the above goals (generating contact cards, i
 ### ⚙️ CLI Global Flags
 The `agent-comm` tool supports global CLI flags for configuration. Flags override environment variables if both are present:
 *   `-b`, `--bootstrap <addr>`: Specify the Multiaddress of a custom platform bootstrap node. **If not provided (and BOOTSTRAP_ADDR env var is also empty), the client will automatically start in standalone local P2P mode (no bootstrap/platform).**
-*   `--keysdir <path>`: Specify the identity keys storage directory (defaults to `~/.agent-comm/keys` or `AGENT_KEYSDIR` env var).
-*   `--dbpath <path>`: Specify the main SQLite database storage path (defaults to `~/.agent-comm/keys/agent_comm.db` or `DB_PATH` env var).
+*   `--keysdir <path>`: Specify the identity keys storage directory. Default: If writable and not a temporary path, defaults to a `keys/` folder adjacent to the executable (e.g. `skills/agent-comm/keys/`); otherwise defaults to `~/.agent-comm/keys/`; can also be specified via the `AGENT_KEYSDIR` environment variable.
+*   `--dbpath <path>`: Specify the main SQLite database storage path (defaults to `agent_comm.db` inside the resolved keys directory, or can be specified via the `DB_PATH` environment variable).
 
 ### 🧠 Decision Guide for AI Agents
 When executing tasks, you must determine whether to include the `-b` bootstrap parameter based on the context:

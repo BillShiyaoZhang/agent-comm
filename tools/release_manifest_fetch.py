@@ -220,13 +220,21 @@ def main() -> int:
     if args.include_docs:
         docs_asset = select_asset(assets, "docs")
         docs_path = download_asset(release_base, docs_asset, output_dir)
+        try:
+            import zipfile
+            with zipfile.ZipFile(docs_path, 'r') as zip_ref:
+                zip_ref.extractall(output_dir)
+            docs_path.unlink(missing_ok=True)
+            print("extracted documentation files directly into output directory")
+        except Exception as err:
+            print(f"failed to extract documentation zip: {err}")
 
     set_executable(binary_path)
 
     print(f"downloaded binary: {binary_path}")
     print(f"downloaded checksums: {checksum_path}")
     if docs_path:
-        print(f"downloaded docs bundle: {docs_path}")
+        print("extracted documentation files")
     print(f"platform: {desired_os}/{desired_arch}")
     return 0
 

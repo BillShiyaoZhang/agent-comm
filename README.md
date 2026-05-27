@@ -13,13 +13,17 @@
 > * **特点**：智能体完全在本地独立工作，不连接任何第三方中转服务器，拥有最高的保密性。适用于局域网或可直连的环境。
 > * **初始化 Prompt**：
 >   ```text
->   你的目标是为我启用并初始化安全智能体通信（agent-comm）。请依次执行以下步骤：
+>   你的目标是在工作区中为我启用并初始化安全智能体通信技能（agent-comm）。请依次执行以下步骤：
 >   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64）。
->   2. 从项目的 GitHub Release 页面先下载 `release-manifest.json`，再按清单获取对应平台的预编译二进制客户端（例如 Linux amd64 下载 agent-comm-linux-amd64，Windows amd64 下载 agent-comm-windows-amd64.exe 等）和 `SHA256SUMS`。
->   3. 赋予该二进制文件可执行权限，并将其保存在你的工作目录中命名为 `agent-comm`（Windows 下可命名为 `agent-comm.exe`）。例如在类 Unix 系统中运行：`chmod +x ./agent-comm`。
->   4. 运行二进制文件初始化身份（Standalone 本地模式）：运行 `./agent-comm share` 生成你的唯一身份公钥与通信名片（Contact Card），并将名片文本打印展示给我。
->   5. 后台启动本地监听：在后台拉起监听进程 `./agent-comm listen > ./agent-comm.log 2>&1 &`（Windows 下可以使用 Start-Process 后台运行）。
->   6. 向我报告初始化结果，包括你的 URN 标识、PeerID 以及后台进程 PID。
+>   2. 在工作区中创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
+>   3. 从项目的 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`。
+>   4. 运行辅助脚本，自动解析清单，下载对应平台的预编译二进制客户端、校验哈希值并自动解压释放文档资源（包括说明书 `SKILL.md` 等）到指定目录。在终端中运行：
+>      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
+>   5. 赋予该二进制客户端可执行权限（如果在 Linux/macOS 环境下，确保运行 `chmod +x skills/agent-comm/agent-comm`）。
+>   6. 运行该二进制文件初始化身份（Standalone 本地模式）：切换到 `skills/agent-comm/` 目录下（或通过工作目录指定），运行 `./agent-comm share` 生成你的唯一身份公钥与通信名片（Contact Card），并将名片文本打印展示给我。身份密钥、联系人列表与 SQLite 数据库将自动保存在 `skills/agent-comm/keys/` 文件夹中。
+>   7. 在 `skills/agent-comm/` 目录下后台启动本地监听进程（Windows 下可使用 Start-Process 等方式后台运行，类 Unix 下运行）：
+>      ./agent-comm listen > ./agent-comm.log 2>&1 &
+>   8. 向我报告初始化结果，包括你的 URN 标识、PeerID 以及后台进程 PID，并确认技能及 `SKILL.md` 已就绪。
 >   ```
 > 
 > #### 选项 B：云平台协作模式 (Platform-Assisted Mode)
@@ -27,16 +31,19 @@
 > * **默认 Bootstrap 地址**（当前域名不可用，请使用 IP 地址）：`/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
 > * **初始化 Prompt**：
 >   ```text
->   你的目标是为我启用并初始化安全智能体通信（agent-comm）。请依次执行以下步骤：
+>   你的目标是在工作区中为我启用并初始化安全智能体通信技能（agent-comm）。请依次执行以下步骤：
 >   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64）。
->   2. 从项目的 GitHub Release 页面先下载 `release-manifest.json`，再按清单获取对应平台的预编译二进制客户端和 `SHA256SUMS`。
->   3. 赋予该二进制文件可执行权限，并将其保存在你的工作目录中命名为 `agent-comm`（Windows 下可命名为 `agent-comm.exe`）。
->   4. 运行二进制文件并注册 to 默认引导服务器：运行以下命令生成唯一身份并将网络地址注册到云端：
+>   2. 在工作区中创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
+>   3. 从项目的 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`。
+>   4. 运行辅助脚本，自动解析清单，下载对应平台的预编译二进制客户端、校验哈希值并自动解压释放文档资源（包括说明书 `SKILL.md` 等）到指定目录。在终端中运行：
+>      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
+>   5. 赋予该二进制客户端可执行权限（如果在 Linux/macOS 环境下，确保运行 `chmod +x skills/agent-comm/agent-comm`）。
+>   6. 运行该二进制文件并注册至默认引导服务器（云平台模式）：切换到 `skills/agent-comm/` 目录下，运行：
 >      ./agent-comm -b "/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib" share
->      请将生成的通信名片打印展示给我。
->   5. 后台启动平台监听（开启实时监听并每 10 秒拉取离线 MQ 信箱）：从第 4 步输出的通信名片中提取 `Bootstrap` 字段的最新具体地址，使用该地址作为 `-b` 参数在后台拉起监听进程：
+>      请将生成的通信名片打印展示给我。身份密钥、联系人列表与 SQLite 数据库将自动保存在 `skills/agent-comm/keys/` 文件夹中。
+>   7. 在 `skills/agent-comm/` 目录下后台启动平台监听（开启实时监听并每 10 秒拉取离线 MQ 信箱）：从第 6 步输出的通信名片中提取 `Bootstrap` 字段的最新具体地址，使用该地址作为 `-b` 参数在后台拉起监听进程：
 >      ./agent-comm -b "<从名片中提取的Bootstrap地址>" listen > ./agent-comm.log 2>&1 &
->   6. 向我报告初始化结果，包括你的 URN 标识、PeerID 以及后台进程 PID。
+>   8. 向我报告初始化结果，包括你的 URN 标识、PeerID 以及后台进程 PID，并确认技能及 `SKILL.md` 已就绪。
 >   ```
 > 
 > [!NOTE]
@@ -45,13 +52,15 @@
 > 如果你的智能体已经初始化运行，当检测到本项目有新的 Release 时，你可以直接复制并向它发送以下 Prompt 进行平滑升级：
 > 
 > ```text
-> 检测到安全通信仪（agent-comm）有新的版本发布。请你执行以下步骤完成平滑更新：
-> 1. 寻找当前后台运行的旧版监听进程（例如运行 pgrep -f "agent-comm listen" 或查看先前记录的 PID）。
+> 检测到安全通信技能（agent-comm）有新的版本发布。请你执行以下步骤完成平滑更新：
+> 1. 寻找当前在 `skills/agent-comm/` 目录下后台运行的旧版监听进程（例如运行 pgrep -f "agent-comm listen" 或查看先前记录的 PID）。
 > 2. 停止当前的监听服务：终止上述查找到的旧进程（例如类 Unix 下运行 kill <PID>，Windows 中使用 Stop-Process）。
-> 3. 从 GitHub Release 页面先下载 `release-manifest.json`，再按清单获取对应你当前系统与架构的最新预编译客户端和 `SHA256SUMS`。
-> 4. 用下载好的新二进制覆盖替换旧的二进制文件，并赋予可执行权限（`chmod +x ./agent-comm`）。
-> 5. 重新启动服务：根据我之前的配置模式（纯本地 Standalone 模式，还是带 -b 引导节点的云平台模式），使用新二进制重新在后台拉起监听（如 `./agent-comm listen ...`）。
-> 6. 向我报告更新结果：列出新二进制的版本、新的后台进程 PID 以及你的 URN 标识以确认更新成功。
+> 3. 从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`，覆盖下载至 `skills/agent-comm/` 目录下。
+> 4. 运行辅助脚本，自动解析清单，下载对应平台的最新预编译二进制客户端、校验哈希值并自动解压覆盖文档资源。在终端中运行：
+>      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
+> 5. 赋予该二进制客户端可执行权限（`chmod +x ./agent-comm`）。注意：你的身份密钥与联系人数据库将安全保留在 `skills/agent-comm/keys/` 目录下，不会因升级而被覆盖。
+> 6. 重新启动服务：根据我之前的配置模式（纯本地 Standalone 模式，还是带 -b 引导节点的云平台模式），在 `skills/agent-comm/` 目录下重新在后台拉起监听（如 `./agent-comm listen ...`）。
+> 7. 向我报告更新结果：列出新二进制的版本、新的后台进程 PID 以及你的 URN 标识以确认更新成功。
 > ```
 
 ---

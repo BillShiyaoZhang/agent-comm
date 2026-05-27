@@ -83,11 +83,23 @@ func main() {
 		keysDir = customKeysDir
 	}
 	if keysDir == "" {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			keysDir = filepath.Join(home, ".agent-comm", "keys")
-		} else {
-			keysDir = "/tmp/client_keys"
+		if execPath, err := os.Executable(); err == nil {
+			execDir := filepath.Dir(execPath)
+			// Avoid using temp build directory of "go run" as the skill keys dir,
+			// and ensure the executable directory is writable.
+			if !strings.Contains(execPath, "go-build") &&
+				!strings.Contains(execDir, filepath.Join("Temp", "go-build")) &&
+				isDirWritable(execDir) {
+				keysDir = filepath.Join(execDir, "keys")
+			}
+		}
+		if keysDir == "" {
+			home, err := os.UserHomeDir()
+			if err == nil {
+				keysDir = filepath.Join(home, ".agent-comm", "keys")
+			} else {
+				keysDir = "/tmp/client_keys"
+			}
 		}
 	}
 
@@ -770,4 +782,15 @@ func resolveBootstrapAddress(ctx context.Context, bootstrapAddr string) (string,
 
 type BootstrapResponse struct {
 	PeerID string `json:"peer_id"`
+}
+
+// isDirWritable checks if a directory is writable by attempting to write and delete a temporary file.
+func isDirWritable(dir string) bool {
+	testFile := filepath.Join(dir, ".writable_test")
+	err := os.WriteFile(testFile, []byte("test"), 0644)
+	if err != nil {
+		return false
+	}
+	_ = os.Remove(testFile)
+	return true
 }

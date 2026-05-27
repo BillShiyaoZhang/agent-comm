@@ -130,13 +130,16 @@ jobs:
 ### 优化后的 Prompt 模板：
 
 ```text
-你的目标是为我启用并初始化安全智能体通信（agent-comm）。请依次执行以下步骤：
+你的目标是在工作区中为我启用并初始化安全智能体通信技能（agent-comm）。请依次执行以下步骤：
 1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64）。
-2. 从项目的 GitHub Release 页面先下载 `release-manifest.json`，根据其中的清单自动定位并下载对应平台的预编译二进制客户端和 `SHA256SUMS`。
-3. 赋予该二进制文件可执行权限，并将其保存在你的工作目录中：`chmod +x ./agent-comm`。
-4. 运行二进制文件初始化身份：运行 `./agent-comm share` 生成你的唯一身份公钥与通信名片（Contact Card），并将名片文本打印展示给我，以便我分享给其他合作智能体。
-5. 后台启动长期监听：在后台拉起监听进程 `./agent-comm listen > ./agent-comm.log 2>&1 &`。由于这是原生编译的二进制，它将完美规约标准输出缓冲，实现毫秒级拉取与直连消息的响应。
-6. 向我报告初始化结果，包括你的 URN 标识、PeerID 以及后台进程 PID。
+2. 在工作区中创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
+3. 从项目的 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`。
+4. 运行辅助脚本，自动解析清单，下载对应平台的预编译二进制客户端、校验哈希值并自动解压释放文档资源（包括说明书 `SKILL.md` 等）到指定目录。在终端中运行：
+   python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
+5. 赋予该二进制客户端可执行权限（如果在 Linux/macOS 环境下，确保运行 `chmod +x skills/agent-comm/agent-comm`）。
+6. 运行该二进制文件初始化身份：切换到 `skills/agent-comm/` 目录下，运行 `./agent-comm share` 生成你的唯一身份公钥与通信名片（Contact Card），并将名片文本打印展示给我，以便我分享给其他合作智能体。身份密钥、联系人列表与 SQLite 数据库将自动保存在 `skills/agent-comm/keys/` 文件夹中。
+7. 后台启动长期监听：在 `skills/agent-comm/` 目录下后台拉起监听进程 `./agent-comm listen > ./agent-comm.log 2>&1 &`。由于这是原生编译的二进制，它将完美规约标准输出缓冲，实现毫秒级拉取与直连消息的响应。
+8. 向我报告初始化结果，包括你的 URN 标识、PeerID 以及后台进程 PID，并确认技能及 `SKILL.md` 已就绪。
 ```
 
 ---

@@ -63,8 +63,8 @@ description: >
 ### ⚙️ CLI 命令行参数 (CLI Flags)
 `agent-comm` 支持使用全局命令行参数（Flags）来动态配置，你也可以通过环境变量进行配置（命令行参数的优先级高于环境变量）：
 *   `-b`, `--bootstrap <addr>`：指定自定义平台引导节点的 Multiaddress。**如果未提供此参数且未配置环境变量，客户端将默认在纯本地无引导的 Standalone 模式下工作。**
-*   `--keysdir <path>`：指定身份密钥的存储路径（默认：`~/.agent-comm/keys` 或环境变量 `AGENT_KEYSDIR`）。
-*   `--dbpath <path>`：指定主要的 SQLite 数据库存储路径（默认：`~/.agent-comm/keys/agent_comm.db` 或环境变量 `DB_PATH`）。
+*   `--keysdir <path>`：指定身份密钥的存储路径。默认值：若目录可写且不是临时编译路径，默认在可执行文件同目录下的 `keys/`（例如 `skills/agent-comm/keys/`）；否则默认为 `~/.agent-comm/keys/`；亦可通过环境变量 `AGENT_KEYSDIR` 指定。
+*   `--dbpath <path>`：指定主要的 SQLite 数据库存储路径（默认：已解析 keys 目录下的 `agent_comm.db`，或通过环境变量 `DB_PATH` 指定）。
 
 ### 🧠 智能体运行决策指南 (Decision Guide for AI Agents)
 在执行指令时，你必须根据具体情况自主决定是否传入 `-b` 引导节点参数：
