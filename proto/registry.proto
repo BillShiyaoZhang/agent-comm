@@ -18,6 +18,11 @@ message RegisterRequest {
   string peer_id = 2;
   repeated string addrs = 3;
   bytes x25519_pubkey = 4;  // X25519 public key for ECIES encryption
+  bytes ed25519_pubkey = 5; // Ed25519 identity public key
+  bytes signature = 6;      // Self-signature over (urn | peerID | storesUserData | timestamp)
+  int64 timestamp = 7;      // Signature creation timestamp
+  bool stores_user_data = 8;// Policy declaration
+  repeated string relay_addrs = 9; // Relay addresses
 }
 
 message ResolveRequest {
@@ -41,6 +46,11 @@ message ResolveResponse {
   string peer_id = 2;
   repeated string addrs = 3;
   bytes x25519_pubkey = 4;  // X25519 public key for ECIES encryption
+  bytes ed25519_pubkey = 5; // Target Ed25519 identity public key
+  bytes signature = 6;      // Target original self-signature
+  int64 timestamp = 7;      // Original registration timestamp
+  bool stores_user_data = 8;// Target policy declaration
+  repeated string relay_addrs = 9; // Target relay addresses
 }
 
 // EncryptedEnvelope is imported from envelope.proto and reused here

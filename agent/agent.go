@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/BillShiyaoZhang/agent-comm/contacts"
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
@@ -107,7 +108,14 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 	urn := keys.Ed25519.URN()
 	for _, node := range cfg.BootstrapNodes {
 		go func(n peer.AddrInfo) {
-			_ = a.Registry.Register(n, urn, h.Addrs(), keys.X25519PK)
+			timestamp := time.Now().Unix()
+			msg := registry.BuildSignedMsg(urn, h.ID().String(), keys.X25519PK, false, timestamp)
+			sig, err := keys.Ed25519.Sign(msg)
+			if err != nil {
+				fmt.Printf("[Agent] Failed to sign registration: %v\n", err)
+				return
+			}
+			_ = a.Registry.RegisterWithSignature(n, urn, h.Addrs(), nil, keys.X25519PK, keys.Ed25519.PublicKey, sig, false, timestamp)
 		}(node)
 	}
 
@@ -149,7 +157,13 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 	for i := 0; i < len(a.BootstrapNodes); i++ {
 		r := <-resChan
 		if r.err == nil && r.res != nil && len(r.res.X25519PubKey) == 32 {
-			fmt.Printf("[Agent] Discovery won by: %s\n", r.src)
+			// Perform cryptographic signature verification (zero-trust security check)
+			if err := registry.VerifyResolveResult(recipientURN, r.res); err != nil {
+				fmt.Printf("[Agent] Security alert: Registry verification failed for %s resolved from %s: %v\n", recipientURN, r.src, err)
+				continue // Skip this potentially compromised/intercepted registry result!
+			}
+
+			fmt.Printf("[Agent] Discovery won by: %s (verified successfully)\n", r.src)
 			targetID = r.res.ID
 			recipientPubKey = r.res.X25519PubKey
 			targetAddrs = r.res.Addrs

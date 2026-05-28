@@ -246,3 +246,102 @@ func TestAgentHybridIntegration(t *testing.T) {
 		t.Errorf("expected 1 message deleted, got %d", deleted)
 	}
 }
+
+func TestRegistryVerificationFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 1. Setup Platform/Bootstrap node
+	platformKeysDir := filepath.Join(t.TempDir(), "platform_keys")
+	platformKeys, err := crypto.LoadOrCreateIdentity(platformKeysDir)
+	if err != nil {
+		t.Fatalf("failed to create platform keys: %v", err)
+	}
+	platformHost, err := p2phost.NewHost(p2phost.Config{
+		ListenAddrs:  []string{"/ip4/127.0.0.1/tcp/0"},
+		PrivKeyBytes: platformKeys.Ed25519.PrivateKey,
+	})
+	if err != nil {
+		t.Fatalf("failed to start platform host: %v", err)
+	}
+	defer platformHost.Close()
+
+	// Start Registry server with InMemoryStore
+	store := registry.NewInMemoryStore()
+	regServer := registry.NewServer(platformHost, store)
+	regServer.Register()
+
+	bootstrapInfo := peer.AddrInfo{
+		ID:    platformHost.ID(),
+		Addrs: platformHost.Addrs(),
+	}
+
+	// 2. Setup Agent A (Sender)
+	keysDirA := filepath.Join(t.TempDir(), "keys_a")
+	dbPathA := filepath.Join(t.TempDir(), "dr_a.db")
+	agentA, err := InitIdentity(ctx, Config{
+		KeysDir:        keysDirA,
+		DBPath:         dbPathA,
+		ListenAddrs:    []string{"/ip4/127.0.0.1/tcp/0"},
+		BootstrapNodes: []peer.AddrInfo{bootstrapInfo},
+	})
+	if err != nil {
+		t.Fatalf("failed to init agent A: %v", err)
+	}
+	defer agentA.Close()
+
+	// Connect Agent A to bootstrap
+	agentA.Host.Peerstore().AddAddrs(bootstrapInfo.ID, bootstrapInfo.Addrs, peerstore.PermanentAddrTTL)
+	if err := agentA.Host.Connect(ctx, bootstrapInfo); err != nil {
+		t.Fatalf("agent A failed to connect to bootstrap: %v", err)
+	}
+
+	// 3. Generate a signature for a valid registration of Agent B
+	urnB := "urn:hermes:agent:fakebob"
+	peerIDB := "12D3KooWN9hpHBpf7awNa7PTWeCVMHnmTkBcZ1Rx31UdNgM8mxyc"
+
+	// Let's generate a temporary Ed25519 identity for signing
+	edKeyPair, err := crypto.GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatalf("generate identity key pair: %v", err)
+	}
+	urnB = edKeyPair.URN() // Derived from this key pair
+
+	realX25519PKB := []byte("REAL_X25519_PUBKEY_32_BYTES_000")
+	if len(realX25519PKB) < 32 {
+		realX25519PKB = append(realX25519PKB, make([]byte, 32-len(realX25519PKB))...)
+	}
+
+	timestamp := time.Now().Unix()
+	msg := registry.BuildSignedMsg(urnB, peerIDB, realX25519PKB, false, timestamp)
+	sig, err := edKeyPair.Sign(msg)
+	if err != nil {
+		t.Fatalf("sign registration message: %v", err)
+	}
+
+	// 4. Inject a TAMPERED registration into the registry database (simulating MITM by swapping X25519 PK)
+	tamperedX25519PK := []byte("TAMPERED_X25519_PUBKEY_32_BYTES")
+	if len(tamperedX25519PK) < 32 {
+		tamperedX25519PK = append(tamperedX25519PK, make([]byte, 32-len(tamperedX25519PK))...)
+	}
+
+	// Inject B's registration using the tampered X25519 key but B's real signature
+	err = store.RegisterWithSignature(urnB, peerIDB, []string{"/ip4/127.0.0.1/tcp/4567"}, nil, tamperedX25519PK, edKeyPair.PublicKey, sig, false, timestamp)
+	if err != nil {
+		t.Fatalf("store tampered registration: %v", err)
+	}
+
+	// 5. Try resolving URN B from Agent A's registry client
+	res, err := agentA.Registry.Resolve(bootstrapInfo, urnB)
+	if err != nil {
+		t.Fatalf("agent A failed to resolve agent B: %v", err)
+	}
+
+	// 6. VerifyResolveResult should fail on the tampered key
+	err = registry.VerifyResolveResult(urnB, &res)
+	if err == nil {
+		t.Error("expected VerifyResolveResult to FAIL on tampered public key, but it succeeded!")
+	} else {
+		t.Logf("VerifyResolveResult failed as expected: %v", err)
+	}
+}

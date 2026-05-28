@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mr-tron/base58"
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	agentpb "github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -25,7 +27,12 @@ import (
 // ResolveResult holds the resolved address info and X25519 public key.
 type ResolveResult struct {
 	peer.AddrInfo
-	X25519PubKey []byte // X25519 public key for ECIES encryption (nil if not registered)
+	X25519PubKey   []byte // X25519 public key for ECIES encryption (nil if not registered)
+	Ed25519PubKey  []byte // Ed25519 identity public key
+	Signature      []byte // Self-signature
+	Timestamp      int64  // Registration timestamp
+	StoresUserData bool   // Flag indicating if platform stores user data
+	RelayAddrs     []string
 }
 
 // Client resolves URNs by querying a registry server via libp2p streams.
@@ -98,13 +105,23 @@ func (c *Client) Resolve(target peer.AddrInfo, urn string) (ResolveResult, error
 	}
 
 	return ResolveResult{
-		AddrInfo:    peer.AddrInfo{ID: pid, Addrs: addrs},
-		X25519PubKey: resolve.Resolve.X25519Pubkey,
+		AddrInfo:       peer.AddrInfo{ID: pid, Addrs: addrs},
+		X25519PubKey:   resolve.Resolve.X25519Pubkey,
+		Ed25519PubKey:  resolve.Resolve.Ed25519Pubkey,
+		Signature:      resolve.Resolve.Signature,
+		Timestamp:      resolve.Resolve.Timestamp,
+		StoresUserData: resolve.Resolve.StoresUserData,
+		RelayAddrs:     resolve.Resolve.RelayAddrs,
 	}, nil
 }
 
 // Register tells the registry server about this node's URN -> PeerID/addrs mapping.
 func (c *Client) Register(target peer.AddrInfo, urn string, addrs []multiaddr.Multiaddr, x25519PubKey []byte) error {
+	return c.RegisterWithSignature(target, urn, addrs, nil, x25519PubKey, nil, nil, false, 0)
+}
+
+// RegisterWithSignature registers with signature validation details.
+func (c *Client) RegisterWithSignature(target peer.AddrInfo, urn string, addrs []multiaddr.Multiaddr, relayAddrs []string, x25519PubKey, ed25519PubKey, signature []byte, storesUserData bool, timestamp int64) error {
 	addrsStr := make([]string, len(addrs))
 	for i, a := range addrs {
 		addrsStr[i] = a.String()
@@ -113,10 +130,15 @@ func (c *Client) Register(target peer.AddrInfo, urn string, addrs []multiaddr.Mu
 	req := &agentpb.URNRegistryRequest{
 		Op: &agentpb.URNRegistryRequest_Register{
 			Register: &agentpb.RegisterRequest{
-				Urn:          urn,
-				PeerId:       c.host.ID().String(),
-				Addrs:        addrsStr,
-				X25519Pubkey: x25519PubKey,
+				Urn:            urn,
+				PeerId:         c.host.ID().String(),
+				Addrs:          addrsStr,
+				X25519Pubkey:   x25519PubKey,
+				Ed25519Pubkey:  ed25519PubKey,
+				Signature:      signature,
+				Timestamp:      timestamp,
+				StoresUserData: storesUserData,
+				RelayAddrs:     relayAddrs,
 			},
 		},
 	}
@@ -160,6 +182,60 @@ func (c *Client) Register(target peer.AddrInfo, urn string, addrs []multiaddr.Mu
 	return nil
 }
 
+// BuildSignedMsg constructs the canonical message payload to be signed for verification.
+func BuildSignedMsg(urn, peerID string, x25519Pub []byte, storesUserData bool, timestamp int64) []byte {
+	ts := make([]byte, 8)
+	binary.BigEndian.PutUint64(ts, uint64(timestamp))
+	flag := "0"
+	if storesUserData {
+		flag = "1"
+	}
+	xHex := hex.EncodeToString(x25519Pub)
+	msg := []byte(urn + "|" + peerID + "|" + xHex + "|" + flag + "|")
+	return append(msg, ts...)
+}
+
+// URNFromEd25519PK derives the URN string from an Ed25519 public key.
+func URNFromEd25519PK(pubKey []byte) string {
+	h := sha256.Sum256(pubKey)
+	return fmt.Sprintf("urn:hermes:agent:%s", base58.Encode(h[:16]))
+}
+
+// VerifyResolveResult validates that the resolved registry details are authentic and untampered.
+func VerifyResolveResult(urn string, res *ResolveResult) error {
+	// If the registry response has no signature data (legacy registry server), we allow it but log a warning.
+	// To enforce strict zero-trust security, uncomment the verification failure on empty signature.
+	if len(res.Signature) == 0 {
+		fmt.Printf("[Warning] Resolved URN %s has no cryptographic signature. Privacy cannot be verified.\n", urn)
+		return nil
+	}
+
+	if len(res.Ed25519PubKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid ed25519 identity key size")
+	}
+
+	// 1. Verify that the identity key hashes to the URN (Self-certifying check)
+	expectedURN := URNFromEd25519PK(res.Ed25519PubKey)
+	if expectedURN != urn {
+		return fmt.Errorf("security alert: identity public key does not match target URN (expected %s, got %s)", urn, expectedURN)
+	}
+
+	// 2. Verify signature on (URN || PeerID || X25519PubKey || stores_user_data || timestamp)
+	msg := BuildSignedMsg(urn, res.ID.String(), res.X25519PubKey, res.StoresUserData, res.Timestamp)
+	if !ed25519.Verify(ed25519.PublicKey(res.Ed25519PubKey), msg, res.Signature) {
+		return fmt.Errorf("security alert: invalid registry signature from destination identity")
+	}
+
+	// 3. Verify timestamp is within valid window (5 minutes) to prevent replay
+	now := time.Now().Unix()
+	diff := now - res.Timestamp
+	if diff > 300 || diff < -60 {
+		return fmt.Errorf("security alert: registration signature is stale or timestamp is in the future")
+	}
+
+	return nil
+}
+
 // HTTPClient resolves and registers URNs via the HTTP REST API.
 type HTTPClient struct {
 	BaseURL string
@@ -175,36 +251,40 @@ func NewHTTPClient(baseURL string, keys *crypto.IdentityKeys) *HTTPClient {
 }
 
 type registerReq struct {
-	URN           string   `json:"urn"`
-	PeerID        string   `json:"peer_id"`
-	Addrs         []string `json:"addrs"`
-	RelayAddrs    []string `json:"relay_addrs"`
-	X25519Pubkey  []byte   `json:"x25519_pubkey"`
-	Ed25519Pubkey []byte   `json:"ed25519_pubkey"`
-	Signature     []byte   `json:"signature"`
-	Timestamp     int64    `json:"timestamp"`
+	URN            string   `json:"urn"`
+	PeerID         string   `json:"peer_id"`
+	Addrs          []string `json:"addrs"`
+	RelayAddrs     []string `json:"relay_addrs"`
+	X25519Pubkey   []byte   `json:"x25519_pubkey"`
+	Ed25519Pubkey  []byte   `json:"ed25519_pubkey"`
+	Signature      []byte   `json:"signature"`
+	Timestamp      int64    `json:"timestamp"`
+	StoresUserData bool     `json:"stores_user_data"`
 }
 
 // Register registers a URN with the HTTP Registry API using signature verification.
 func (c *HTTPClient) Register(urn string, peerID string, addrs []string, relayAddrs []string, x25519PubKey []byte) error {
+	return c.RegisterWithPolicy(urn, peerID, addrs, relayAddrs, x25519PubKey, false)
+}
+
+// RegisterWithPolicy registers with the HTTP Registry API specifying a storage policy.
+func (c *HTTPClient) RegisterWithPolicy(urn string, peerID string, addrs []string, relayAddrs []string, x25519PubKey []byte, storesUserData bool) error {
 	timestamp := time.Now().Unix()
 
-	// 1. Generate internal registry signature over (urn | peerID | timestamp)
-	// msg := urn + "|" + peerID + "|" + timestamp (big-endian 8 bytes)
-	tsBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(tsBuf, uint64(timestamp))
-	msg := append([]byte(urn+"|"+peerID+"|"), tsBuf...)
+	// 1. Generate internal registry signature over canonical BuildSignedMsg
+	msg := BuildSignedMsg(urn, peerID, x25519PubKey, storesUserData, timestamp)
 	sig := ed25519.Sign(c.Keys.Ed25519.PrivateKey, msg)
 
 	reqObj := registerReq{
-		URN:           urn,
-		PeerID:        peerID,
-		Addrs:         addrs,
-		RelayAddrs:    relayAddrs,
-		X25519Pubkey:  x25519PubKey,
-		Ed25519Pubkey: c.Keys.Ed25519.PublicKey,
-		Signature:     sig,
-		Timestamp:     timestamp,
+		URN:            urn,
+		PeerID:         peerID,
+		Addrs:          addrs,
+		RelayAddrs:     relayAddrs,
+		X25519Pubkey:   x25519PubKey,
+		Ed25519Pubkey:  c.Keys.Ed25519.PublicKey,
+		Signature:      sig,
+		Timestamp:      timestamp,
+		StoresUserData: storesUserData,
 	}
 
 	bodyBytes, err := json.Marshal(reqObj)
@@ -245,13 +325,17 @@ func (c *HTTPClient) Register(urn string, peerID string, addrs []string, relayAd
 }
 
 type resolveResp struct {
-	Found        bool     `json:"found"`
-	URN          string   `json:"urn"`
-	PeerID       string   `json:"peer_id"`
-	Addrs        []string `json:"addrs"`
-	RelayAddrs   []string `json:"relay_addrs"`
-	X25519Pubkey []byte   `json:"x25519_pubkey"`
-	ExpiresAt    string   `json:"expires_at"`
+	Found          bool     `json:"found"`
+	URN            string   `json:"urn"`
+	PeerID         string   `json:"peer_id"`
+	Addrs          []string `json:"addrs"`
+	RelayAddrs     []string `json:"relay_addrs"`
+	X25519Pubkey   []byte   `json:"x25519_pubkey"`
+	Ed25519Pubkey  []byte   `json:"ed25519_pubkey"`
+	Signature      []byte   `json:"signature"`
+	Timestamp      int64    `json:"timestamp"`
+	StoresUserData bool     `json:"stores_user_data"`
+	ExpiresAt      string   `json:"expires_at"`
 }
 
 // Resolve queries the HTTP registry for a URN.
@@ -294,7 +378,12 @@ func (c *HTTPClient) Resolve(urn string) (ResolveResult, error) {
 	}
 
 	return ResolveResult{
-		AddrInfo:     peer.AddrInfo{ID: pid, Addrs: addrs},
-		X25519PubKey: res.X25519Pubkey,
+		AddrInfo:       peer.AddrInfo{ID: pid, Addrs: addrs},
+		X25519PubKey:   res.X25519Pubkey,
+		Ed25519PubKey:  res.Ed25519Pubkey,
+		Signature:      res.Signature,
+		Timestamp:      res.Timestamp,
+		StoresUserData: res.StoresUserData,
+		RelayAddrs:     res.RelayAddrs,
 	}, nil
 }

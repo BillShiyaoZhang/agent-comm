@@ -19,14 +19,21 @@ const ProtoID = "/hermes/agent-comm/registry/1.0.0"
 
 // RegistryEntry holds the full registration info for a URN.
 type RegistryEntry struct {
-	Info         peer.AddrInfo
-	X25519PubKey []byte // X25519 public key for ECIES
+	Info           peer.AddrInfo
+	X25519PubKey   []byte // X25519 public key for ECIES
+	Ed25519PubKey  []byte // Ed25519 identity public key
+	Signature      []byte // Self-signature
+	Timestamp      int64  // Registration timestamp
+	StoresUserData bool   // Storage policy
+	RelayAddrs     []string
 }
 
 // Store defines the registry database backend interface.
 type Store interface {
 	Register(urn, peerID string, addrs []string, x25519PubKey []byte) (bool, string)
 	Resolve(urn string) (peerID string, addrs []string, x25519PubKey []byte, found bool)
+	RegisterWithSignature(urn, peerID string, addrs, relayAddrs []string, x25519PK, ed25519PK, signature []byte, storesUserData bool, timestamp int64) error
+	ResolveExtended(urn string) (peerID string, addrs, relayAddrs []string, x25519PK, ed25519PK, signature []byte, storesUserData bool, timestamp int64, found bool)
 }
 
 // InMemoryStore is the default in-memory registry database.
@@ -42,12 +49,27 @@ func NewInMemoryStore() *InMemoryStore {
 
 // Register adds or updates a registration entry.
 func (s *InMemoryStore) Register(urn, peerID string, addrs []string, x25519PubKey []byte) (bool, string) {
+	err := s.RegisterWithSignature(urn, peerID, addrs, nil, x25519PubKey, nil, nil, false, 0)
+	if err != nil {
+		return false, err.Error()
+	}
+	return true, ""
+}
+
+// Resolve looks up the entry for a URN.
+func (s *InMemoryStore) Resolve(urn string) (string, []string, []byte, bool) {
+	pid, addrs, _, x25519PubKey, _, _, _, _, found := s.ResolveExtended(urn)
+	return pid, addrs, x25519PubKey, found
+}
+
+// RegisterWithSignature registers an entry with signature validation data.
+func (s *InMemoryStore) RegisterWithSignature(urn, peerID string, addrs, relayAddrs []string, x25519PK, ed25519PK, signature []byte, storesUserData bool, timestamp int64) error {
 	if urn == "" || peerID == "" {
-		return false, "urn and peer_id are required"
+		return fmt.Errorf("urn and peer_id are required")
 	}
 	pid, err := peer.Decode(peerID)
 	if err != nil {
-		return false, fmt.Sprintf("invalid peer_id: %v", err)
+		return fmt.Errorf("invalid peer_id: %w", err)
 	}
 	var maddrs []multiaddr.Multiaddr
 	for _, a := range addrs {
@@ -60,26 +82,31 @@ func (s *InMemoryStore) Register(urn, peerID string, addrs []string, x25519PubKe
 
 	s.mu.Lock()
 	s.账册[urn] = RegistryEntry{
-		Info:         peer.AddrInfo{ID: pid, Addrs: maddrs},
-		X25519PubKey: x25519PubKey,
+		Info:           peer.AddrInfo{ID: pid, Addrs: maddrs},
+		X25519PubKey:   x25519PK,
+		Ed25519PubKey:  ed25519PK,
+		Signature:      signature,
+		Timestamp:      timestamp,
+		StoresUserData: storesUserData,
+		RelayAddrs:     relayAddrs,
 	}
 	s.mu.Unlock()
-	return true, ""
+	return nil
 }
 
-// Resolve looks up the entry for a URN.
-func (s *InMemoryStore) Resolve(urn string) (string, []string, []byte, bool) {
+// ResolveExtended looks up the extended signature entry for a URN.
+func (s *InMemoryStore) ResolveExtended(urn string) (string, []string, []string, []byte, []byte, []byte, bool, int64, bool) {
 	s.mu.RLock()
 	entry, ok := s.账册[urn]
 	s.mu.RUnlock()
 	if !ok {
-		return "", nil, nil, false
+		return "", nil, nil, nil, nil, nil, false, 0, false
 	}
 	addrs := make([]string, len(entry.Info.Addrs))
 	for i, a := range entry.Info.Addrs {
 		addrs[i] = a.String()
 	}
-	return entry.Info.ID.String(), addrs, entry.X25519PubKey, true
+	return entry.Info.ID.String(), addrs, entry.RelayAddrs, entry.X25519PubKey, entry.Ed25519PubKey, entry.Signature, entry.StoresUserData, entry.Timestamp, true
 }
 
 // ListURNs returns all registered URNs.
@@ -140,9 +167,19 @@ func (s *Server) HandleStream(stream network.Stream) {
 			Register: &agentpb.RegisterResponse{Ok: ok, Info: info},
 		}
 	case *agentpb.URNRegistryRequest_Resolve:
-		peerID, addrs, x25519PubKey, found := s.handleResolve(op.Resolve)
+		peerID, addrs, relayAddrs, x25519PubKey, ed25519PubKey, signature, storesUserData, timestamp, found := s.handleResolve(op.Resolve)
 		resp.Op = &agentpb.URNRegistryResponse_Resolve{
-			Resolve: &agentpb.ResolveResponse{Found: found, PeerId: peerID, Addrs: addrs, X25519Pubkey: x25519PubKey},
+			Resolve: &agentpb.ResolveResponse{
+				Found:            found,
+				PeerId:           peerID,
+				Addrs:            addrs,
+				X25519Pubkey:     x25519PubKey,
+				Ed25519Pubkey:    ed25519PubKey,
+				Signature:        signature,
+				Timestamp:        timestamp,
+				StoresUserData:   storesUserData,
+				RelayAddrs:       relayAddrs,
+			},
 		}
 	}
 
@@ -152,11 +189,15 @@ func (s *Server) HandleStream(stream network.Stream) {
 }
 
 func (s *Server) handleRegister(r *agentpb.RegisterRequest) (bool, string) {
-	return s.store.Register(r.Urn, r.PeerId, r.Addrs, r.X25519Pubkey)
+	err := s.store.RegisterWithSignature(r.Urn, r.PeerId, r.Addrs, r.RelayAddrs, r.X25519Pubkey, r.Ed25519Pubkey, r.Signature, r.StoresUserData, r.Timestamp)
+	if err != nil {
+		return false, err.Error()
+	}
+	return true, ""
 }
 
-func (s *Server) handleResolve(r *agentpb.ResolveRequest) (string, []string, []byte, bool) {
-	return s.store.Resolve(r.Urn)
+func (s *Server) handleResolve(r *agentpb.ResolveRequest) (string, []string, []string, []byte, []byte, []byte, bool, int64, bool) {
+	return s.store.ResolveExtended(r.Urn)
 }
 
 // ListURNs returns all registered URNs from the underlying store.

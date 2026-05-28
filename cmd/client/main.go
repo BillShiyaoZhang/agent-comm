@@ -16,6 +16,7 @@ import (
 	"github.com/BillShiyaoZhang/agent-comm/contacts"
 	"github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/BillShiyaoZhang/agent-comm/wot"
+	"github.com/BillShiyaoZhang/agent-comm/registry"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
@@ -511,6 +512,11 @@ func trustPeer(ctx context.Context, a *agent.Agent, wotStore *wot.Store, bootstr
 		return
 	}
 
+	if err := registry.VerifyResolveResult(targetURN, &resolved); err != nil {
+		fmt.Printf("❌ Security alert: registry verification failed: %v\n", err)
+		return
+	}
+
 	pubKey, err := resolved.ID.ExtractPublicKey()
 	if err != nil {
 		fmt.Printf("❌ Failed to extract public key: %v\n", err)
@@ -543,6 +549,11 @@ func issueClaim(ctx context.Context, a *agent.Agent, wotStore *wot.Store, bootst
 	resolved, err := a.Registry.Resolve(*bootstrap, subjectURN)
 	if err != nil {
 		fmt.Printf("❌ Resolve %s failed: %v\n", subjectURN, err)
+		return
+	}
+
+	if err := registry.VerifyResolveResult(subjectURN, &resolved); err != nil {
+		fmt.Printf("❌ Security alert: registry verification failed: %v\n", err)
 		return
 	}
 
