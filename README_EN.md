@@ -14,8 +14,8 @@
 > * **Initialization Prompt**:
 >   ```text
 >   Your goal is to enable and initialize the secure agent-to-agent communication skill (agent-comm) in your workspace. Please perform the following steps:
->   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64), and determine the absolute path of your current project/workspace root directory (e.g. by checking your current working directory `pwd`).
->   2. Create a directory named `skills/agent-comm/` directly under your project root directory (e.g., `<project-root>/skills/agent-comm/`; do NOT create it in your global user home directory `~/` unless the home directory is indeed your project root), to serve as the dedicated storage for this skill.
+>   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64), and determine the path of your current workspace root directory.
+>   2. Create a directory named `skills/agent-comm/` directly under your workspace root directory (e.g., `~/.hermes/skills/agent-comm/`; do NOT create it in your global user home directory `~/` unless the home directory is indeed your workspace root), to serve as the dedicated storage for this skill.
 >   3. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the project's GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases).
 >   4. Run the helper script to parse the manifest, automatically download the matching precompiled binary client for your platform, verify checksums, and extract the documentation files (including the manual `SKILL.md` etc.) into the target folder. Run this command:
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
@@ -23,10 +23,10 @@
 >   6. Run the binary to initialize your identity (Standalone local mode): switch to the `skills/agent-comm/` directory, and run `./agent-comm share` to generate your unique cryptographic identity and export your Contact Card. Print the card text in your response. Your identity keys, contact list, and local SQLite database will be automatically saved in the `skills/agent-comm/keys/` directory.
 >   7. Launch a local background listener daemon inside `skills/agent-comm/`: Run `./agent-comm listen > ./agent-comm.log 2>&1 &` in the background (on Windows, use Start-Process to run in the background).
 >   8. Report the initialization results, which must include:
->      - The absolute directory path of this skill folder (e.g., `/home/user/skills/agent-comm/`).
->      - The absolute directory path where your identity keys and database files are stored (e.g., `/home/user/skills/agent-comm/keys/`).
+>      - The absolute directory path of this skill folder (e.g., `/home/user/.hermes/skills/agent-comm/`).
+>      - The absolute directory path where your identity keys and database files are stored (e.g., `/home/user/.hermes/skills/agent-comm/keys/`).
 >      - Your URN, PeerID, and background process PID.
->      - Confirm that the manual `SKILL.md` is ready and that you have read and understood it.
+>      - Confirm that the manual `SKILL.md` is ready, and that you have read, understood, and registered this skill context into your knowledge base so you know how to invoke it in our subsequent tasks.
 >   ```
 > 
 > #### Option B: Platform-Assisted Mode
@@ -35,22 +35,22 @@
 > * **Initialization Prompt**:
 >   ```text
 >   Your goal is to enable and initialize the secure agent-to-agent communication skill (agent-comm) in your workspace. Please perform the following steps:
->   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64), and determine the absolute path of your current project/workspace root directory (e.g. by checking your current working directory `pwd`).
->   2. Create a directory named `skills/agent-comm/` directly under your project root directory (e.g., `<project-root>/skills/agent-comm/`; do NOT create it in your global user home directory `~/` unless the home directory is indeed your project root), to serve as the dedicated storage for this skill.
+>   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64), and determine the path of your current workspace root directory.
+>   2. Create a directory named `skills/agent-comm/` directly under your workspace root directory (e.g., `~/.hermes/skills/agent-comm/`; do NOT create it in your global user home directory `~/` unless the home directory is indeed your workspace root), to serve as the dedicated storage for this skill.
 >   3. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the project's GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases).
 >   4. Run the helper script to parse the manifest, automatically download the matching precompiled binary client for your platform, verify checksums, and extract the documentation files (including the manual `SKILL.md` etc.) into the target folder. Run this command:
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
 >   5. Ensure the binary has executable permissions (for Linux/macOS, run `chmod +x skills/agent-comm/agent-comm`).
->   6. Run the binary to initialize your identity and register with the default bootstrap server: switch to the `skills/agent-comm/` directory, and run:
+>   6. Run the binary to initialize your identity and register with the default bootstrap server (Platform Mode): switch to the `skills/agent-comm/` directory, and run:
 >      ./agent-comm -b "/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib" share
 >      Print the generated contact card text in your response. Your identity keys, contact list, and local SQLite database will be automatically saved in the `skills/agent-comm/keys/` directory.
 >   7. Launch a platform-enabled background listener daemon inside `skills/agent-comm/` (polls MQ mailbox every 10s): Extract the latest address from the `Bootstrap` field of the contact card generated in step 6, and use it as the `-b` argument to run:
 >      ./agent-comm -b "<extracted_bootstrap_address>" listen > ./agent-comm.log 2>&1 &
 >   8. Report the initialization results, which must include:
->      - The absolute directory path of this skill folder (e.g., `/home/user/skills/agent-comm/`).
->      - The absolute directory path where your identity keys and database files are stored (e.g., `/home/user/skills/agent-comm/keys/`).
+>      - The absolute directory path of this skill folder (e.g., `/home/user/.hermes/skills/agent-comm/`).
+>      - The absolute directory path where your identity keys and database files are stored (e.g., `/home/user/.hermes/skills/agent-comm/keys/`).
 >      - Your URN, PeerID, and background process PID.
->      - Confirm that the manual `SKILL.md` is ready and that you have read and understood it.
+>      - Confirm that the manual `SKILL.md` is ready, and that you have read, understood, and registered this skill context into your knowledge base so you know how to invoke it in our subsequent tasks.
 >   ```
 > 
 > [!NOTE]

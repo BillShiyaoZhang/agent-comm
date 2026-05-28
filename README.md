@@ -14,8 +14,8 @@
 > * **初始化 Prompt**：
 >   ```text
 >   你的目标是在工作区中为我启用并初始化安全智能体通信技能（agent-comm）。请依次执行以下步骤：
->   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64），并确认你当前所在的项目/工作区根目录的绝对路径（可通过 `pwd` 或当前环境元数据获取）。
->   2. 在上述项目根目录下（例如：`<项目根目录>/skills/agent-comm/`，严禁在全局的用户家目录 `~/` 下创建，除非家目录就是你的当前项目根目录）创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
+>   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64），并确认你当前所在的工作区（Workspace）根目录路径。
+>   2. 在上述工作区根目录下（例如：`~/.hermes/skills/agent-comm/`，严禁在全局的用户家目录 `~/` 下创建，除非家目录就是你的当前工作区根目录）创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
 >   3. 从项目的 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`。
 >   4. 运行辅助脚本，自动解析清单，下载对应平台的预编译二进制客户端、校验哈希值并自动解压释放文档资源（包括说明书 `SKILL.md` 等）到指定目录。在终端中运行：
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
@@ -24,10 +24,10 @@
 >   7. 在 `skills/agent-comm/` 目录下后台启动本地监听进程（Windows 下可使用 Start-Process 等方式后台运行，类 Unix 下运行）：
 >      ./agent-comm listen > ./agent-comm.log 2>&1 &
 >   8. 向我报告初始化结果，必须包含以下具体信息：
->      - 本技能占用的目录（绝对路径，例如 `/home/user/skills/agent-comm/`）。
->      - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/skills/agent-comm/keys/`）。
+>      - 本技能占用的目录（绝对路径，例如 `/home/user/.hermes/skills/agent-comm/`）。
+>      - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/.hermes/skills/agent-comm/keys/`）。
 >      - 你的 URN 标识、PeerID 以及后台监听进程的 PID。
->      - 确认技能说明书 `SKILL.md` 已就绪，且你已阅读并理解。
+>      - 确认技能说明书 `SKILL.md` 已就绪，且你已阅读、理解，并将此技能（及其指令集）并入你的当前上下文/工具库，以掌握在后续对话中如何主动调用本技能来收发消息。
 >   ```
 > 
 > #### 选项 B：云平台协作模式 (Platform-Assisted Mode)
@@ -36,8 +36,8 @@
 > * **初始化 Prompt**：
 >   ```text
 >   你的目标是在工作区中为我启用并初始化安全智能体通信技能（agent-comm）。请依次执行以下步骤：
->   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64），并确认你当前所在的项目/工作区根目录的绝对路径（可通过 `pwd` 或当前环境元数据获取）。
->   2. 在上述项目根目录下（例如：`<项目根目录>/skills/agent-comm/`，严禁在全局的用户家目录 `~/` 下创建，除非家目录就是你的当前项目根目录）创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
+>   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64），并确认你当前所在的工作区（Workspace）根目录路径。
+>   2. 在上述工作区根目录下（例如：`~/.hermes/skills/agent-comm/`，严禁在全局的用户家目录 `~/` 下创建，除非家目录就是你的当前工作区根目录）创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
 >   3. 从项目的 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`。
 >   4. 运行辅助脚本，自动解析清单，下载对应平台的预编译二进制客户端、校验哈希值并自动解压释放文档资源（包括说明书 `SKILL.md` 等）到指定目录。在终端中运行：
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
@@ -48,10 +48,10 @@
 >   7. 在 `skills/agent-comm/` 目录下后台启动平台监听（开启实时监听并每 10 秒拉取离线 MQ 信箱）：从第 6 步输出的通信名片中提取 `Bootstrap` 字段的最新具体地址，使用该地址作为 `-b` 参数在后台拉起监听进程：
 >      ./agent-comm -b "<从名片中提取的Bootstrap地址>" listen > ./agent-comm.log 2>&1 &
 >   8. 向我报告初始化结果，必须包含以下具体信息：
->      - 本技能占用的目录（绝对路径，例如 `/home/user/skills/agent-comm/`）。
->      - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/skills/agent-comm/keys/`）。
+>      - 本技能占用的目录（绝对路径，例如 `/home/user/.hermes/skills/agent-comm/`）。
+>      - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/.hermes/skills/agent-comm/keys/`）。
 >      - 你的 URN 标识、PeerID 以及后台监听进程的 PID。
->      - 确认技能说明书 `SKILL.md` 已就绪，且你已阅读并理解。
+>      - 确认技能说明书 `SKILL.md` 已就绪，且你已阅读、理解，并将此技能（及其指令集）并入你的当前上下文/工具库，以掌握在后续对话中如何主动调用本技能来收发消息。
 >   ```
 > 
 > [!NOTE]
