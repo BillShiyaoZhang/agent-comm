@@ -62,8 +62,16 @@ func (a *Agent) StartListening(ctx context.Context, handler func(urn string, msg
 		a.drPeersMu.Lock()
 		drSession, ok := a.drPeers[senderPeerID.String()]
 		if !ok {
-			// Create responder DRSession
-			drSession = dr.NewDRSessionResponder(ctx, a.Session, a.Keys, senderPeerID, senderURN)
+			// Try loading existing responder session from DRStore
+			state, dbFound, err := a.DRStore.LoadSession(senderURN)
+			if err == nil && dbFound && state != nil {
+				drSession = dr.NewDRSessionFromState(a.Session, a.Keys, senderPeerID, senderURN, *state)
+				fmt.Printf("[Agent] Loaded responder DR session for %s from database.\n", senderURN)
+			} else {
+				// Create a new responder DRSession
+				drSession = dr.NewDRSessionResponder(ctx, a.Session, a.Keys, senderPeerID, senderURN)
+				fmt.Printf("[Agent] Created new responder DR session for %s.\n", senderURN)
+			}
 			a.drPeers[senderPeerID.String()] = drSession
 		}
 		a.drPeersMu.Unlock()
@@ -71,7 +79,18 @@ func (a *Agent) StartListening(ctx context.Context, handler func(urn string, msg
 		// Receive and decrypt
 		plaintext, err := drSession.Receive(ctx, stream)
 		if err == nil {
+			// Save updated ratchet state after successful receive/decrypt
+			updatedState := drSession.GetRatchetState()
+			if err := a.DRStore.SaveSession(senderURN, senderPeerID.String(), &updatedState); err != nil {
+				fmt.Printf("[Agent] Failed to save updated responder DR session for %s: %v\n", senderURN, err)
+			}
 			handler(senderURN, string(plaintext))
+		} else {
+			// Discard the in-memory session if the receive/decrypt failed, so it will be reloaded
+			// from the database (last known-good state) on the next attempt.
+			a.drPeersMu.Lock()
+			delete(a.drPeers, senderPeerID.String())
+			a.drPeersMu.Unlock()
 		}
 	})
 

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,16 +54,25 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 		cfg.ListenAddrs = []string{"/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"}
 	}
 
+	var drDBPath, contactsDBPath string
 	if cfg.DBPath == "" {
-		cfg.DBPath = filepath.Join(cfg.KeysDir, "agent_dr_store.db")
+		drDBPath = filepath.Join(cfg.KeysDir, "dr_sessions.db")
+		contactsDBPath = filepath.Join(cfg.KeysDir, "contacts.db")
+	} else {
+		dir := filepath.Dir(cfg.DBPath)
+		file := filepath.Base(cfg.DBPath)
+		ext := filepath.Ext(file)
+		base := strings.TrimSuffix(file, ext)
+		drDBPath = filepath.Join(dir, base+"_dr"+ext)
+		contactsDBPath = filepath.Join(dir, base+"_contacts"+ext)
 	}
 
-	drStore, err := dr.NewDRStore(cfg.DBPath)
+	drStore, err := dr.NewDRStore(drDBPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mount DR store: %w", err)
 	}
 
-	contactStore, err := contacts.NewStore(cfg.DBPath)
+	contactStore, err := contacts.NewStore(contactsDBPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mount contacts store: %w", err)
 	}
@@ -203,10 +213,10 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 	// 2. Fallback: Direct TCP/QUIC -> Relay -> MQ
 	fmt.Printf("[Agent] Attempting Direct/Relay P2P stream to %s...\n", targetID)
 	
-	// Create Double Ratchet session
-	drSession, err := dr.NewDRSessionInitiator(ctx, a.Session, a.Keys, targetID, recipientPubKey, recipientURN)
+	// Create or resume Double Ratchet session
+	drSession, err := a.getOrCreateDRSession(ctx, targetID, recipientPubKey, recipientURN)
 	if err != nil {
-		return fmt.Errorf("failed to init DR session: %w", err)
+		return fmt.Errorf("failed to get/create DR session: %w", err)
 	}
 
 	// Try real-time stream direct delivery via Double Ratchet
@@ -214,9 +224,18 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 	if err == nil {
 		fmt.Println("[Agent] Message delivered directly via DR realtime stream.")
 		// Save advanced ratchet state to store
-		// a.DRStore.SaveSession(recipientURN, targetID.String(), drSession.GetRatchetState()) 
+		updatedState := drSession.GetRatchetState()
+		if err := a.DRStore.SaveSession(recipientURN, targetID.String(), &updatedState); err != nil {
+			fmt.Printf("[Agent] Failed to save updated initiator DR session for %s: %v\n", recipientURN, err)
+		}
 		return nil
 	}
+
+	// Discard the in-memory session if the send failed, so it will be reloaded
+	// from the database (last known-good state) on the next attempt.
+	a.drPeersMu.Lock()
+	delete(a.drPeers, targetID.String())
+	a.drPeersMu.Unlock()
 
 	fmt.Printf("[Agent] Realtime DR stream failed (%v), falling back to offline MQ blind-store...\n", err)
 
@@ -239,6 +258,45 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 
 	fmt.Println("[Agent] Message successfully blind-stored to Platform MQ.")
 	return nil
+}
+
+// getOrCreateDRSession resolves a Double Ratchet session from memory or DB, or bootstraps a new one if not found.
+func (a *Agent) getOrCreateDRSession(ctx context.Context, targetID peer.ID, recipientPubKey []byte, recipientURN string) (*dr.DRSession, error) {
+	a.drPeersMu.Lock()
+	defer a.drPeersMu.Unlock()
+
+	peerIDStr := targetID.String()
+	if sess, ok := a.drPeers[peerIDStr]; ok {
+		return sess, nil
+	}
+
+	// Try loading from database
+	state, found, err := a.DRStore.LoadSession(recipientURN)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load DR session from DB: %w", err)
+	}
+
+	var drSession *dr.DRSession
+	if found && state != nil {
+		// Create session from loaded state
+		drSession = dr.NewDRSessionFromState(a.Session, a.Keys, targetID, recipientURN, *state)
+		fmt.Printf("[Agent] Loaded existing DR session for %s from database.\n", recipientURN)
+	} else {
+		// Bootstrap a new session as initiator
+		drSession, err = dr.NewDRSessionInitiator(ctx, a.Session, a.Keys, targetID, recipientPubKey, recipientURN)
+		if err != nil {
+			return nil, fmt.Errorf("failed to init new DR session: %w", err)
+		}
+		// Save initial state to DB
+		initialState := drSession.GetRatchetState()
+		if err := a.DRStore.SaveSession(recipientURN, peerIDStr, &initialState); err != nil {
+			return nil, fmt.Errorf("failed to save initial DR session to DB: %w", err)
+		}
+		fmt.Printf("[Agent] Created and persisted new DR session for %s.\n", recipientURN)
+	}
+
+	a.drPeers[peerIDStr] = drSession
+	return drSession, nil
 }
 
 

@@ -80,6 +80,25 @@ func NewDRSessionResponder(ctx context.Context, mgr *session.Manager, keys *cryp
 	}
 }
 
+// NewDRSessionFromState creates a DRSession using a pre-existing RatchetState.
+func NewDRSessionFromState(mgr *session.Manager, keys *crypto.IdentityKeys, peerID peer.ID, peerURN string, state RatchetState) *DRSession {
+	return &DRSession{
+		peerURN:  peerURN,
+		peerID:   peerID,
+		manager:  mgr,
+		keys:     keys,
+		ratchet:  state,
+	}
+}
+
+// GetRatchetState returns a copy of the current ratchet state.
+func (s *DRSession) GetRatchetState() RatchetState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ratchet
+}
+
+
 // Send encrypts a plaintext using the current ratchet chain and sends it over a new stream.
 func (s *DRSession) Send(ctx context.Context, plaintext []byte) error {
 	s.mu.Lock()
