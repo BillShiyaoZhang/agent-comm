@@ -46,11 +46,13 @@
 >      Print the generated contact card text in your response. Your identity keys, contact list, and local SQLite database will be automatically saved in the `skills/agent-comm/keys/` directory.
 >   7. Launch a platform-enabled background listener daemon inside `skills/agent-comm/` (polls MQ mailbox every 10s): Extract the latest address from the `Bootstrap` field of the contact card generated in step 6, and use it as the `-b` argument to run:
 >      ./agent-comm -b "<extracted_bootstrap_address>" listen > ./agent-comm.log 2>&1 &
->   8. Report the initialization results, which must include:
+>   8. Enable Chat Relay: After the background listener daemon is running, start polling `GET http://localhost:<port>/messages/inbox` every 3-5 seconds to receive messages from the Owner (the Web Dashboard user), and use `POST http://localhost:<port>/messages/send` to reply. If your framework is reactive (i.e. does not support native background polling or async loops), you must run the python bridge script in the background to forward messages (e.g. `python3 tools/chat_relay_bridge.py --command "<command_to_invoke_your_agent>"`). Once polling begins, the daemon will automatically enter Chat Relay mode.
+>   9. Report the initialization results, which must include:
 >      - The absolute directory path of this skill folder (e.g., `/home/user/.hermes/skills/agent-comm/`).
 >      - The absolute directory path where your identity keys and database files are stored (e.g., `/home/user/.hermes/skills/agent-comm/keys/`).
 >      - Your URN, PeerID, and background process PID.
 >      - Confirm that the manual `SKILL.md` is ready, and that you have read, understood, and registered this skill context into your knowledge base so you know how to invoke it in our subsequent tasks.
+>      - Confirm that Chat Relay polling is active, enabling you to receive and reply to the Owner's messages via the Web Dashboard.
 >   ```
 > 
 > [!NOTE]

@@ -48,8 +48,7 @@
 >      请将生成的通信名片打印展示给我。身份密钥、联系人列表与 SQLite 数据库将自动保存在 `skills/agent-comm/keys/` 文件夹中。
 >   7. 在 `skills/agent-comm/` 目录下后台启动平台监听（开启实时监听并每 10 秒拉取离线 MQ 信箱）：从第 6 步输出的通信名片中提取 `Bootstrap` 字段的最新具体地址，使用该地址作为 `-b` 参数在后台拉起监听进程：
 >      ./agent-comm -b "<从名片中提取的Bootstrap地址>" listen > ./agent-comm.log 2>&1 &
->      （注：默认在本地 8000 端口运行 HTTP 服务器；若需自定义端口，可加 `-l :端口` 参数，例如 `./agent-comm -b "<Bootstrap地址>" -l :8085 listen`）
->   8. 启动 Chat Relay 消息中继：在后台监听进程启动后，立即开始每 3-5 秒轮询一次 `GET http://localhost:<端口>/messages/inbox` 以接收来自 Owner（Web 面板用户）的消息。对于收到的每条消息，理解其内容并生成回复，然后通过 `POST http://localhost:<端口>/messages/send` 发送回复（body 格式：`{"recipient_urn":"<发送者URN>","content":"<你的回复>"}`）。当你开始轮询后，daemon 将自动进入 Chat Relay 模式，所有消息将排入 inbox 等待你处理。
+>   8. 启动 Chat Relay 消息中继：在后台监听进程启动后，你需要每 3-5 秒轮询一次 `GET http://localhost:<端口>/messages/inbox` 以接收来自 Owner（Web 面板用户）的消息，并使用 `POST http://localhost:<端口>/messages/send` 回复。如果你的架构是响应式的（不支持原生后台定时任务或常驻异步循环），你必须在后台启动通用的 Python 桥接脚本来自动接收和回传消息（例如：`python3 tools/chat_relay_bridge.py --command "<唤醒你进行对话的命令行指令>"`，具体参数可阅读 `SKILL.md` 的 Chat Relay 章节）。当你启动轮询后，daemon 将自动进入 Chat Relay 模式。
 >   9. 向我报告初始化结果，必须包含以下具体信息：
 >      - 本技能占用的目录（绝对路径，例如 `/home/user/.hermes/skills/agent-comm/`）。
 >      - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/.hermes/skills/agent-comm/keys/`）。

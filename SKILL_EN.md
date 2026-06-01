@@ -204,6 +204,86 @@ if err != nil {
 
 ---
 
+## 🔗 Chat Relay Mode — Web Dashboard Message Relay (Chat Relay Mode)
+
+When your Owner sends a message to you from the cloud Web Dashboard (or other clients bound with `trust_tier=self`), the message reaches your `listen` daemon after E2E encryption. You can poll these messages via the local HTTP API and send replies.
+
+> [!IMPORTANT]
+> Once you start polling `/messages/inbox`, the daemon automatically enters **Chat Relay Mode**: all incoming owner messages will bypass the built-in commands (ping/stats/help) and will be queued in the inbox. If you stop polling for more than 60 seconds, the daemon falls back to built-in commands auto-response mode.
+
+### Fetch Messages (Polling Inbox)
+
+```bash
+# Recommended polling interval: every 3-5 seconds
+curl http://localhost:8000/messages/inbox
+```
+
+**Response Example:**
+```json
+{
+  "messages": [
+    {
+      "id": "msg-1717200000000000000",
+      "sender_urn": "urn:hermes:agent:CkG8xG9evxYy38L14JqPhk",
+      "content": "Help me check the deployment status",
+      "timestamp": "2026-06-01T16:20:00Z"
+    }
+  ]
+}
+```
+
+> [!NOTE]
+> Messages are cleared from the queue automatically once returned by `GET /messages/inbox`. The message queue is stored in memory and is cleared upon daemon restart.
+
+### Send Reply
+
+```bash
+curl -X POST http://localhost:8000/messages/send \
+  -H "Content-Type: application/json" \
+  -d '{"recipient_urn":"urn:hermes:agent:CkG8xG9evxYy38L14JqPhk","content":"Deployment is healthy, 3 containers are running."}'
+```
+
+**Response Example:**
+```json
+{"status": "success", "message": "Message sent successfully"}
+```
+
+The daemon automatically handles encryption and routing (Direct -> Relay -> MQ Blind Store). You only need to supply the recipient URN and plain text content.
+
+### Recommended Integration Workflow
+
+Once your `listen` daemon is launched, start polling the inbox immediately. Here is the recommended workflow pseudocode:
+
+```
+1. Start agent-comm listen (background process)
+2. Every 3 seconds call GET http://localhost:8000/messages/inbox
+3. For each received message:
+   a. Interpret message content (perform tool calls, query information, etc.)
+   b. Generate reply
+   c. Call POST http://localhost:8000/messages/send to send the reply
+4. Repeat from step 2
+```
+
+> [!TIP]
+> All `/messages/*` endpoints only permit loopback connections (127.0.0.1 / ::1), ensuring only the local host AI can read and write messages.
+
+### 📦 Responsive Agent Integration (Zero-Code Polling Bridge)
+
+If your framework is **reactive** (i.e. it does not support native background cron tasks or persistent async loops, and only executes when triggered then goes idle), you can run our provided Python bridge script in the background to handle polling and execution:
+
+```bash
+# Start the background bridge script. It automatically polls every 3s, passes incoming messages to your agent CLI, and posts stdout output back as replies.
+python3 tools/chat_relay_bridge.py --command "python hermes.py --ask"
+```
+
+**Arguments:**
+*   `--command`, `-c` (Required): The command line instruction to invoke your agent for replies. The incoming message is appended as the last argument by default (e.g. executing: `python hermes.py --ask "your message"`).
+*   `--stdin`, `-s`: If specified, the message is written to the subprocess's `stdin` instead of being passed as a command argument.
+*   `--port`, `-p`: The HTTP port where the `agent-comm` daemon is listening (default: `8000`).
+*   `--interval`, `-i`: The polling interval in seconds (default: `3.0`).
+
+---
+
 ## ⚠️ Important Agent Gotchas (Read Before Executing)
 
 1. **Unique Identity Directories**: If you run multiple agent nodes on the same local machine (e.g., during tests), you **must** assign them different `KeysDir` and `DBPath` values in the [Config](agent/config.go) struct. If they share the same directory, their public identity key and PeerID will collide, resulting in network errors.
