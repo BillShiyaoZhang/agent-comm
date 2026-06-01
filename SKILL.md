@@ -118,6 +118,18 @@ description: >
    ```bash
    ./agent-comm contacts
    ```
+8. **拉取本地 daemon 内存缓存队列中的所有待处理 Owner 消息（绕过数据库锁）**：
+   ```bash
+   ./agent-comm inbox
+   # 指定本地 daemon 的自定义端口：
+   ./agent-comm -l :8085 inbox
+   ```
+9. **向本地 daemon 投递 Owner 的加密回复**：
+   ```bash
+   ./agent-comm reply "<recipient_urn>" "回复内容"
+   # 指定本地 daemon 的自定义端口：
+   ./agent-comm -l :8085 reply "<recipient_urn>" "回复内容"
+   ```
 
 当用户要求你进行操作时，请使用你的 `run_command` 工具直接运行该 CLI，并将命令行输出结果返回给用户。
 
@@ -186,44 +198,31 @@ daemon 会自动处理 E2E 加密和路由（直连 → 中继 → MQ 盲存）�
 > [!TIP]
 > 所有 `/messages/*` 端点仅允许 loopback 访问（127.0.0.1 / ::1），确保只有本机的宿主 AI 可以读取和发送消息。
 
-### 📦 响应式智能体集成（零开发轮询桥接）
+### 🔗 Chat Relay 智能体集成设计模式 (Integration Patterns for AI Agents)
 
-如果你的框架是**响应式**（不具备原生后台定时任务或常驻异步循环，只在被唤醒时执行，执行完即 idle），你无需在主程序中自己开发轮询，可以直接使用我们提供的 Python 桥接脚本在后台启动消息对接：
+当你作为宿主 AI 想要接入 Chat Relay 以便通过 Web 面板与 Owner 对话时，你有多种方案可以消费 `inbox` 消息。请根据你自身的框架特点（常驻异步、事件循环、或者响应式单次调用），自主评估并选择最适合你的集成设计模式：
 
-```bash
-# 启动后台桥接脚本，它会每 3 秒自动轮询，并将收到消息送入你的命令行程序执行，再把 stdout 的响应回传
-python3 tools/chat_relay_bridge.py --command "python hermes.py --ask"
-```
+#### 模式一：主动后台协程循环模式 (Async Long-Polling Loop)
+*   **适用场景**：你的框架本身支持启动常驻的后台并发协程（如 Python `asyncio` 或 Go Go-routine）。
+*   **实现方法**：
+    在初始化完毕后，在后台拉起一个异步死循环，每 3-5 秒发起一次 `/messages/inbox` 本地请求（使用 HTTP GET 或者执行 shell `./agent-comm inbox`）。如果拿到消息，喂给你的 LLM 推理，然后通过 `/messages/send`（或 shell `./agent-comm reply`）回传。
 
-**运行参数：**
-*   `--command`, `-c` (必填)：触发你 Agent 生成回复的命令行指令。默认会将收到的消息作为最后一个命令行参数附加在命令后（例如执行：`python hermes.py --ask "你的消息"`）。
-*   `--stdin`, `-s`：若指定此项，则不会通过参数传递，而是直接将消息写入子进程的 `stdin`。
-*   `--port`, `-p`：指定 `agent-comm` daemon 监听的 HTTP 端口（默认值：`8000`）。
-*   `--interval`, `-i`：指定轮询的时间间隔（默认值：`3.0` 秒）。
+#### 模式二：定时器/调度器触发模式 (Scheduled Cron Task)
+*   **适用场景**：你的框架只在收到请求时唤醒，但支持通过内置的 Cron/Timer 模块定期被拉起执行。
+*   **实现方法**：
+    你可以配置一个定时任务（例如每 1 分钟运行一次），执行以下 Prompt 定义的动作：
+    > 1. 执行本地 shell `./agent-comm inbox` 读取消息。
+    > 2. 若返回的消息数组非空，则由你的大模型依次对各条消息进行思考处理，生成对应的回复。
+    > 3. 处理完毕后，执行 `./agent-comm reply "<发送者URN>" "<回复内容>"` 进行投递。
 
-### 🕒 响应式智能体自主定时任务集成 (Cron / Timer Integration)
-
-如果你的框架是**响应式**（不具备常驻后台循环，但支持注册 Cron 或定时任务），你可以让你的 Owner（用户）在你的任务管理器中添加一个常驻定时任务，并为你注入以下 **Prompt 任务定义**。
-
-#### 定时任务 Prompt 模板
-> **任务定义：安全信箱轮询中继 (Secure Inbox Polling)**
->
-> *   **执行频率**：每 X 分钟/秒
-> *   **任务逻辑**：
->     1.  运行本地 shell 命令检查本地收件箱：
->         ```bash
->         # 默认连接本地 8000 端口，可通过 -l 指定其它端口
->         ./agent-comm inbox
->         ```
->     2.  解析输出的 JSON 结果。如果返回的 `messages` 数组不为空：
->         对于其中的每条消息（包含 `sender_urn`、`content`）：
->         a. 深入理解消息内容，执行必要的计算、查询或工具调用。
->         b. 生成对应的回复文本。
->         c. 运行本地 shell 命令发送回复给发送者 URN：
->            ```bash
->            ./agent-comm reply "<发送者URN>" "<你的回复内容>"
->            ```
->     3.  结束本次任务，等待下一次唤醒。
+#### 模式三：中继桥接代理模式 (Zero-Code External Bridge)
+*   **适用场景**：你无法直接修改框架源码去添加后台协程或 Cron，但你可以通过命令行接收输入并把回复输出到 stdout（例如 `python main.py --ask "用户输入"`）。
+*   **实现方法**：
+    你可以在后台以 `terminal(background=true)` 形式直接运行我们自带的 Python 桥接脚本：
+    ```bash
+    python3 tools/chat_relay_bridge.py --command "python main.py --ask"
+    ```
+    该脚本会自主处理 `/messages/inbox` 轮询和 `/messages/send` 提交，通过命令行参数调起你，将你产生的 stdout 作为回复进行中继。
 
 使用本地二进制工具链的优势：**极速执行，免去你编写 HTTP 客户端代码的繁琐，且完全避开了 SQLite 数据库并发锁定冲突问题。**
 

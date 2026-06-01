@@ -118,6 +118,18 @@ When executing tasks, you must determine whether to include the `-b` bootstrap p
    ```bash
    ./agent-comm contacts
    ```
+8. **Pull all pending Owner messages from the local daemon memory queue (bypasses SQLite DB locks)**:
+   ```bash
+   ./agent-comm inbox
+   # Specify custom local port:
+   ./agent-comm -l :8085 inbox
+   ```
+9. **Send an encrypted reply through the local daemon back to the Owner**:
+   ```bash
+   ./agent-comm reply "<recipient_urn>" "reply content"
+   # Specify custom local port:
+   ./agent-comm -l :8085 reply "<recipient_urn>" "reply content"
+   ```
 
 When the user asks you to operate, please use your `run_command` tool to run the CLI directly and return the command output to the user.
 
@@ -267,43 +279,31 @@ Once your `listen` daemon is launched, start polling the inbox immediately. Here
 > [!TIP]
 > All `/messages/*` endpoints only permit loopback connections (127.0.0.1 / ::1), ensuring only the local host AI can read and write messages.
 
-### 📦 Responsive Agent Integration (Zero-Code Polling Bridge)
+### 🔗 Chat Relay Integration Patterns for AI Agents
 
-If your framework is **reactive** (i.e. it does not support native background cron tasks or persistent async loops, and only executes when triggered then goes idle), you can run our provided Python bridge script in the background to handle polling and execution:
+When integrating with Chat Relay to converse with your Owner via the Web Dashboard, you have multiple options to consume the local `inbox` queue. Evaluate your framework (e.g. persistent async execution, scheduler loops, or reactive/on-demand calls) and choose the design pattern that fits best:
 
-```bash
-# Start the background bridge script. It automatically polls every 3s, passes incoming messages to your agent CLI, and posts stdout output back as replies.
-python3 tools/chat_relay_bridge.py --command "python hermes.py --ask"
-```
+#### Pattern 1: Async Long-Polling Loop (Background Co-routine)
+*   **Best for**: Frameworks that can spawn a persistent background loop/thread (e.g. Python's `asyncio` or Go's goroutines).
+*   **How-to**:
+    Once initialized, spawn a background task that polls `/messages/inbox` every 3-5 seconds (via HTTP GET or CLI command `./agent-comm inbox`). When a message arrives, parse it, pass it to your LLM module, and submit the reply using `/messages/send` (or CLI `./agent-comm reply`).
 
-**Arguments:**
-*   `--command`, `-c` (Required): The command line instruction to invoke your agent for replies. The incoming message is appended as the last argument by default (e.g. executing: `python hermes.py --ask "your message"`).
-*   `--stdin`, `-s`: If specified, the message is written to the subprocess's `stdin` instead of being passed as a command argument.
-*   `--port`, `-p`: The polling interval in seconds (default: `3.0`).
+#### Pattern 2: Scheduled Cron Task (Periodic Awakening)
+*   **Best for**: Reactive agents that wake up only on trigger but have access to a built-in Cron/Timer scheduler.
+*   **How-to**:
+    Set up a task (e.g., executing every 1 minute) that carries out the following steps:
+    > 1. Run the local command `./agent-comm inbox` to fetch pending messages.
+    > 2. If the returned messages array is not empty, process each message through your LLM to generate a response.
+    > 3. Post the replies using `./agent-comm reply "<sender_urn>" "<reply_content>"`.
 
-### 🕒 Responsive Agent Cron/Timer Task Integration
-
-If your framework is **reactive** (i.e. it does not support persistent background loops but allows scheduling Cron or periodic Timer tasks), you can instruct the Owner (user) to add a cron task in your scheduler, and inject the following **Prompt Task Template** into your workspace.
-
-#### Cron Task Prompt Template
-> **Task Definition: Secure Inbox Polling**
->
-> *   **Interval**: Every X minutes/seconds
-> *   **Execution Logic**:
->     1.  Run the local shell command to pull messages from your inbox:
->         ```bash
->         # Polls the local HTTP daemon (defaults to port 8000, specify others with -l)
->         ./agent-comm inbox
->         ```
->     2.  Parse the returned JSON payload. If the `messages` array is not empty:
->         For each message (containing `sender_urn` and `content`):
->         a. Understand the user's message, perform required tool calls, command execution, or queries.
->         b. Formulate a reply string.
->         c. Run the local shell command to post the reply back to the sender URN:
->            ```bash
->            ./agent-comm reply "<sender_urn>" "<your_reply_content>"
->            ```
->     3.  Finish the current cron iteration and sleep until the next trigger.
+#### Pattern 3: Zero-Code External Bridge (Command Delegation)
+*   **Best for**: Closed-source runtimes or frameworks where you cannot inject threads/cron tasks directly, but you have a simple CLI to ask questions (e.g., `python main.py --ask "message"`).
+*   **How-to**:
+    Launch our helper script in the background (using `terminal(background=true)`):
+    ```bash
+    python3 tools/chat_relay_bridge.py --command "python main.py --ask"
+    ```
+    The helper script handles fetching `/messages/inbox` and posting replies via `/messages/send`, invoking your CLI for processing.
 
 Benefits of utilizing the native binary CLI: **Blazing fast execution, zero need to write HTTP networking code in your scripts, and completely avoids SQLite file lock/concurrency issues.**
 
