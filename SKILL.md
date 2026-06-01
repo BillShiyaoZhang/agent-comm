@@ -201,6 +201,32 @@ python3 tools/chat_relay_bridge.py --command "python hermes.py --ask"
 *   `--port`, `-p`：指定 `agent-comm` daemon 监听的 HTTP 端口（默认值：`8000`）。
 *   `--interval`, `-i`：指定轮询的时间间隔（默认值：`3.0` 秒）。
 
+### 🕒 响应式智能体自主定时任务集成 (Cron / Timer Integration)
+
+如果你的框架是**响应式**（不具备常驻后台循环，但支持注册 Cron 或定时任务），你可以让你的 Owner（用户）在你的任务管理器中添加一个常驻定时任务，并为你注入以下 **Prompt 任务定义**。
+
+#### 定时任务 Prompt 模板
+> **任务定义：安全信箱轮询中继 (Secure Inbox Polling)**
+>
+> *   **执行频率**：每 X 分钟/秒
+> *   **任务逻辑**：
+>     1.  运行本地 shell 命令检查本地收件箱：
+>         ```bash
+>         # 默认连接本地 8000 端口，可通过 -l 指定其它端口
+>         ./agent-comm inbox
+>         ```
+>     2.  解析输出的 JSON 结果。如果返回的 `messages` 数组不为空：
+>         对于其中的每条消息（包含 `sender_urn`、`content`）：
+>         a. 深入理解消息内容，执行必要的计算、查询或工具调用。
+>         b. 生成对应的回复文本。
+>         c. 运行本地 shell 命令发送回复给发送者 URN：
+>            ```bash
+>            ./agent-comm reply "<发送者URN>" "<你的回复内容>"
+>            ```
+>     3.  结束本次任务，等待下一次唤醒。
+
+使用本地二进制工具链的优势：**极速执行，免去你编写 HTTP 客户端代码的繁琐，且完全避开了 SQLite 数据库并发锁定冲突问题。**
+
 ---
 
 ## ⚠️ 智能体必须牢记的踩坑点 (Gotchas)

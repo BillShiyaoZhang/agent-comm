@@ -279,8 +279,33 @@ python3 tools/chat_relay_bridge.py --command "python hermes.py --ask"
 **Arguments:**
 *   `--command`, `-c` (Required): The command line instruction to invoke your agent for replies. The incoming message is appended as the last argument by default (e.g. executing: `python hermes.py --ask "your message"`).
 *   `--stdin`, `-s`: If specified, the message is written to the subprocess's `stdin` instead of being passed as a command argument.
-*   `--port`, `-p`: The HTTP port where the `agent-comm` daemon is listening (default: `8000`).
-*   `--interval`, `-i`: The polling interval in seconds (default: `3.0`).
+*   `--port`, `-p`: The polling interval in seconds (default: `3.0`).
+
+### 🕒 Responsive Agent Cron/Timer Task Integration
+
+If your framework is **reactive** (i.e. it does not support persistent background loops but allows scheduling Cron or periodic Timer tasks), you can instruct the Owner (user) to add a cron task in your scheduler, and inject the following **Prompt Task Template** into your workspace.
+
+#### Cron Task Prompt Template
+> **Task Definition: Secure Inbox Polling**
+>
+> *   **Interval**: Every X minutes/seconds
+> *   **Execution Logic**:
+>     1.  Run the local shell command to pull messages from your inbox:
+>         ```bash
+>         # Polls the local HTTP daemon (defaults to port 8000, specify others with -l)
+>         ./agent-comm inbox
+>         ```
+>     2.  Parse the returned JSON payload. If the `messages` array is not empty:
+>         For each message (containing `sender_urn` and `content`):
+>         a. Understand the user's message, perform required tool calls, command execution, or queries.
+>         b. Formulate a reply string.
+>         c. Run the local shell command to post the reply back to the sender URN:
+>            ```bash
+>            ./agent-comm reply "<sender_urn>" "<your_reply_content>"
+>            ```
+>     3.  Finish the current cron iteration and sleep until the next trigger.
+
+Benefits of utilizing the native binary CLI: **Blazing fast execution, zero need to write HTTP networking code in your scripts, and completely avoids SQLite file lock/concurrency issues.**
 
 ---
 

@@ -3,10 +3,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -146,9 +148,18 @@ func main() {
 	}
 	os.Args = newArgs
 
-	if len(os.Args) > 1 && (os.Args[1] == "help" || os.Args[1] == "--help" || os.Args[1] == "-h") {
-		printUsage()
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "inbox":
+			handleInboxCmd(customLocalAddr)
+			return
+		case "reply":
+			handleReplyCmd(customLocalAddr)
+			return
+		case "help", "--help", "-h":
+			printUsage()
+			return
+		}
 	}
 
 	// 2. Resolve final configurations (CLI flags override environment variables)
@@ -584,6 +595,8 @@ func printUsage() {
 	fmt.Println("  claim <subjectURN>             - Issue a TRUSTED WoT claim about a peer (requires bootstrap)")
 	fmt.Println("  trustpath <urn>                - Resolve Web of Trust path to URN")
 	fmt.Println("  interactive                    - Start interactive menu shell")
+	fmt.Println("  inbox                          - Check local daemon's memory inbox (loopback only)")
+	fmt.Println("  reply <recipientURN> <message> - Send a reply through the local daemon (loopback only)")
 	fmt.Println("  help                           - Show this help menu")
 	fmt.Println()
 	fmt.Println("Environment Variables (Optional):")
@@ -1218,4 +1231,90 @@ func getPortSuffix(addr string) string {
 		return addr[idx:]
 	}
 	return ":8000"
+}
+
+func handleInboxCmd(localAddr string) {
+	port := "8000"
+	if localAddr != "" {
+		if strings.Contains(localAddr, ":") {
+			parts := strings.Split(localAddr, ":")
+			port = parts[len(parts)-1]
+		}
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%s/messages/inbox", port)
+	
+	resp, err := http.Get(url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Connection to agent-comm daemon failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "❌ Daemon returned error status: %s\n", resp.Status)
+		os.Exit(1)
+	}
+	
+	var data struct {
+		Messages []InboxMessage `json:"messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to decode daemon response: %v\n", err)
+		os.Exit(1)
+	}
+	
+	if data.Messages == nil {
+		data.Messages = []InboxMessage{}
+	}
+	
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	_ = encoder.Encode(data)
+}
+
+func handleReplyCmd(localAddr string) {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "Usage: reply <recipientURN> <message>")
+		os.Exit(1)
+	}
+	recipientURN := os.Args[2]
+	messageText := os.Args[3]
+
+	port := "8000"
+	if localAddr != "" {
+		if strings.Contains(localAddr, ":") {
+			parts := strings.Split(localAddr, ":")
+			port = parts[len(parts)-1]
+		}
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%s/messages/send", port)
+
+	payload, err := json.Marshal(map[string]string{
+		"recipient_urn": recipientURN,
+		"content":       messageText,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to marshal payload: %v\n", err)
+		os.Exit(1)
+	}
+
+	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Connection to agent-comm daemon failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(os.Stderr, "❌ Daemon returned error status %s: %s\n", resp.Status, string(bodyBytes))
+		os.Exit(1)
+	}
+
+	var resData map[string]interface{}
+	_ = json.NewDecoder(resp.Body).Decode(&resData)
+	
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	_ = encoder.Encode(resData)
 }
