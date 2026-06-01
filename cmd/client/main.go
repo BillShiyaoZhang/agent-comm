@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,7 @@ func main() {
 	var customBootstrap string
 	var customKeysDir string
 	var customDBPath string
+	var customLocalAddr string
 
 	newArgs := []string{os.Args[0]}
 	for i := 1; i < len(os.Args); i++ {
@@ -67,6 +69,18 @@ func main() {
 			}
 		} else if strings.HasPrefix(arg, "--dbpath=") {
 			customDBPath = strings.TrimPrefix(arg, "--dbpath=")
+		} else if arg == "--local-addr" || arg == "-l" {
+			if i+1 < len(os.Args) {
+				customLocalAddr = os.Args[i+1]
+				i++
+			} else {
+				fmt.Fprintf(os.Stderr, "❌ Error: --local-addr / -l requires an argument\n")
+				os.Exit(1)
+			}
+		} else if strings.HasPrefix(arg, "--local-addr=") {
+			customLocalAddr = strings.TrimPrefix(arg, "--local-addr=")
+		} else if strings.HasPrefix(arg, "-l=") {
+			customLocalAddr = strings.TrimPrefix(arg, "-l=")
 		} else {
 			newArgs = append(newArgs, arg)
 		}
@@ -120,6 +134,24 @@ func main() {
 	bootstrapAddr := os.Getenv("BOOTSTRAP_ADDR")
 	if customBootstrap != "" {
 		bootstrapAddr = customBootstrap
+	}
+
+	localAddr := os.Getenv("LOCAL_ADDR")
+	if customLocalAddr != "" {
+		localAddr = customLocalAddr
+	}
+	if localAddr == "" {
+		localAddr = ":8000"
+	}
+
+	bindAddr := localAddr
+	if strings.Contains(bindAddr, "://") {
+		if u, err := url.Parse(bindAddr); err == nil {
+			bindAddr = u.Host
+		}
+	}
+	if !strings.Contains(bindAddr, ":") {
+		bindAddr = ":" + bindAddr
 	}
 
 	if bootstrapAddr != "" {
@@ -299,6 +331,9 @@ func main() {
 		}
 		fmt.Printf("==================================================\n\n")
 
+		// Start local HTTP health-check and info server for Web Dashboard connectivity
+		startLocalServer(bindAddr, a)
+
 		// Register standard message callback
 		a.OnMessage(ctx, func(senderURN string, msg string) {
 			// Try to parse ChatMessage
@@ -432,6 +467,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Global Flags (Optional):")
 	fmt.Println("  -b, --bootstrap <addr>         - Platform Bootstrap Multiaddress (e.g. /dns4/.../p2p/...)")
+	fmt.Println("  -l, --local-addr <addr>        - Local HTTP server bind address (e.g. :8000 or localhost:8000)")
 	fmt.Println("  --keysdir <path>               - Identity keys storage path")
 	fmt.Println("  --dbpath <path>                - Main SQLite storage database path")
 	fmt.Println()
@@ -451,6 +487,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Environment Variables (Optional):")
 	fmt.Println("  BOOTSTRAP_ADDR                 - Platform Bootstrap Multiaddress")
+	fmt.Println("  LOCAL_ADDR                     - Local HTTP server bind address")
 	fmt.Println("  AGENT_KEYSDIR                  - Identity keys storage path")
 	fmt.Println("  DB_PATH                        - Main SQLite storage database path")
 	fmt.Println("  WOT_DB                         - Web of Trust database path")
@@ -804,4 +841,85 @@ func isDirWritable(dir string) bool {
 	}
 	_ = os.Remove(testFile)
 	return true
+}
+
+func startLocalServer(bindAddr string, a *agent.Agent) {
+	mux := http.NewServeMux()
+
+	// GET / or /health or /status
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		if r.URL.Path != "/" && r.URL.Path != "/status" && r.URL.Path != "/health" {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		status := map[string]interface{}{
+			"status":    "ok",
+			"urn":       a.Keys.Ed25519.URN(),
+			"peer_id":   a.Host.ID().String(),
+			"timestamp": time.Now().Unix(),
+		}
+		_ = json.NewEncoder(w).Encode(status)
+	})
+
+	// GET /info
+	mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		if r.Method != "GET" {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Convert public keys to hex
+		edPubKeyHex := fmt.Sprintf("%x", a.Keys.Ed25519.PublicKey)
+		x25519PubKeyHex := fmt.Sprintf("%x", a.Keys.X25519PK)
+
+		w.Header().Set("Content-Type", "application/json")
+		info := map[string]interface{}{
+			"urn":                a.Keys.Ed25519.URN(),
+			"peer_id":            a.Host.ID().String(),
+			"ed25519_public_key": edPubKeyHex,
+			"x25519_public_key":  x25519PubKeyHex,
+			"local_url":          fmt.Sprintf("http://localhost%s", getPortSuffix(bindAddr)),
+		}
+		_ = json.NewEncoder(w).Encode(info)
+	})
+
+	srv := &http.Server{
+		Addr:    bindAddr,
+		Handler: mux,
+	}
+
+	go func() {
+		fmt.Printf("🌐 Starting Local Agent HTTP Server on %s...\n", bindAddr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Printf("⚠️ Local Agent HTTP Server failed to start on %s: %v\n", bindAddr, err)
+		}
+	}()
+}
+
+func getPortSuffix(addr string) string {
+	idx := strings.LastIndex(addr, ":")
+	if idx != -1 {
+		return addr[idx:]
+	}
+	return ":8000"
 }

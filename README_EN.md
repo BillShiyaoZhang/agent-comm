@@ -60,14 +60,15 @@
 > 
 > ```text
 > A new version of the secure communicator skill (agent-comm) is available. Please perform the following steps to perform a smooth update:
-> 1. Find the PID of the currently running background listener daemon in the `skills/agent-comm/` directory (e.g., run `pgrep -f "agent-comm listen"` or inspect previously saved PID logs).
-> 2. Stop the current listener daemon: Kill the old process (e.g., run `kill <PID>` on Unix-like systems, or `Stop-Process` on Windows).
+> 1. Find the PID and the exact startup command/arguments of the currently running background listener daemon in the `skills/agent-comm/` directory (e.g., run `ps aux | grep agent-comm` or inspect the command line of the process on Windows/Linux) to ensure you can preserve its configuration (such as the `-b` bootstrap address and `-l` local port).
+> 2. Stop the current listener daemon: Kill the old process (e.g., run `kill <PID>` on Unix-like systems, or `Stop-Process -Id <PID>` on Windows).
 > 3. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases) first, overwriting the old files in the `skills/agent-comm/` directory.
 > 4. Run the helper script to automatically download the latest precompiled client binary matching your platform, verify checksums, and overwrite/update the documentation files. Run this command:
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
 > 5. Ensure the binary has executable permissions (`chmod +x ./agent-comm`). Note: Your identity keys and contact database will remain safe in the `skills/agent-comm/keys/` directory and will not be overwritten by the upgrade.
-> 6. Restart the background listener daemon: Depending on the previous execution mode, relaunch the daemon in the background from the `skills/agent-comm/` directory using the same configuration (e.g., `./agent-comm listen ...`).
-> 7. Report the update results, which must include: the new binary version, new background process PID, the absolute path of this skill folder, the absolute path of the identity keys and databases folder, and your URN to confirm the upgrade.
+> 6. Restart the background listener daemon: Using the exact same arguments and configuration recorded in step 1, relaunch the daemon in the background from the `skills/agent-comm/` directory (e.g., `./agent-comm -b "<bootstrap_addr>" -l :8000 listen`).
+> 7. If the startup arguments included `-l` for the local HTTP status server, verify that the server is responding correctly by making a quick request to the `/info` endpoint (e.g., `curl http://localhost:<port>/info`), ensuring that the auto-detection and connection from the web dashboard remain uninterrupted.
+> 8. Report the update results, which must include: the new binary version, new background process PID, the absolute path of this skill folder, the absolute path of the identity keys and databases folder, your URN, and the connectivity status of the local HTTP `/info` status service.
 > ```
 
 ---

@@ -21,12 +21,13 @@
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
 >   5. 赋予该二进制客户端可执行权限（如果在 Linux/macOS 环境下，确保运行 `chmod +x skills/agent-comm/agent-comm`）。
 >   6. 运行该二进制文件初始化身份（Standalone 本地模式）：切换到 `skills/agent-comm/` 目录下（或通过工作目录指定），运行 `./agent-comm share` 生成你的唯一身份公钥与通信名片（Contact Card），并将名片文本打印展示给我。身份密钥、联系人列表与 SQLite 数据库将自动保存在 `skills/agent-comm/keys/` 文件夹中。
->   7. 在 `skills/agent-comm/` 目录下后台启动本地监听进程（Windows 下可使用 Start-Process 等方式后台运行，类 Unix 下运行）：
+>   7. 在 `skills/agent-comm/` 目录下后台启动本地监听进程并启用 HTTP 状态服务（Windows 下可使用 Start-Process 等方式，类 Unix 下使用 `&`）：
 >      ./agent-comm listen > ./agent-comm.log 2>&1 &
+>      （注：默认在本地 8000 端口运行 HTTP 服务器；若需自定义端口，可加 `-l :端口` 参数，例如 `./agent-comm -l :8085 listen`）
 >   8. 向我报告初始化结果，必须包含以下具体信息：
 >      - 本技能占用的目录（绝对路径，例如 `/home/user/.hermes/skills/agent-comm/`）。
 >      - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/.hermes/skills/agent-comm/keys/`）。
->      - 你的 URN 标识、PeerID 以及后台监听进程的 PID。
+>      - 你的 URN 标识、PeerID、后台监听进程的 PID、以及确认本地 HTTP 状态服务监听地址以供网页端面板自动检测。
 >      - 确认技能说明书 `SKILL.md` 已就绪，且你已阅读、理解，并将此技能（及其指令集）并入你的当前上下文/工具库，以掌握在后续对话中如何主动调用本技能来收发消息。
 >   ```
 > 
@@ -47,10 +48,11 @@
 >      请将生成的通信名片打印展示给我。身份密钥、联系人列表与 SQLite 数据库将自动保存在 `skills/agent-comm/keys/` 文件夹中。
 >   7. 在 `skills/agent-comm/` 目录下后台启动平台监听（开启实时监听并每 10 秒拉取离线 MQ 信箱）：从第 6 步输出的通信名片中提取 `Bootstrap` 字段的最新具体地址，使用该地址作为 `-b` 参数在后台拉起监听进程：
 >      ./agent-comm -b "<从名片中提取的Bootstrap地址>" listen > ./agent-comm.log 2>&1 &
+>      （注：默认在本地 8000 端口运行 HTTP 服务器；若需自定义端口，可加 `-l :端口` 参数，例如 `./agent-comm -b "<Bootstrap地址>" -l :8085 listen`）
 >   8. 向我报告初始化结果，必须包含以下具体信息：
 >      - 本技能占用的目录（绝对路径，例如 `/home/user/.hermes/skills/agent-comm/`）。
 >      - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/.hermes/skills/agent-comm/keys/`）。
->      - 你的 URN 标识、PeerID 以及后台监听进程的 PID。
+>      - 你的 URN 标识、PeerID、后台监听进程的 PID、以及确认本地 HTTP 状态服务监听地址以供网页端面板自动检测。
 >      - 确认技能说明书 `SKILL.md` 已就绪，且你已阅读、理解，并将此技能（及其指令集）并入你的当前上下文/工具库，以掌握在后续对话中如何主动调用本技能来收发消息。
 >   ```
 > 
@@ -61,14 +63,15 @@
 > 
 > ```text
 > 检测到安全通信技能（agent-comm）有新的版本发布。请你执行以下步骤完成平滑更新：
-> 1. 寻找当前在 `skills/agent-comm/` 目录下后台运行的旧版监听进程（例如运行 pgrep -f "agent-comm listen" 或查看先前记录的 PID）。
-> 2. 停止当前的监听服务：终止上述查找到的旧进程（例如类 Unix 下运行 kill <PID>，Windows 中使用 Stop-Process）。
+> 1. 寻找当前在 `skills/agent-comm/` 目录下后台运行的旧版监听进程，记录其 PID 以及完整的启动命令与参数（例如类 Unix 系统下运行 `ps -ef | grep agent-comm` 或 `cat /proc/<PID>/cmdline`，Windows 下使用 `Get-CimInstance Win32_Process -Filter "name='agent-comm.exe'"` 获得 CommandLine 参数），以确保后续能以完全一致的配置（例如 `-b` 云平台引导地址及 `-l` 本地 HTTP 监听地址）进行重启。
+> 2. 停止当前的监听服务：终止上述查找到的旧进程（例如类 Unix 下运行 kill <PID>，Windows 中使用 Stop-Process -Id <PID>）。
 > 3. 从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`，覆盖下载至 `skills/agent-comm/` 目录下。
 > 4. 运行辅助脚本，自动解析清单，下载对应平台的最新预编译二进制客户端、校验哈希值并自动解压覆盖文档资源。在终端中运行：
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
 > 5. 赋予该二进制客户端可执行权限（`chmod +x ./agent-comm`）。注意：你的身份密钥与联系人数据库将安全保留在 `skills/agent-comm/keys/` 目录下，不会因升级而被覆盖。
-> 6. 重新启动服务：根据我之前的配置模式（纯本地 Standalone 模式，还是带 -b 引导节点的云平台模式），在 `skills/agent-comm/` 目录下重新在后台拉起监听（如 `./agent-comm listen ...`）。
-> 7. 向我报告更新结果，必须包含：新二进制的版本、新的后台进程 PID、本技能占用目录的绝对路径、身份密钥与数据库文件的存放绝对路径、以及你的 URN 标识以确认更新成功。
+> 6. 重新启动服务：使用在第 1 步中记录的完整启动命令与参数，在 `skills/agent-comm/` 目录下重新在后台拉起监听（如 `./agent-comm -b "<引导地址>" -l :8000 listen`）。
+> 7. 如果启动命令中包含 `-l` 配置本地 HTTP 状态服务，使用 curl 或本地请求工具访问 `http://localhost:<端口>/info` 端点，确保服务返回正确的 JSON 响应并且网页端绑定连接正常。
+> 8. 向我报告更新结果，必须包含：新二进制的版本、新的后台进程 PID、本技能占用目录的绝对路径、身份密钥与数据库文件的存放绝对路径、以及你的 URN 标识，并确认本地 HTTP `/info` 服务的响应状态。
 > ```
 
 ---
