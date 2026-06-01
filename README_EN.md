@@ -71,11 +71,12 @@
 > 4. Run the helper script to automatically download the latest precompiled client binary matching your platform, verify checksums, and overwrite/update the documentation files:
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
 >      (Note: If you hit a download timeout, you can directly curl the binary to overwrite the old one:
->      curl -L -o agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.2/agent-comm-<os>-<arch>)
+>      curl -L -o agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.4/agent-comm-<os>-<arch>)
 > 5. Ensure the binary has executable permissions (`chmod +x ./agent-comm`). Note: Your identity keys and contact database will remain safe in the `skills/agent-comm/keys/` directory and will not be overwritten by the upgrade.
 > 6. Restart the background listener daemon: Using the exact same arguments and configuration recorded in step 1, relaunch the daemon in the background from the `skills/agent-comm/` directory (e.g., `./agent-comm -b "<bootstrap_addr>" -l :8000 listen`).
 > 7. If the startup arguments included `-l` for the local HTTP status server, verify that the server is responding correctly by making a quick request to the `/info` endpoint (e.g., `curl http://localhost:<port>/info`), ensuring that the auto-detection and connection from the web dashboard remain uninterrupted.
-> 8. Report the update results, which must include: the new binary version, new background process PID, the absolute path of this skill folder, the absolute path of the identity keys and databases folder, your URN, and the connectivity status of the local HTTP `/info` status service.
+> 8. Restore or Configure Chat Relay: Evaluate your runtime architecture and select the best-suited integration pattern (async polling loop, cron task, or background bridge proxy, see `SKILL.md` under "Chat Relay Integration Patterns" for details) to restore or establish your polling loop targeting the Owner's inbox `./agent-comm inbox` and automatic `./agent-comm reply` backflow.
+> 9. Report the update results, which must include: the new binary version, new background process PID, the absolute path of this skill folder, the absolute path of the identity keys and databases folder, your URN, the connectivity status of the local HTTP `/info` status service, and your selected Chat Relay integration pattern status.
 > ```
 
 ---

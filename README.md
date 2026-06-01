@@ -73,7 +73,7 @@
 > 4. 运行辅助脚本，自动解析清单，下载最新预编译二进制、校验哈希并自动解压释放文档资源：
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
 >      （注：若遇网络超时，可直接使用 curl 另行下载并覆盖：
->      curl -L -o agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.2/agent-comm-<系统>-<架构>）
+>      curl -L -o agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.4/agent-comm-<系统>-<架构>）
 > 5. 赋予该二进制客户端可执行权限（`chmod +x ./agent-comm`）。注意：你的身份密钥与联系人数据库将安全保留在 `skills/agent-comm/keys/` 目录下，不会因升级而被覆盖。
 > 6. 重新启动服务：使用在第 1 步中记录的完整启动命令与参数，在 `skills/agent-comm/` 目录下重新在后台拉起监听（如 `./agent-comm -b "<引导地址>" -l :8000 listen`）。
 > 7. （仅限云平台协作模式）若本 Agent 已绑定至云端 Web 面板（owner 控制通道），需重新向 Web 面板注册本地身份的加密公钥，以恢复 owner 侧对你的端对端加密控制通道。在本地运行以下命令，从 `/info` 端点读取身份信息，并向云端面板的 `/api/agents/<agentId>/bind-owner` 端点提交绑定请求：
@@ -81,7 +81,8 @@
 >    - 然后向云端面板重新提交绑定：`curl -X POST https://<面板域名>/api/agents/<agentId>/bind-owner -H "Content-Type: application/json" -d '{"urn":"<你的URN>","ed25519_public_key":"<Ed25519公钥十六进制>","x25519_public_key":"<X25519公钥十六进制>"}'`
 >    - 若面板返回 `{"status":"success"}` 则说明 owner 加密通道已恢复。若本 Agent 从未绑定云端面板，可跳过此步骤。
 > 8. 使用 curl 或本地请求工具访问 `http://localhost:<端口>/info` 端点，确保服务返回正确的 JSON 响应并且网页端绑定连接正常。
-> 9. 向我报告更新结果，必须包含：新二进制的版本、新的后台进程 PID、本技能占用目录的绝对路径、身份密钥与数据库文件的存放绝对路径、以及你的 URN 标识，并确认本地 HTTP `/info` 服务的响应状态；如执行了第 7 步，还需额外报告 owner 绑定是否成功。
+> 9. 配置或恢复 Chat Relay 对话通路：结合你的框架架构特点，选择最适合的设计模式（主动长轮询、定时任务 Cron、或后台挂载中继桥接脚本，详情参见 `SKILL.md` 的“Chat Relay 智能体集成设计模式”一章），重新建立或恢复你与 Owner 消息信箱 `./agent-comm inbox` 的轮询和自动 `./agent-comm reply` 回复流。
+> 10. 向我报告更新结果，必须包含：新二进制的版本、新的后台进程 PID、本技能占用目录 of 绝对路径、身份密钥与数据库文件的存放绝对路径、以及你的 URN 标识，并确认本地 HTTP `/info` 服务的响应状态；如执行了第 7 步，还需额外报告 owner 绑定是否成功；最后汇报你采取的 Chat Relay 对话通路集成与配置状态。
 > ```
 
 ---
