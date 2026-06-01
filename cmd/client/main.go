@@ -4,12 +4,15 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/BillShiyaoZhang/agent-comm/wot"
 	"github.com/BillShiyaoZhang/agent-comm/registry"
 
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/multiformats/go-multiaddr"
@@ -334,18 +338,55 @@ func main() {
 		// Start local HTTP health-check and info server for Web Dashboard connectivity
 		startLocalServer(bindAddr, a)
 
-		// Register standard message callback
-		a.OnMessage(ctx, func(senderURN string, msg string) {
-			// Try to parse ChatMessage
+		// Define owner command execution handler
+		handleMessage := func(senderURN string, msg string) {
 			var chatMsg proto.ChatMessage
+			actualText := msg
 			if err := goproto.Unmarshal([]byte(msg), &chatMsg); err == nil {
 				if txt := chatMsg.GetText(); txt != nil {
-					fmt.Printf("[%s] 💬 %s\n", senderURN, txt.Text)
-					return
+					actualText = txt.Text
 				}
 			}
-			fmt.Printf("[%s] %s\n", senderURN, msg)
-		})
+
+			// Resolve contact to verify trust tier
+			contact, err := a.Contacts.Get(senderURN)
+			if err != nil {
+				fmt.Printf("⚠️ Unauthorized message from %s (not in contacts). Discarding.\n", senderURN)
+				return
+			}
+
+			if contact.TrustTier != "self" {
+				fmt.Printf("⚠️ Unauthorized message from %s (trust_tier = %q). Discarding.\n", senderURN, contact.TrustTier)
+				return
+			}
+
+			fmt.Printf("[%s] 💬 Command received: %s\n", senderURN, actualText)
+
+			cmdText := strings.TrimSpace(actualText)
+			var responseText string
+
+			switch strings.ToLower(cmdText) {
+			case "ping":
+				responseText = "pong"
+			case "stats", "run stats":
+				responseText = fmt.Sprintf("=== Local Agent Stats ===\nURN: %s\nTime: %s\nOS: %s\nStatus: Running", a.Keys.Ed25519.URN(), time.Now().Format(time.RFC3339), runtime.GOOS)
+			case "help":
+				responseText = "Available commands: ping, stats, help"
+			default:
+				responseText = fmt.Sprintf("Command received: %q. (Try 'ping' or 'stats')", cmdText)
+			}
+
+			fmt.Printf("🤖 Executing owner command: %s\n", cmdText)
+			err = a.SendMessage(ctx, senderURN, responseText)
+			if err != nil {
+				fmt.Printf("❌ Failed to send response: %v\n", err)
+			} else {
+				fmt.Printf("✅ Sent response to owner URN: %s\n", senderURN)
+			}
+		}
+
+		// Register standard message callback
+		a.OnMessage(ctx, handleMessage)
 
 		// Run periodic polling ticker in addition to callback listener
 		ticker := time.NewTicker(10 * time.Second)
@@ -365,8 +406,7 @@ func main() {
 				if bootstrapInfo == nil {
 					continue
 				}
-				// Silent MQ poll and decryption (handled automatically by a.OnMessage,
-				// but let's trigger manual pull here to print updates directly to terminal)
+				// Silent MQ poll and decryption
 				envs, err := a.MQClient.Retrieve(ctx, *bootstrapInfo, a.Keys.Ed25519.URN())
 				if err == nil && len(envs) > 0 {
 					var toAck []string
@@ -376,14 +416,7 @@ func main() {
 						}
 						plaintext, err := a.Session.DecryptEnvelope(env)
 						if err == nil {
-							var chatMsg proto.ChatMessage
-							if err := goproto.Unmarshal(plaintext, &chatMsg); err == nil {
-								if txt := chatMsg.GetText(); txt != nil {
-									fmt.Printf("[%s] 💬 %s (via MQ)\n", env.SenderUrn, txt.Text)
-								}
-							} else {
-								fmt.Printf("[%s] %s (via MQ)\n", env.SenderUrn, string(plaintext))
-							}
+							handleMessage(env.SenderUrn, string(plaintext))
 						}
 					}
 					if len(toAck) > 0 {
@@ -901,6 +934,108 @@ func startLocalServer(bindAddr string, a *agent.Agent) {
 			"local_url":          fmt.Sprintf("http://localhost%s", getPortSuffix(bindAddr)),
 		}
 		_ = json.NewEncoder(w).Encode(info)
+	})
+
+	// POST /contacts
+	mux.HandleFunc("/contacts", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		if r.Method != "POST" {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			http.Error(w, "Forbidden: unable to verify remote address", http.StatusForbidden)
+			return
+		}
+
+		if host != "127.0.0.1" && host != "::1" && host != "localhost" {
+			http.Error(w, "Forbidden: requests must originate from loopback interfaces", http.StatusForbidden)
+			return
+		}
+
+		type ContactReq struct {
+			ContactURN       string `json:"contact_urn"`
+			Alias            string `json:"alias"`
+			TrustTier        string `json:"trust_tier"`
+			Ed25519PublicKey string `json:"ed25519_public_key"`
+			X25519PublicKey  string `json:"x25519_public_key"`
+		}
+
+		var req ContactReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad Request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if req.ContactURN == "" || req.Ed25519PublicKey == "" || req.X25519PublicKey == "" {
+			http.Error(w, "Bad Request: contact_urn, ed25519_public_key, and x25519_public_key are required", http.StatusBadRequest)
+			return
+		}
+
+		if req.TrustTier == "self" {
+			if host != "127.0.0.1" && host != "::1" && host != "localhost" {
+				http.Error(w, "Forbidden: self trust tier additions restricted to localhost", http.StatusForbidden)
+				return
+			}
+		}
+
+		edBytes, err := hex.DecodeString(req.Ed25519PublicKey)
+		if err != nil {
+			http.Error(w, "Bad Request: invalid ed25519_public_key hex", http.StatusBadRequest)
+			return
+		}
+
+		xBytes, err := hex.DecodeString(req.X25519PublicKey)
+		if err != nil {
+			http.Error(w, "Bad Request: invalid x25519_public_key hex", http.StatusBadRequest)
+			return
+		}
+
+		libp2pPub, err := libp2pcrypto.UnmarshalEd25519PublicKey(edBytes)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to unmarshal ed25519 public key: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		pid, err := peer.IDFromPublicKey(libp2pPub)
+		if err != nil {
+			http.Error(w, "Bad Request: failed to derive PeerID: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		c := &contacts.Contact{
+			URN:         req.ContactURN,
+			PeerID:      pid.String(),
+			X25519PK:    xBytes,
+			Ed25519PK:   edBytes,
+			DisplayName: req.Alias,
+			Trusted:     req.TrustTier == "self" || req.TrustTier == "family" || req.TrustTier == "friend",
+			TrustTier:   req.TrustTier,
+		}
+
+		if err := a.Contacts.Add(c); err != nil {
+			http.Error(w, "Internal Server Error: failed to save contact: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		a.Session.SetPeerX25519PK(pid, xBytes)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status":  "success",
+			"message": "Contact registered successfully",
+		})
 	})
 
 	srv := &http.Server{

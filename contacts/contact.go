@@ -25,6 +25,7 @@ type Contact struct {
 	Trusted     bool      // explicitly trusted (via WoT or manual bootstrap)
 	FirstSeen   time.Time
 	LastSeen    time.Time
+	TrustTier   string    // trust tier, e.g. "self", "family", "friend", "stranger"
 }
 
 // Store manages the local contact list backed by SQLite.
@@ -62,7 +63,8 @@ func (s *Store) initSchema() error {
 		display_name  TEXT DEFAULT '',
 		trusted       INTEGER NOT NULL DEFAULT 0,
 		first_seen    INTEGER NOT NULL,
-		last_seen     INTEGER NOT NULL
+		last_seen     INTEGER NOT NULL,
+		trust_tier    TEXT DEFAULT 'stranger'
 	);
 	CREATE TABLE IF NOT EXISTS trusted_urns (
 		urn     TEXT PRIMARY KEY,
@@ -70,7 +72,12 @@ func (s *Store) initSchema() error {
 		added   INTEGER NOT NULL
 	);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Migrate table: add trust_tier column if it does not exist
+	_, _ = s.db.Exec("ALTER TABLE contacts ADD COLUMN trust_tier TEXT DEFAULT 'stranger'")
+	return nil
 }
 
 // Add adds or updates a contact.
@@ -88,13 +95,19 @@ func (s *Store) Add(c *Contact) error {
 		trusted = 1
 	}
 
+	trustTier := c.TrustTier
+	if trustTier == "" {
+		trustTier = "stranger"
+	}
+
 	_, err := s.db.Exec(`
-	INSERT INTO contacts (urn, peer_id, x25519_pk, ed25519_pk, display_name, trusted, first_seen, last_seen)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO contacts (urn, peer_id, x25519_pk, ed25519_pk, display_name, trusted, first_seen, last_seen, trust_tier)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(urn) DO UPDATE SET
 		peer_id=excluded.peer_id, x25519_pk=excluded.x25519_pk, ed25519_pk=excluded.ed25519_pk,
-		display_name=excluded.display_name, trusted=excluded.trusted, last_seen=excluded.last_seen`,
-		c.URN, c.PeerID, c.X25519PK, c.Ed25519PK, c.DisplayName, trusted, now, now)
+		display_name=excluded.display_name, trusted=excluded.trusted, last_seen=excluded.last_seen,
+		trust_tier=excluded.trust_tier`,
+		c.URN, c.PeerID, c.X25519PK, c.Ed25519PK, c.DisplayName, trusted, now, now, trustTier)
 	return err
 }
 
@@ -104,13 +117,13 @@ func (s *Store) Get(urn string) (*Contact, error) {
 	defer s.mu.RUnlock()
 
 	row := s.db.QueryRow(`
-		SELECT urn, peer_id, x25519_pk, ed25519_pk, display_name, trusted, first_seen, last_seen
+		SELECT urn, peer_id, x25519_pk, ed25519_pk, display_name, trusted, first_seen, last_seen, trust_tier
 		FROM contacts WHERE urn = ?`, urn)
 
 	var c Contact
 	var trusted int
 	var firstSeen, lastSeen int64
-	err := row.Scan(&c.URN, &c.PeerID, &c.X25519PK, &c.Ed25519PK, &c.DisplayName, &trusted, &firstSeen, &lastSeen)
+	err := row.Scan(&c.URN, &c.PeerID, &c.X25519PK, &c.Ed25519PK, &c.DisplayName, &trusted, &firstSeen, &lastSeen, &c.TrustTier)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("contact not found: %s", urn)
 	}
@@ -129,13 +142,13 @@ func (s *Store) GetByPeerID(peerID string) (*Contact, error) {
 	defer s.mu.RUnlock()
 
 	row := s.db.QueryRow(`
-		SELECT urn, peer_id, x25519_pk, ed25519_pk, display_name, trusted, first_seen, last_seen
+		SELECT urn, peer_id, x25519_pk, ed25519_pk, display_name, trusted, first_seen, last_seen, trust_tier
 		FROM contacts WHERE peer_id = ?`, peerID)
 
 	var c Contact
 	var trusted int
 	var firstSeen, lastSeen int64
-	err := row.Scan(&c.URN, &c.PeerID, &c.X25519PK, &c.Ed25519PK, &c.DisplayName, &trusted, &firstSeen, &lastSeen)
+	err := row.Scan(&c.URN, &c.PeerID, &c.X25519PK, &c.Ed25519PK, &c.DisplayName, &trusted, &firstSeen, &lastSeen, &c.TrustTier)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("contact not found for peer ID: %s", peerID)
 	}
@@ -191,7 +204,7 @@ func (s *Store) List() ([]*Contact, error) {
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(`
-		SELECT urn, peer_id, x25519_pk, ed25519_pk, display_name, trusted, first_seen, last_seen
+		SELECT urn, peer_id, x25519_pk, ed25519_pk, display_name, trusted, first_seen, last_seen, trust_tier
 		FROM contacts ORDER BY last_seen DESC`)
 	if err != nil {
 		return nil, err
@@ -203,7 +216,7 @@ func (s *Store) List() ([]*Contact, error) {
 		var c Contact
 		var trusted int
 		var firstSeen, lastSeen int64
-		if err := rows.Scan(&c.URN, &c.PeerID, &c.X25519PK, &c.Ed25519PK, &c.DisplayName, &trusted, &firstSeen, &lastSeen); err != nil {
+		if err := rows.Scan(&c.URN, &c.PeerID, &c.X25519PK, &c.Ed25519PK, &c.DisplayName, &trusted, &firstSeen, &lastSeen, &c.TrustTier); err != nil {
 			return nil, err
 		}
 		c.Trusted = trusted == 1
@@ -220,7 +233,7 @@ func (s *Store) ListTrusted() ([]*Contact, error) {
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(`
-		SELECT urn, peer_id, x25519_pk, ed25519_pk, display_name, trusted, first_seen, last_seen
+		SELECT urn, peer_id, x25519_pk, ed25519_pk, display_name, trusted, first_seen, last_seen, trust_tier
 		FROM contacts WHERE trusted = 1 ORDER BY last_seen DESC`)
 	if err != nil {
 		return nil, err
@@ -232,7 +245,7 @@ func (s *Store) ListTrusted() ([]*Contact, error) {
 		var c Contact
 		var trusted int
 		var firstSeen, lastSeen int64
-		if err := rows.Scan(&c.URN, &c.PeerID, &c.X25519PK, &c.Ed25519PK, &c.DisplayName, &trusted, &firstSeen, &lastSeen); err != nil {
+		if err := rows.Scan(&c.URN, &c.PeerID, &c.X25519PK, &c.Ed25519PK, &c.DisplayName, &trusted, &firstSeen, &lastSeen, &c.TrustTier); err != nil {
 			return nil, err
 		}
 		c.Trusted = true
