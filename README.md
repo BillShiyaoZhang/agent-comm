@@ -49,11 +49,13 @@
 >   7. 在 `skills/agent-comm/` 目录下后台启动平台监听（开启实时监听并每 10 秒拉取离线 MQ 信箱）：从第 6 步输出的通信名片中提取 `Bootstrap` 字段的最新具体地址，使用该地址作为 `-b` 参数在后台拉起监听进程：
 >      ./agent-comm -b "<从名片中提取的Bootstrap地址>" listen > ./agent-comm.log 2>&1 &
 >      （注：默认在本地 8000 端口运行 HTTP 服务器；若需自定义端口，可加 `-l :端口` 参数，例如 `./agent-comm -b "<Bootstrap地址>" -l :8085 listen`）
->   8. 向我报告初始化结果，必须包含以下具体信息：
+>   8. 启动 Chat Relay 消息中继：在后台监听进程启动后，立即开始每 3-5 秒轮询一次 `GET http://localhost:<端口>/messages/inbox` 以接收来自 Owner（Web 面板用户）的消息。对于收到的每条消息，理解其内容并生成回复，然后通过 `POST http://localhost:<端口>/messages/send` 发送回复（body 格式：`{"recipient_urn":"<发送者URN>","content":"<你的回复>"}`）。当你开始轮询后，daemon 将自动进入 Chat Relay 模式，所有消息将排入 inbox 等待你处理。
+>   9. 向我报告初始化结果，必须包含以下具体信息：
 >      - 本技能占用的目录（绝对路径，例如 `/home/user/.hermes/skills/agent-comm/`）。
 >      - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/.hermes/skills/agent-comm/keys/`）。
 >      - 你的 URN 标识、PeerID、后台监听进程的 PID、以及确认本地 HTTP 状态服务监听地址以供网页端面板自动检测。
 >      - 确认技能说明书 `SKILL.md` 已就绪，且你已阅读、理解，并将此技能（及其指令集）并入你的当前上下文/工具库，以掌握在后续对话中如何主动调用本技能来收发消息。
+>      - 确认 Chat Relay 轮询已启动，你可以通过 Web 面板接收和回复 Owner 的消息。
 >   ```
 > 
 > [!NOTE]

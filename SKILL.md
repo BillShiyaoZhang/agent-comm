@@ -123,6 +123,70 @@ description: >
 
 ---
 
+## 🔗 Chat Relay 模式 — Web 面板对话中继 (Chat Relay Mode)
+
+当你的 Owner 通过云端 Web 面板（或其他通过 `trust_tier=self` 绑定的客户端）向你发送消息时，消息会经过 E2E 加密后到达你的 `listen` 进程。你可以通过本地 HTTP API 轮询这些消息，并发送回复。
+
+> [!IMPORTANT]
+> 当你开始轮询 `/messages/inbox` 后，daemon 会自动进入 **Chat Relay 模式**：所有来自 Owner 的消息将不再触发内置命令（ping/stats/help），而是全部排入 inbox 队列等待你处理。如果你停止轮询超过 60 秒，daemon 将回退到内置命令自动应答模式。
+
+### 接收消息（轮询 Inbox）
+
+```bash
+# 建议每 3-5 秒轮询一次
+curl http://localhost:8000/messages/inbox
+```
+
+**响应示例：**
+```json
+{
+  "messages": [
+    {
+      "id": "msg-1717200000000000000",
+      "sender_urn": "urn:hermes:agent:CkG8xG9evxYy38L14JqPhk",
+      "content": "帮我查看一下部署状态",
+      "timestamp": "2026-06-01T16:20:00Z"
+    }
+  ]
+}
+```
+
+> [!NOTE]
+> 每次调用 `GET /messages/inbox` 后，已返回的消息会自动从队列中移除。消息队列存储在内存中，daemon 重启后清空。
+
+### 发送回复
+
+```bash
+curl -X POST http://localhost:8000/messages/send \
+  -H "Content-Type: application/json" \
+  -d '{"recipient_urn":"urn:hermes:agent:CkG8xG9evxYy38L14JqPhk","content":"部署正常，3 个容器均在运行。"}'
+```
+
+**响应示例：**
+```json
+{"status": "success", "message": "Message sent successfully"}
+```
+
+daemon 会自动处理 E2E 加密和路由（直连 → 中继 → MQ 盲存），你只需提供收件人 URN 和纯文本内容。
+
+### 推荐的集成方式
+
+在你的 `listen` 启动完成后，立即开始轮询 inbox。以下是推荐的工作流伪代码：
+
+```
+1. 启动 agent-comm listen（后台进程）
+2. 每 3 秒调用 GET http://localhost:8000/messages/inbox
+3. 对于每条收到的消息：
+   a. 理解消息内容（可执行工具调用、查询信息等）
+   b. 生成回复
+   c. 调用 POST http://localhost:8000/messages/send 发送回复
+4. 重复步骤 2
+```
+
+> [!TIP]
+> 所有 `/messages/*` 端点仅允许 loopback 访问（127.0.0.1 / ::1），确保只有本机的宿主 AI 可以读取和发送消息。
+
+---
 
 ## ⚠️ 智能体必须牢记的踩坑点 (Gotchas)
 

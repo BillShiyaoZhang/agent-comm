@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BillShiyaoZhang/agent-comm/agent"
@@ -28,6 +29,60 @@ import (
 	"github.com/multiformats/go-multiaddr"
 	goproto "google.golang.org/protobuf/proto"
 )
+
+// ---------------------------------------------------------------------------
+// Inbox: in-memory message queue for Chat Relay mode.
+// When a host AI agent is actively polling the inbox, incoming messages are
+// queued here instead of being auto-responded to. The host AI reads messages
+// via GET /messages/inbox and sends replies via POST /messages/send.
+// ---------------------------------------------------------------------------
+
+type InboxMessage struct {
+	ID        string    `json:"id"`
+	SenderURN string    `json:"sender_urn"`
+	Content   string    `json:"content"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+type Inbox struct {
+	mu       sync.Mutex
+	messages []InboxMessage
+	lastPoll time.Time
+}
+
+func NewInbox() *Inbox {
+	return &Inbox{}
+}
+
+// Push adds a new message to the inbox queue.
+func (inbox *Inbox) Push(senderURN, content string) {
+	inbox.mu.Lock()
+	defer inbox.mu.Unlock()
+	inbox.messages = append(inbox.messages, InboxMessage{
+		ID:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
+		SenderURN: senderURN,
+		Content:   content,
+		Timestamp: time.Now(),
+	})
+}
+
+// Drain returns all pending messages and clears the queue.
+// It also updates lastPoll to indicate the host AI is active.
+func (inbox *Inbox) Drain() []InboxMessage {
+	inbox.mu.Lock()
+	defer inbox.mu.Unlock()
+	inbox.lastPoll = time.Now()
+	msgs := inbox.messages
+	inbox.messages = nil
+	return msgs
+}
+
+// HostIsActive returns true if a host AI polled within the last 60 seconds.
+func (inbox *Inbox) HostIsActive() bool {
+	inbox.mu.Lock()
+	defer inbox.mu.Unlock()
+	return time.Since(inbox.lastPoll) < 60*time.Second
+}
 
 func main() {
 	ctx := context.Background()
@@ -335,8 +390,11 @@ func main() {
 		}
 		fmt.Printf("==================================================\n\n")
 
+		// Initialize message inbox for Chat Relay mode
+		inbox := NewInbox()
+
 		// Start local HTTP health-check and info server for Web Dashboard connectivity
-		startLocalServer(bindAddr, a)
+		startLocalServer(bindAddr, a, inbox)
 
 		// Define owner command execution handler
 		handleMessage := func(senderURN string, msg string) {
@@ -360,11 +418,19 @@ func main() {
 				return
 			}
 
-			fmt.Printf("[%s] 💬 Command received: %s\n", senderURN, actualText)
-
 			cmdText := strings.TrimSpace(actualText)
-			var responseText string
+			fmt.Printf("[%s] 💬 Message received: %s\n", senderURN, cmdText)
 
+			// Chat Relay mode: if a host AI agent is actively polling the inbox,
+			// queue ALL messages for the host AI to handle. No auto-response.
+			if inbox.HostIsActive() {
+				inbox.Push(senderURN, cmdText)
+				fmt.Printf("📥 Queued message for host AI agent\n")
+				return
+			}
+
+			// Fallback: no host AI polling — handle built-in commands locally
+			var responseText string
 			switch strings.ToLower(cmdText) {
 			case "ping":
 				responseText = "pong"
@@ -373,10 +439,12 @@ func main() {
 			case "help":
 				responseText = "Available commands: ping, stats, help"
 			default:
-				responseText = fmt.Sprintf("Command received: %q. (Try 'ping' or 'stats')", cmdText)
+				// No host AI and not a built-in command: queue anyway and inform sender
+				inbox.Push(senderURN, cmdText)
+				responseText = fmt.Sprintf("Message received: %q. No AI agent is currently connected to process your message. It has been queued.", cmdText)
 			}
 
-			fmt.Printf("🤖 Executing owner command: %s\n", cmdText)
+			fmt.Printf("🤖 Executing built-in command: %s\n", cmdText)
 			err = a.SendMessage(ctx, senderURN, responseText)
 			if err != nil {
 				fmt.Printf("❌ Failed to send response: %v\n", err)
@@ -876,7 +944,7 @@ func isDirWritable(dir string) bool {
 	return true
 }
 
-func startLocalServer(bindAddr string, a *agent.Agent) {
+func startLocalServer(bindAddr string, a *agent.Agent, inbox *Inbox) {
 	mux := http.NewServeMux()
 
 	// GET / or /health or /status
@@ -1035,6 +1103,99 @@ func startLocalServer(bindAddr string, a *agent.Agent) {
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"status":  "success",
 			"message": "Contact registered successfully",
+		})
+	})
+
+	// GET /messages/inbox — Host AI agent polls for incoming user messages.
+	// Returns all queued messages and clears the queue. Loopback only.
+	mux.HandleFunc("/messages/inbox", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		if r.Method != "GET" {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			http.Error(w, "Forbidden: unable to verify remote address", http.StatusForbidden)
+			return
+		}
+		if host != "127.0.0.1" && host != "::1" && host != "localhost" {
+			http.Error(w, "Forbidden: requests must originate from loopback interfaces", http.StatusForbidden)
+			return
+		}
+
+		msgs := inbox.Drain()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"messages": msgs,
+		})
+	})
+
+	// POST /messages/send — Host AI agent sends a reply to a user.
+	// The daemon handles encryption and routing via SendMessage. Loopback only.
+	mux.HandleFunc("/messages/send", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		if r.Method != "POST" {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			http.Error(w, "Forbidden: unable to verify remote address", http.StatusForbidden)
+			return
+		}
+		if host != "127.0.0.1" && host != "::1" && host != "localhost" {
+			http.Error(w, "Forbidden: requests must originate from loopback interfaces", http.StatusForbidden)
+			return
+		}
+
+		type SendReq struct {
+			RecipientURN string `json:"recipient_urn"`
+			Content      string `json:"content"`
+		}
+
+		var req SendReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad Request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if req.RecipientURN == "" || req.Content == "" {
+			http.Error(w, "Bad Request: recipient_urn and content are required", http.StatusBadRequest)
+			return
+		}
+
+		ctx := r.Context()
+		err = a.SendMessage(ctx, req.RecipientURN, req.Content)
+		if err != nil {
+			fmt.Printf("❌ Failed to send message via HTTP API: %v\n", err)
+			http.Error(w, "Failed to send message: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		fmt.Printf("✅ Message sent via HTTP API to %s\n", req.RecipientURN)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status":  "success",
+			"message": "Message sent successfully",
 		})
 	})
 
