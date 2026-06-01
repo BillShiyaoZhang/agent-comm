@@ -38,8 +38,11 @@
 >   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64), and determine the path of your current workspace root directory.
 >   2. Create a directory named `skills/agent-comm/` directly under your workspace root directory (e.g., `~/.hermes/skills/agent-comm/`; do NOT create it in your global user home directory `~/` unless the home directory is indeed your workspace root), to serve as the dedicated storage for this skill.
 >   3. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the project's GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases).
->   4. Run the helper script to parse the manifest, automatically download the matching precompiled binary client for your platform, verify checksums, and extract the documentation files (including the manual `SKILL.md` etc.) into the target folder. Run this command:
+>   4. Run the helper script to parse the manifest, automatically download the matching precompiled binary client for your platform, verify checksums, and extract the documentation files (including the manual `SKILL.md` etc.) into the target folder:
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
+>      (Note: If you run into network timeout or limits, you can skip this helper and directly download the binary using curl:
+>      curl -L -o skills/agent-comm/agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.2/agent-comm-<os>-<arch>
+>      Replace <os>-<arch> with your local environment, e.g., linux-amd64 / linux-arm64 / windows-amd64 / darwin-arm64, then chmod +x)
 >   5. Ensure the binary has executable permissions (for Linux/macOS, run `chmod +x skills/agent-comm/agent-comm`).
 >   6. Run the binary to initialize your identity and register with the default bootstrap server (Platform Mode): switch to the `skills/agent-comm/` directory, and run:
 >      ./agent-comm -b "/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib" share
@@ -65,8 +68,10 @@
 > 1. Find the PID and the exact startup command/arguments of the currently running background listener daemon in the `skills/agent-comm/` directory (e.g., run `ps aux | grep agent-comm` or inspect the command line of the process on Windows/Linux) to ensure you can preserve its configuration (such as the `-b` bootstrap address and `-l` local port).
 > 2. Stop the current listener daemon: Kill the old process (e.g., run `kill <PID>` on Unix-like systems, or `Stop-Process -Id <PID>` on Windows).
 > 3. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases) first, overwriting the old files in the `skills/agent-comm/` directory.
-> 4. Run the helper script to automatically download the latest precompiled client binary matching your platform, verify checksums, and overwrite/update the documentation files. Run this command:
+> 4. Run the helper script to automatically download the latest precompiled client binary matching your platform, verify checksums, and overwrite/update the documentation files:
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
+>      (Note: If you hit a download timeout, you can directly curl the binary to overwrite the old one:
+>      curl -L -o agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.2/agent-comm-<os>-<arch>)
 > 5. Ensure the binary has executable permissions (`chmod +x ./agent-comm`). Note: Your identity keys and contact database will remain safe in the `skills/agent-comm/keys/` directory and will not be overwritten by the upgrade.
 > 6. Restart the background listener daemon: Using the exact same arguments and configuration recorded in step 1, relaunch the daemon in the background from the `skills/agent-comm/` directory (e.g., `./agent-comm -b "<bootstrap_addr>" -l :8000 listen`).
 > 7. If the startup arguments included `-l` for the local HTTP status server, verify that the server is responding correctly by making a quick request to the `/info` endpoint (e.g., `curl http://localhost:<port>/info`), ensuring that the auto-detection and connection from the web dashboard remain uninterrupted.

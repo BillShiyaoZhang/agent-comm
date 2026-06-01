@@ -64,8 +64,45 @@ def download_bytes(url: str) -> bytes:
         raise SystemExit(f"failed to download {url}: {err}") from err
 
 
-def sha256_hex(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+def download_to_file(url: str, dest_path: Path) -> None:
+    try:
+        req = Request(url, headers={"User-Agent": "agent-comm-release-helper/1.0"})
+        with urlopen(req) as response:
+            total_size = int(response.headers.get("content-length", 0))
+            downloaded = 0
+            chunk_size = 1024 * 64  # 64KB
+            
+            with open(dest_path, "wb") as f:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0:
+                        percent = (downloaded / total_size) * 100
+                        sys.stdout.write(f"\r[Fetch] Downloading {url.split('/')[-1]}: {percent:.1f}% ({downloaded}/{total_size} bytes)")
+                        sys.stdout.flush()
+            if total_size > 0:
+                print()
+    except Exception as err:
+        dest_path.unlink(missing_ok=True)
+        raise SystemExit(f"failed to download {url}: {err}") from err
+
+
+def sha256_file(filepath: Path) -> str:
+    h = hashlib.sha256()
+    try:
+        with open(filepath, "rb") as f:
+            chunk_size = 1024 * 64
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception as err:
+        raise SystemExit(f"failed to calculate hash for {filepath}: {err}") from err
 
 
 def normalize_platform() -> tuple[str, str]:
@@ -157,11 +194,12 @@ def download_asset(base_url: str, asset: dict[str, object], output_dir: Path, ta
     destination = output_dir / destination_name
     temp_path = output_dir / f".{destination_name}.download"
     url = f"{base_url.rstrip('/')}/{name}"
-    payload = download_bytes(url)
+    
+    # Chunked streaming download to disk
+    download_to_file(url, temp_path)
 
-    temp_path.write_bytes(payload)
     expected_sha = str(asset.get("sha256", ""))
-    actual_sha = sha256_hex(payload)
+    actual_sha = sha256_file(temp_path)
     if expected_sha and actual_sha != expected_sha:
         temp_path.unlink(missing_ok=True)
         raise SystemExit(f"sha256 mismatch for {name}: expected {expected_sha}, got {actual_sha}")

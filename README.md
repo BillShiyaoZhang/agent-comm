@@ -40,8 +40,11 @@
 >   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64），并确认你当前所在的工作区（Workspace）根目录路径。
 >   2. 在上述工作区根目录下（例如：`~/.hermes/skills/agent-comm/`，严禁在全局的用户家目录 `~/` 下创建，除非家目录就是你的当前工作区根目录）创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
 >   3. 从项目的 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`。
->   4. 运行辅助脚本，自动解析清单，下载对应平台的预编译二进制客户端、校验哈希值并自动解压释放文档资源（包括说明书 `SKILL.md` 等）到指定目录。在终端中运行：
+>   4. 运行辅助脚本，自动解析清单，下载对应平台的预编译二进制客户端、校验哈希值并自动解压释放文档资源（包括说明书 `SKILL.md` 等）到指定目录：
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
+>      （注：若遇网络限制或下载超时，可跳过此脚本直接使用 curl 另行下载对应平台的二进制：
+>      curl -L -o skills/agent-comm/agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.2/agent-comm-<系统>-<架构>
+>      其中 <系统>-<架构> 替换为你本地环境，如 linux-amd64 / linux-arm64 / windows-amd64 / darwin-arm64 等）
 >   5. 赋予该二进制客户端可执行权限（如果在 Linux/macOS 环境下，确保运行 `chmod +x skills/agent-comm/agent-comm`）。
 >   6. 运行该二进制文件并注册至默认引导服务器（云平台模式）：切换到 `skills/agent-comm/` 目录下，运行：
 >      ./agent-comm -b "/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib" share
@@ -67,8 +70,10 @@
 > 1. 寻找当前在 `skills/agent-comm/` 目录下后台运行的旧版监听进程，记录其 PID 以及完整的启动命令与参数（例如类 Unix 系统下运行 `ps -ef | grep agent-comm` 或 `cat /proc/<PID>/cmdline`，Windows 下使用 `Get-CimInstance Win32_Process -Filter "name='agent-comm.exe'"` 获得 CommandLine 参数），以确保后续能以完全一致的配置（例如 `-b` 云平台引导地址及 `-l` 本地 HTTP 监听地址）进行重启。
 > 2. 停止当前的监听服务：终止上述查找到的旧进程（例如类 Unix 下运行 kill <PID>，Windows 中使用 Stop-Process -Id <PID>）。
 > 3. 从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`，覆盖下载至 `skills/agent-comm/` 目录下。
-> 4. 运行辅助脚本，自动解析清单，下载对应平台的最新预编译二进制客户端、校验哈希值并自动解压覆盖文档资源。在终端中运行：
+> 4. 运行辅助脚本，自动解析清单，下载最新预编译二进制、校验哈希并自动解压释放文档资源：
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
+>      （注：若遇网络超时，可直接使用 curl 另行下载并覆盖：
+>      curl -L -o agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.2/agent-comm-<系统>-<架构>）
 > 5. 赋予该二进制客户端可执行权限（`chmod +x ./agent-comm`）。注意：你的身份密钥与联系人数据库将安全保留在 `skills/agent-comm/keys/` 目录下，不会因升级而被覆盖。
 > 6. 重新启动服务：使用在第 1 步中记录的完整启动命令与参数，在 `skills/agent-comm/` 目录下重新在后台拉起监听（如 `./agent-comm -b "<引导地址>" -l :8000 listen`）。
 > 7. （仅限云平台协作模式）若本 Agent 已绑定至云端 Web 面板（owner 控制通道），需重新向 Web 面板注册本地身份的加密公钥，以恢复 owner 侧对你的端对端加密控制通道。在本地运行以下命令，从 `/info` 端点读取身份信息，并向云端面板的 `/api/agents/<agentId>/bind-owner` 端点提交绑定请求：
