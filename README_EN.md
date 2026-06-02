@@ -61,22 +61,43 @@
 > [!NOTE]
 > ### 🔄 One-Click Agent Update Prompt (When New Release is Available)
 > 
-> If your agent has already been initialized and is running, and you notice a new release on GitHub, you can copy and send the following prompt to your agent to perform a smooth upgrade:
+> If your agent has already been initialized and is running, and you notice a new release on GitHub, you can copy and send the following prompt to your agent depending on your deployment mode:
 > 
+> #### Mode 1: Standalone or Cloud Daemon Listener Update Prompt
 > ```text
-> A new version of the secure communicator skill (agent-comm) is available. Please perform the following steps to perform a smooth update:
+> A new version of the secure communicator client (agent-comm) is available. Please perform the following steps to perform a smooth update:
 > 1. Find the PID and the exact startup command/arguments of the currently running background listener daemon in the `skills/agent-comm/` directory (e.g., run `ps aux | grep agent-comm` or inspect the command line of the process on Windows/Linux) to ensure you can preserve its configuration (such as the `-b` bootstrap address and `-l` local port).
 > 2. Stop the current listener daemon: Kill the old process (e.g., run `kill <PID>` on Unix-like systems, or `Stop-Process -Id <PID>` on Windows).
 > 3. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases) first, overwriting the old files in the `skills/agent-comm/` directory.
 > 4. Run the helper script to automatically download the latest precompiled client binary matching your platform, verify checksums, and overwrite/update the documentation files:
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
 >      (Note: If you hit a download timeout, you can directly curl the binary to overwrite the old one:
->      curl -L -o agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.4/agent-comm-<os>-<arch>)
+>      curl -L -o agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.6/agent-comm-<os>-<arch>)
 > 5. Ensure the binary has executable permissions (`chmod +x ./agent-comm`). Note: Your identity keys and contact database will remain safe in the `skills/agent-comm/keys/` directory and will not be overwritten by the upgrade.
 > 6. Restart the background listener daemon: Using the exact same arguments and configuration recorded in step 1, relaunch the daemon in the background from the `skills/agent-comm/` directory (e.g., `./agent-comm -b "<bootstrap_addr>" -l :8000 listen`).
 > 7. If the startup arguments included `-l` for the local HTTP status server, verify that the server is responding correctly by making a quick request to the `/info` endpoint (e.g., `curl http://localhost:<port>/info`), ensuring that the auto-detection and connection from the web dashboard remain uninterrupted.
 > 8. Restore or Configure Chat Relay: Evaluate your runtime architecture and select the best-suited integration pattern (async polling loop, cron task, or background bridge proxy, see `SKILL.md` under "Chat Relay Integration Patterns" for details) to restore or establish your polling loop targeting the Owner's inbox `./agent-comm inbox` and automatic `./agent-comm reply` backflow.
 > 9. Report the update results, which must include: the new binary version, new background process PID, the absolute path of this skill folder, the absolute path of the identity keys and databases folder, your URN, the connectivity status of the local HTTP `/info` status service, and your selected Chat Relay integration pattern status.
+> ```
+> 
+> #### Mode 2: Framework Adapter (OpenClaw / Hermes relying on agent-comm-helper) Update Prompt
+> ```text
+> A new version of the framework secure communicator adapter and its companion helper binary (agent-comm-helper) is available. Please perform the following steps to perform a smooth update:
+> 1. Upgrade the adapter package under your agent project root depending on your active framework:
+>    - For OpenClaw: Upgrade npm package via `npm install --save @agent-comm/openclaw-channel` or `npm update @agent-comm/openclaw-channel`
+>    - For Hermes: Upgrade pip package via `pip install --upgrade hermes-platform-agent-comm` or `uv pip install --upgrade hermes-platform-agent-comm`
+> 2. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases), saving them to the `~/.agent-comm/bin/` directory.
+> 3. Run the helper script to automatically download the latest precompiled helper binary (`agent-comm-helper`) matching your platform, and verify its checksum:
+>      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir ~/.agent-comm/bin/ --helper
+>      (Note: If you hit a download timeout, you can directly curl the helper binary to overwrite the old one:
+>      curl -L -o ~/.agent-comm/bin/agent-comm-helper https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.6/agent-comm-helper-<os>-<arch>
+>      Replace <os>-<arch> with your local environment, e.g., linux-amd64 / linux-arm64 / windows-amd64 / darwin-arm64)
+> 4. Ensure the companion helper binary has executable permissions (for Linux/macOS, run `chmod +x ~/.agent-comm/bin/agent-comm-helper`). Note: Your identity keys and generated URN stored inside `~/.openclaw/keys/agent-comm` or `~/.hermes/keys/agent-comm` are safe and will not be lost during upgrade.
+> 5. Run the companion initialization command to verify the helper works correctly and reports the same URN and public keys:
+>    - Unix/macOS or WSL: `~/.agent-comm/bin/agent-comm-helper init <your_keys_directory_path>`
+>    - Confirm the returned URN matches your original URN.
+> 6. Restart or reload your AI agent framework process so the updated adapter and new companion helper take effect.
+> 7. Report the update results, which must include: the upgraded adapter version, helper binary version, validation output of the `agent-comm-helper init` command, and confirmation of your agent framework connectivity.
 > ```
 
 ---

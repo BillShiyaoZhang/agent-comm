@@ -39,6 +39,7 @@ ARCH_ALIASES = {
 }
 
 BINARY_RE = re.compile(r"^agent-comm-(linux|windows|darwin)-(amd64|arm64)(?:\.exe)?$")
+HELPER_BINARY_RE = re.compile(r"^agent-comm-helper-(linux|windows|darwin)-(amd64|arm64)(?:\.exe)?$")
 
 
 def is_url(value: str) -> bool:
@@ -126,6 +127,8 @@ def classify_asset(name: str) -> str:
         return "helper"
     if BINARY_RE.match(name):
         return "binary"
+    if HELPER_BINARY_RE.match(name):
+        return "helper-binary"
     return "other"
 
 
@@ -134,6 +137,10 @@ def normalize_asset(asset: dict[str, object]) -> dict[str, object]:
     normalized.setdefault("kind", classify_asset(str(normalized["name"])))
     if normalized["kind"] == "binary" and "platform" not in normalized:
         match = BINARY_RE.match(str(normalized["name"]))
+        if match:
+            normalized["platform"] = {"os": match.group(1), "arch": match.group(2)}
+    elif normalized["kind"] == "helper-binary" and "platform" not in normalized:
+        match = HELPER_BINARY_RE.match(str(normalized["name"]))
         if match:
             normalized["platform"] = {"os": match.group(1), "arch": match.group(2)}
     return normalized
@@ -171,7 +178,7 @@ def resolve_release_base(manifest: dict[str, object], manifest_source: str, repo
 def select_asset(assets: list[dict[str, object]], kind: str, desired_os: str | None = None, desired_arch: str | None = None) -> dict[str, object]:
     candidates = [asset for asset in assets if asset.get("kind") == kind]
 
-    if kind == "binary":
+    if kind in ("binary", "helper-binary"):
         candidates = [
             asset
             for asset in candidates
@@ -181,8 +188,8 @@ def select_asset(assets: list[dict[str, object]], kind: str, desired_os: str | N
         ]
 
     if not candidates:
-        if kind == "binary":
-            raise SystemExit(f"no binary asset found for {desired_os}/{desired_arch}")
+        if kind in ("binary", "helper-binary"):
+            raise SystemExit(f"no binary asset found for {desired_os}/{desired_arch} of kind {kind}")
         raise SystemExit(f"no {kind} asset found in manifest")
 
     return candidates[0]
@@ -235,6 +242,7 @@ def main() -> int:
     parser.add_argument("--repo", help="Override the repository if the manifest omits release_url metadata")
     parser.add_argument("--include-docs", action="store_true", help="Download the optional docs bundle too")
     parser.add_argument("--list-assets", action="store_true", help="List manifest assets and exit")
+    parser.add_argument("--helper", action="store_true", help="Download the companion agent-comm-helper binary instead of agent-comm")
     args = parser.parse_args()
 
     manifest = load_manifest(args.manifest)
@@ -248,10 +256,15 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     release_base = resolve_release_base(manifest, args.manifest, args.repo)
 
-    binary_asset = select_asset(assets, "binary", desired_os, desired_arch)
+    kind = "helper-binary" if args.helper else "binary"
+    binary_asset = select_asset(assets, kind, desired_os, desired_arch)
     checksum_asset = select_asset(assets, "checksum")
 
-    binary_path = download_asset(release_base, binary_asset, output_dir, args.install_name)
+    install_name = args.install_name
+    if install_name == DEFAULT_INSTALL_NAME and args.helper:
+        install_name = "agent-comm-helper.exe" if os.name == "nt" else "agent-comm-helper"
+
+    binary_path = download_asset(release_base, binary_asset, output_dir, install_name)
     checksum_path = download_asset(release_base, checksum_asset, output_dir)
 
     docs_path = None

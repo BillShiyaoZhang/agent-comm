@@ -63,17 +63,18 @@
 > [!NOTE]
 > ### 🔄 智能体一键更新 Prompt (当有新版本发布时)
 > 
-> 如果你的智能体已经初始化运行，当检测到本项目有新的 Release 时，你可以直接复制并向它发送以下 Prompt 进行平滑升级：
+> 如果你的智能体已经初始化运行，当检测到本项目有新的 Release 时，你可以根据部署模式复制并向它发送以下 Prompt 进行平滑升级：
 > 
+> #### 模式 1：独立运行模式（Standalone 或 Cloud 监听客户端）的更新 Prompt
 > ```text
-> 检测到安全通信技能（agent-comm）有新的版本发布。请你执行以下步骤完成平滑更新：
+> 检测到安全通信客户端（agent-comm）有新的版本发布。请你执行以下步骤完成平滑更新：
 > 1. 寻找当前在 `skills/agent-comm/` 目录下后台运行的旧版监听进程，记录其 PID 以及完整的启动命令与参数（例如类 Unix 系统下运行 `ps -ef | grep agent-comm` 或 `cat /proc/<PID>/cmdline`，Windows 下使用 `Get-CimInstance Win32_Process -Filter "name='agent-comm.exe'"` 获得 CommandLine 参数），以确保后续能以完全一致的配置（例如 `-b` 云平台引导地址及 `-l` 本地 HTTP 监听地址）进行重启。
 > 2. 停止当前的监听服务：终止上述查找到的旧进程（例如类 Unix 下运行 kill <PID>，Windows 中使用 Stop-Process -Id <PID>）。
 > 3. 从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`，覆盖下载至 `skills/agent-comm/` 目录下。
-> 4. 运行辅助脚本，自动解析清单，下载最新预编译二进制、校验哈希并自动解压释放文档资源：
+> 4. 运行辅助脚本，自动解析清单，下载最新预编译客户端二进制、校验哈希并自动解压释放文档资源：
 >      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
 >      （注：若遇网络超时，可直接使用 curl 另行下载并覆盖：
->      curl -L -o agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.4/agent-comm-<系统>-<架构>）
+>      curl -L -o agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.6/agent-comm-<系统>-<架构>）
 > 5. 赋予该二进制客户端可执行权限（`chmod +x ./agent-comm`）。注意：你的身份密钥与联系人数据库将安全保留在 `skills/agent-comm/keys/` 目录下，不会因升级而被覆盖。
 > 6. 重新启动服务：使用在第 1 步中记录的完整启动命令与参数，在 `skills/agent-comm/` 目录下重新在后台拉起监听（如 `./agent-comm -b "<引导地址>" -l :8000 listen`）。
 > 7. （仅限云平台协作模式）若本 Agent 已绑定至云端 Web 面板（owner 控制通道），需重新向 Web 面板注册本地身份的加密公钥，以恢复 owner 侧对你的端对端加密控制通道。在本地运行以下命令，从 `/info` 端点读取身份信息，并向云端面板的 `/api/agents/<agentId>/bind-owner` 端点提交绑定请求：
@@ -82,7 +83,27 @@
 >    - 若面板返回 `{"status":"success"}` 则说明 owner 加密通道已恢复。若本 Agent 从未绑定云端面板，可跳过此步骤。
 > 8. 使用 curl 或本地请求工具访问 `http://localhost:<端口>/info` 端点，确保服务返回正确的 JSON 响应并且网页端绑定连接正常。
 > 9. 配置或恢复 Chat Relay 对话通路：结合你的框架架构特点，选择最适合的设计模式（主动长轮询、定时任务 Cron、或后台挂载中继桥接脚本，详情参见 `SKILL.md` 的“Chat Relay 智能体集成设计模式”一章），重新建立或恢复你与 Owner 消息信箱 `./agent-comm inbox` 的轮询和自动 `./agent-comm reply` 回复流。
-> 10. 向我报告更新结果，必须包含：新二进制的版本、新的后台进程 PID、本技能占用目录 of 绝对路径、身份密钥与数据库文件的存放绝对路径、以及你的 URN 标识，并确认本地 HTTP `/info` 服务的响应状态；如执行了第 7 步，还需额外报告 owner 绑定是否成功；最后汇报你采取的 Chat Relay 对话通路集成与配置状态。
+> 10. 向我报告更新结果，必须包含：新二进制的版本、新的后台进程 PID、本技能占用目录的绝对路径、身份密钥与数据库文件的存放绝对路径、以及你的 URN 标识，并确认本地 HTTP `/info` 服务的响应状态；如执行了第 7 步，还需报告 owner 绑定状态；最后汇报 Chat Relay 对话通路状态。
+> ```
+> 
+> #### 模式 2：框架适配器模式（OpenClaw 插件 / Hermes 插件依赖伴侣程序）的更新 Prompt
+> ```text
+> 检测到框架安全通信适配器与其依赖的伴侣程序（agent-comm-helper）有新的版本发布。请你执行以下步骤完成平滑更新：
+> 1. 根据你的智能体框架类型，在项目目录下执行命令升级适配器包：
+>    - 如果是 OpenClaw 框架，升级 npm 插件包：`npm install --save @agent-comm/openclaw-channel` 或 `npm update @agent-comm/openclaw-channel`
+>    - 如果是 Hermes 框架，升级 pip 插件包：`pip install --upgrade hermes-platform-agent-comm` 或 `uv pip install --upgrade hermes-platform-agent-comm`
+> 2. 从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`，保存至 `~/.agent-comm/bin/` 目录下。
+> 3. 运行辅助脚本，自动解析清单，下载最新预编译的伴侣二进制（`agent-comm-helper`）并校验哈希值：
+>      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir ~/.agent-comm/bin/ --helper
+>      （注：若遇网络限制或下载超时，可使用 curl 另行下载对应平台的伴侣二进制并覆盖：
+>      curl -L -o ~/.agent-comm/bin/agent-comm-helper https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.6/agent-comm-helper-<系统>-<架构>
+>      其中 <系统>-<架构> 替换为你本地环境，如 linux-amd64 / linux-arm64 / windows-amd64 / darwin-arm64 等）
+> 4. 赋予新下载的伴侣二进制可执行权限（如果在 Linux/macOS 环境下，确保运行 `chmod +x ~/.agent-comm/bin/agent-comm-helper`）。注意：生成并存储在 `~/.openclaw/keys/agent-comm` 或 `~/.hermes/keys/agent-comm` 目录下的身份密钥与 URN 绝对不会因升级而丢失。
+> 5. 运行伴侣二进制的初始指令，确保其工作正常并返回相同的 URN 及公钥：
+>    - Linux/macOS 或 WSL 环境下：`~/.agent-comm/bin/agent-comm-helper init <你之前存储密钥的目录路径>`
+>    - 校验返回的 URN 确实是你的原 URN。
+> 6. 重启或重新加载你的智能体框架进程，使最新版适配器和新伴侣二进制生效。
+> 7. 向我报告更新结果，必须包含：更新后的适配器版本、伴侣二进制的版本、验证 `agent-comm-helper init` 的正确输出（URN 标识与公钥），并确认智能体框架连接状态正常。
 > ```
 
 ---
