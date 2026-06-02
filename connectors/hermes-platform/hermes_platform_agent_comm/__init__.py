@@ -1,1 +1,2 @@
-from .platform import AgentCommPlatform, PlatformMessage, PlatformMessage
+from .platform import AgentCommAdapter
+

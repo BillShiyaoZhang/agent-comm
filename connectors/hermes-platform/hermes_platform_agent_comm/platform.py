@@ -3,40 +3,47 @@ import sys
 import json
 import time
 import threading
+import asyncio
 import urllib.request
 import urllib.parse
-from urllib.error import URLError
+from typing import Any, Dict, List, Optional
 
-class PlatformMessage:
-    def __init__(self, platform, sender_id, text):
-        self.platform = platform
-        self.sender_id = sender_id
-        self.text = text
+from gateway.platforms.base import (
+    BasePlatformAdapter,
+    SendResult,
+    MessageEvent,
+    MessageType,
+)
+from gateway.config import Platform
 
-class AgentCommPlatform:
-    def __init__(self, gateway, config):
-        self.gateway = gateway
-        self.config = config
+class AgentCommAdapter(BasePlatformAdapter):
+    def __init__(self, config, **kwargs):
+        platform = Platform("agent_comm")
+        super().__init__(config=config, platform=platform)
         self.running = False
         self.thread = None
+        self.loop = None
 
     def _get_api_url(self, endpoint):
-        base_url = self.config.get("platform_url", "http://localhost:45042").strip()
+        # Configuration keys are retrieved from self.config.extra
+        base_url = self.config.extra.get("platform_url", "http://localhost:45042").strip()
         if base_url.endswith("/"):
             base_url = base_url[:-1]
         if "/api/v1/mq" not in base_url:
             base_url += "/api/v1/mq"
         return f"{base_url}/{endpoint}"
 
-    def start(self):
+    async def connect(self) -> bool:
         if self.running:
-            return
+            return True
         self.running = True
-        print(f"[agent-comm-platform] Starting connection to local daemon: {self.config.get('platform_url')}")
+        self.loop = asyncio.get_running_loop()
+        print(f"[agent-comm-platform] Starting connection to local daemon: {self.config.extra.get('platform_url')}")
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
+        return True
 
-    def stop(self):
+    async def disconnect(self) -> None:
         self.running = False
 
     def _run_loop(self):
@@ -84,23 +91,41 @@ class AgentCommPlatform:
 
             print(f"[agent-comm-platform] Received incoming plaintext message from {sender_urn}")
 
-            # Inject the message into Hermes platform
-            msg = PlatformMessage(
-                platform="agent_comm",
-                sender_id=sender_urn,
-                text=text
+            # Build a MessageEvent and hand it to the base class handler on the main loop
+            source = self.build_source(
+                chat_id=sender_urn,
+                chat_name=sender_urn,
+                chat_type="dm",
+                user_id=sender_urn,
+                user_name=sender_urn,
             )
-            self.gateway.on_message(msg)
+
+            event = MessageEvent(
+                text=text,
+                message_type=MessageType.TEXT,
+                source=source,
+                message_id=str(int(time.time() * 1000)),
+                timestamp=__import__("datetime").datetime.now(),
+            )
+
+            if self.loop and self.loop.is_running():
+                asyncio.run_coroutine_threadsafe(self.handle_message(event), self.loop)
 
         except Exception as e:
             print(f"[agent-comm-platform] Error handling incoming event: {e}", file=sys.stderr)
 
-    def send_message(self, recipient_id, text):
+    async def send(
+        self,
+        chat_id: str,
+        content: str,
+        reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
         try:
             url = self._get_api_url("store")
             body_obj = {
-                "recipient_urn": recipient_id,
-                "text": text
+                "recipient_urn": chat_id,
+                "text": content
             }
             data = json.dumps(body_obj).encode("utf-8")
             
@@ -109,11 +134,24 @@ class AgentCommPlatform:
                 data=data,
                 headers={"Content-Type": "application/json"}
             )
-            with urllib.request.urlopen(req) as resp:
-                resp.read()
+            
+            # Perform blocking request in the default loop executor
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._send_request, req)
 
-            print(f"[agent-comm-platform] Message successfully sent to local daemon for delivery to {recipient_id}")
+            print(f"[agent-comm-platform] Message successfully sent to local daemon for delivery to {chat_id}")
+            return SendResult(success=True)
 
         except Exception as e:
             print(f"[agent-comm-platform] Failed to send message: {e}", file=sys.stderr)
-            raise e
+            return SendResult(success=False, error=str(e))
+
+    def _send_request(self, req):
+        with urllib.request.urlopen(req) as resp:
+            resp.read()
+
+    async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
+        return {
+            "name": chat_id,
+            "type": "dm",
+        }
