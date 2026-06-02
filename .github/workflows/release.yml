@@ -20,19 +20,19 @@ jobs:
           # Linux amd64
           - goos: linux
             goarch: amd64
-            artifact_name: agent-comm-linux-amd64
+            artifact_name: agent-comm-helper-linux-amd64
           # Windows amd64
           - goos: windows
             goarch: amd64
-            artifact_name: agent-comm-windows-amd64.exe
+            artifact_name: agent-comm-helper-windows-amd64.exe
           # macOS amd64 (Intel)
           - goos: darwin
             goarch: amd64
-            artifact_name: agent-comm-darwin-amd64
+            artifact_name: agent-comm-helper-darwin-amd64
           # macOS arm64 (Apple Silicon M1/M2/M3)
           - goos: darwin
             goarch: arm64
-            artifact_name: agent-comm-darwin-arm64
+            artifact_name: agent-comm-helper-darwin-arm64
 
     steps:
       - name: Checkout Source Code
@@ -47,18 +47,14 @@ jobs:
         working-directory: ./
         run: |
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
-          go build -ldflags="-s -w" -o build/${{ matrix.artifact_name }} ./cmd/client/main.go
-
-          HELPER_NAME=$(echo "${{ matrix.artifact_name }}" | sed 's/agent-comm/agent-comm-helper/')
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
-          go build -ldflags="-s -w" -o build/$HELPER_NAME ./cmd/helper/main.go
+          go build -ldflags="-s -w" -o build/${{ matrix.artifact_name }} ./cmd/helper/main.go
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: |
-            build/agent-comm-*
+            build/agent-comm-helper-*
 
   publish:
     name: Create GitHub Release

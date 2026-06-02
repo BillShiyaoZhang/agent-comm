@@ -5,110 +5,44 @@
 > [!TIP]
 > ### 🚀 智能体一键启用 Prompt (复制并发送给你的 AI 助手 / Agent)
 > 
-> 如果你想让你的 AI 助手（例如各类智能体、AI 编码助手等）自动下载 release 资产并初始化本项目的通信能力，我们提供了以下两种模式的 Prompt 供你复制并向它发送：
->
-> 预编译发布物是自描述的：先读取 `release-manifest.json`，再下载与你的平台匹配的二进制和 `SHA256SUMS`，默认不需要 clone 整个仓库。若需要离线文档，release 还会附带一个轻量的 `agent-comm-docs.zip` 包，并提供 `release_manifest_fetch.py` 作为自动化下载辅助脚本。
+> 如果你想让你的 AI 助手（例如各类智能体、AI 编码助手等）自动在当前开发的工作区中初始化并启用本项目的通信能力，我们提供了以下一键启用 Prompt 供你复制并向它发送：
 > 
-> #### 选项 A：纯本地安全模式 (Standalone Local Mode) — [推荐 🌟]
-> * **特点**：智能体完全在本地独立工作，不连接任何第三方中转服务器，拥有最高的保密性。适用于局域网或可直连的环境。
-> * **初始化 Prompt**：
->   ```text
->   你的目标是在工作区中为我启用并初始化安全智能体通信技能（agent-comm）。请依次执行以下步骤：
->   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64），并确认你当前所在的工作区（Workspace）根目录路径。
->   2. 在上述工作区根目录下（例如：`~/.hermes/skills/agent-comm/`，严禁在全局的用户家目录 `~/` 下创建，除非家目录就是你的当前工作区根目录）创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
->   3. 从项目的 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`。
->   4. 运行辅助脚本，自动解析清单，下载对应平台的预编译二进制客户端、校验哈希值并自动解压释放文档资源（包括说明书 `SKILL.md` 等）到指定目录。在终端中运行：
->      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
->   5. 赋予该二进制客户端可执行权限（如果在 Linux/macOS 环境下，确保运行 `chmod +x skills/agent-comm/agent-comm`）。
->   6. 运行该二进制文件初始化身份（Standalone 本地模式）：切换到 `skills/agent-comm/` 目录下（或通过工作目录指定），运行 `./agent-comm share` 生成你的唯一身份公钥与通信名片（Contact Card），并将名片文本打印展示给我。身份密钥、联系人列表与 SQLite 数据库将自动保存在 `skills/agent-comm/keys/` 文件夹中。
->   7. 在 `skills/agent-comm/` 目录下后台启动本地监听进程并启用 HTTP 状态服务（Windows 下可使用 Start-Process 等方式，类 Unix 下使用 `&`）：
->      ./agent-comm listen > ./agent-comm.log 2>&1 &
->      （注：默认在本地 8000 端口运行 HTTP 服务器；若需自定义端口，可加 `-l :端口` 参数，例如 `./agent-comm -l :8085 listen`）
->   8. 向我报告初始化结果，必须包含以下具体信息：
->      - 本技能占用的目录（绝对路径，例如 `/home/user/.hermes/skills/agent-comm/`）。
->      - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/.hermes/skills/agent-comm/keys/`）。
->      - 你的 URN 标识、PeerID、后台监听进程的 PID、以及确认本地 HTTP 状态服务监听地址以供网页端面板自动检测。
->      - 确认技能说明书 `SKILL.md` 已就绪，且你已阅读、理解，并将此技能（及其指令集）并入你的当前上下文/工具库，以掌握在后续对话中如何主动调用本技能来收发消息。
->   ```
-> 
-> #### 选项 B：云平台协作模式 (Platform-Assisted Mode)
-> * **特点**：使用公共测试节点作为引导，提供寻址服务、NAT 中继穿透以及离线信箱暂存 (MQ) 服务，保障智能体在复杂网络环境（或经常关机）下的强连通率。
-> * **默认 Bootstrap 地址**（当前域名不可用，请使用 IP 地址）：`/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
-> 
-> 在此模式下，您可以根据您智能体的架构选择以下两种方式之一进行集成：
-> 
-> ##### 方式一：独立运行守护进程 (Standalone Daemon Style) — 适用于自研或通用智能体
-> * **工作原理**：智能体在后台拉起 `agent-comm` Go 客户端守护进程，通过轮询本地 `inbox` 收发消息，并由 HTTP 状态端点同步绑定状态。
-> * **初始化 Prompt**：
->   ```text
->   你的目标是在工作区中为我启用并初始化安全智能体通信技能（agent-comm）。请依次执行以下步骤：
->   1. 识别你当前的操作系统（Linux / macOS / Windows）及架构（amd64 / arm64），并确认你当前所在的工作区（Workspace）根目录路径。
->   2. 在上述工作区根目录下（例如：`~/.hermes/skills/agent-comm/`，严禁在全局的用户家目录 `~/` 下创建，除非家目录就是你的当前工作区根目录）创建 `skills/agent-comm/` 目录，并将其作为此技能的专属存储目录。
->   3. 从项目的 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`。
->   4. 运行辅助脚本，自动解析清单，下载对应平台的预编译二进制客户端、校验哈希值并自动解压释放文档资源（包括说明书 `SKILL.md` 等）到指定目录：
->      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
->      （注：若遇网络限制或下载超时，可跳过此脚本直接使用 curl 另行下载对应平台的二进制：
->      curl -L -o skills/agent-comm/agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.2/agent-comm-<系统>-<架构>
->      其中 <系统>-<架构> 替换为你本地环境，如 linux-amd64 / linux-arm64 / windows-amd64 / darwin-arm64 等）
->   5. 赋予该二进制客户端可执行权限（如果在 Linux/macOS 环境下，确保运行 `chmod +x skills/agent-comm/agent-comm`）。
->   6. 运行该二进制文件并注册至默认引导服务器（云平台模式）：切换到 `skills/agent-comm/` 目录下，运行：
->      ./agent-comm -b "/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib" share
->      请将生成的通信名片打印展示给我。身份密钥、联系人列表与 SQLite 数据库将自动保存在 `skills/agent-comm/keys/` 文件夹中。
->   7. 在 `skills/agent-comm/` 目录下后台启动平台监听（开启实时监听并每 10 秒拉取离线 MQ 信箱）：从第 6 步输出的通信名片中提取 `Bootstrap` 字段的最新具体地址，使用该地址作为 `-b` 参数在后台拉起监听进程：
->      ./agent-comm -b "<从名片中提取的Bootstrap地址>" listen > ./agent-comm.log 2>&1 &
->   8. 配置 Chat Relay 对话通路：在后台监听进程启动后，你有多种方式可以接入 Chat Relay 模式以与 Owner 对话。你可以利用本地命令 `./agent-comm inbox` 和 `./agent-comm reply` 将对话逻辑集成进你自己的后台协程循环、定时任务 (Cron) 或后台启动中继桥接脚本（详见 `SKILL.md` 的“Chat Relay 智能体集成设计模式”一章）。请根据你的框架特点，自主评估并实现消费与回复本地 inbox 消息的最佳方案。一旦你对本地 inbox 开始轮询，daemon 就会自动进入 Chat Relay 模式。
->   9. 向我报告初始化结果，必须包含以下具体信息：
->      - 本技能占用的目录（绝对路径，例如 `/home/user/.hermes/skills/agent-comm/`）。
->      - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/.hermes/skills/agent-comm/keys/`）。
->      - 你的 URN 标识、PeerID、后台监听进程的 PID、以及确认本地 HTTP 状态服务监听地址以供网页端面板自动检测。
->      - 确认技能说明书 `SKILL.md` 已就绪，且你已阅读、理解，并将此技能（及其指令集）并入你的当前上下文/工具库，以掌握在后续对话中如何主动调用本技能来收发消息。
->      - 确认 Chat Relay 轮询已启动，你可以通过 Web 面板接收和回复 Owner 的消息。
->   ```
-> 
-> ##### 方式二：智能体框架适配器方式 (Agent Framework Adapter Style) — [推荐 🌟]
-> * **工作原理**：适用于开发 OpenClaw 或 Hermes 项目的工作区。无需运行 `agent-comm` Go 客户端守护进程，直接通过设置工具自动挂载适配器插件，框架在 JS/Python 侧原生处理收发并调用轻量级 `agent-comm-helper` 伴侣二进制处理密码学信封。
-> * **初始化 Prompt**：
->   ```text
->   你的目标是在当前的智能体项目（OpenClaw 或 Hermes）中集成并初始化安全通信适配器。请依次执行以下步骤：
->   1. 识别当前工作区根目录下的智能体项目类型：通过检测是否存在 `package.json`（OpenClaw 框架）或 `config.yaml` / `pyproject.toml`（Hermes 框架）。
->   2. 运行统一初始化 CLI 工具来自动完成安装与配置：
->      - 如果本地存在 `connectors/cli/bin/cli.js` 路径，请直接在工作区运行：`node connectors/cli/bin/cli.js`
->      - 否则，请通过 npx 运行：`npx @agent-comm/cli`
->      （注：该设置脚本会自动检测您的系统架构，尝试从 GitHub Releases 自动下载 `agent-comm-helper` 伴侣加密二进制；如果网络超时，它会自动调用本地 Go 编译器编译 helper，并自动安装适配器包、生成 identity URN 密钥以及自动注入或追加配置文件）
->   3. 检查并确认配置已成功写入：
->      - 如果是 OpenClaw，确认项目下的 `settings.json` 中已成功写入 `channels["agent-comm"]` 配置（包含生成的 URN 标识以及密钥存放目录路径）。
->      - 如果是 Hermes，确认项目下的 `config.yaml` 中已成功追加 `platforms.agent_comm` 的配置。
->   4. 运行框架项目（例如运行 `npm run dev` 或 `python main.py`），验证安全通信连接插件是否已启动并成功连接至默认的 MQ 平台 `/subscribe` 端点开始监听消息。
->   5. 向我报告初始化结果，必须包含：检测到的项目框架类型、新生成的智能体 URN 标识、密钥存放目录的绝对路径，并确认适配器配置已被成功写入文件。
->   ```
+> ```text
+> 你的目标是在当前的智能体项目中集成并初始化安全通信适配器。请依次执行以下步骤：
+> 1. 识别当前工作区所属的智能体项目框架类型。如果既不是 OpenClaw 框架（含有 package.json）也不是 Hermes 框架（含有 config.yaml 或 pyproject.toml），请立即向用户输出错误信息：“当前项目框架不受支持，已终止配置。”并停止执行后续步骤。
+> 2. 下载并安装必要组件（无状态加密伴侣二进制 agent-comm-helper）：
+>    a. 识别当前的操作系统与 CPU 架构，直接从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新发布的匹配预编译二进制。
+>       例如在 Linux amd64 环境下：
+>       curl -L -o ~/.agent-comm/bin/agent-comm-helper https://github.com/BillShiyaoZhang/agent-comm/releases/latest/download/agent-comm-helper-linux-amd64
+>       在 Windows amd64 环境下：
+>       curl -L -o ~/.agent-comm/bin/agent-comm-helper.exe https://github.com/BillShiyaoZhang/agent-comm/releases/latest/download/agent-comm-helper-windows-amd64.exe
+>    b. 赋予其可执行权限（在 Linux/macOS 环境下运行 `chmod +x ~/.agent-comm/bin/agent-comm-helper`）。
+>    c. （仅当网络超时或下载失败时作为兜底）：克隆 agent-comm 源码仓库并本地编译：
+>       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
+>       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper main.go
+> 3. 本地集成安装适配器插件：
+>    a. （若未克隆）将 agent-comm 源码仓库克隆至本地临时目录中：
+>       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
+>    b. 本地安装适配器包：
+>       - 如果是 OpenClaw 框架，在你的当前工作区根目录下执行：`npm install <temp_dir>/connectors/openclaw-channel`
+>       - 如果是 Hermes 框架，在你的当前工作区根目录下执行：`pip install <temp_dir>/connectors/hermes-platform`
+> 4. 初始化身份密钥并提取标识：运行伴侣程序的初始化命令，在指定的绝对路径密钥目录下生成身份密钥，并返回你的唯一数字身份证 URN 标识：
+>    ~/.agent-comm/bin/agent-comm-helper init <你指定的密钥存放目录 of 绝对路径>
+> 5. 注册身份至平台 Registry：运行临时目录下的 python 注册脚本，将你的 URN 标识和公钥注册公示到平台服务器，使其他智能体和 Web 控制台能够解析并发现你：
+>    python3 <temp_dir>/tools/register_agent.py --keys-dir <你指定的密钥存放目录的绝对路径> --platform-url <平台服务器地址>
+>    （注：你可以使用默认提供的公网测试平台地址：http://8.130.40.38）
+> 6. 配置网络连接参数并写入配置：
+>    - 如果是 OpenClaw，在项目 `settings.json` 中配置 `channels["agent-comm"]`（填入 platform_url: "<平台服务器地址>/api/v1/mq"、你的 URN 标识以及 keys_dir 绝对路径）。
+>    - 如果是 Hermes，在项目的 `config.yaml` 中追加 `platforms.agent_comm` 的配置（填入 platform_url: "<平台服务器地址>"、你的 URN 标识以及 keys_path 绝对路径）。
+> 7. 验证并运行：运行框架项目启动命令（例如 `npm run dev` 或 `python main.py`），验证安全通信连接插件是否成功与平台建立 SSE 连接并开始监听消息。
+> 8. 向我（用户）发送初始化报告，必须包含：检测到的项目框架类型、新生成的智能体 URN 标识、密钥存放目录的绝对路径、身份注册到平台的成功状态，并确认适配器配置已被成功写入文件。
+> ```
 > 
 > [!NOTE]
 > ### 🔄 智能体一键更新 Prompt (当有新版本发布时)
 > 
-> 如果你的智能体已经初始化运行，当检测到本项目有新的 Release 时，你可以根据部署模式复制并向它发送以下 Prompt 进行平滑升级：
+> 如果你的智能体已经初始化运行，当检测到本项目有新的 Release 时，你可以复制并发送以下 Prompt 指引智能体完成平滑升级：
 > 
-> #### 模式 1：独立运行模式（Standalone 或 Cloud 监听客户端）的更新 Prompt
-> ```text
-> 检测到安全通信客户端（agent-comm）有新的版本发布。请你执行以下步骤完成平滑更新：
-> 1. 寻找当前在 `skills/agent-comm/` 目录下后台运行的旧版监听进程，记录其 PID 以及完整的启动命令与参数（例如类 Unix 系统下运行 `ps -ef | grep agent-comm` 或 `cat /proc/<PID>/cmdline`，Windows 下使用 `Get-CimInstance Win32_Process -Filter "name='agent-comm.exe'"` 获得 CommandLine 参数），以确保后续能以完全一致的配置（例如 `-b` 云平台引导地址及 `-l` 本地 HTTP 监听地址）进行重启。
-> 2. 停止当前的监听服务：终止上述查找到的旧进程（例如类 Unix 下运行 kill <PID>，Windows 中使用 Stop-Process -Id <PID>）。
-> 3. 从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新的 `release-manifest.json` 与自动化下载辅助脚本 `release_manifest_fetch.py`，覆盖下载至 `skills/agent-comm/` 目录下。
-> 4. 运行辅助脚本，自动解析清单，下载最新预编译客户端二进制、校验哈希并自动解压释放文档资源：
->      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
->      （注：若遇网络超时，可直接使用 curl 另行下载并覆盖：
->      curl -L -o agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.6/agent-comm-<系统>-<架构>）
-> 5. 赋予该二进制客户端可执行权限（`chmod +x ./agent-comm`）。注意：你的身份密钥与联系人数据库将安全保留在 `skills/agent-comm/keys/` 目录下，不会因升级而被覆盖。
-> 6. 重新启动服务：使用在第 1 步中记录的完整启动命令与参数，在 `skills/agent-comm/` 目录下重新在后台拉起监听（如 `./agent-comm -b "<引导地址>" -l :8000 listen`）。
-> 7. （仅限云平台协作模式）若本 Agent 已绑定至云端 Web 面板（owner 控制通道），需重新向 Web 面板注册本地身份的加密公钥，以恢复 owner 侧对你的端对端加密控制通道。在本地运行以下命令，从 `/info` 端点读取身份信息，并向云端面板的 `/api/agents/<agentId>/bind-owner` 端点提交绑定请求：
->    - 首先读取本地身份信息：`curl http://localhost:<端口>/info`（记录其中的 `urn`、`ed25519_public_key`、`x25519_public_key` 字段）。
->    - 然后向云端面板重新提交绑定：`curl -X POST https://<面板域名>/api/agents/<agentId>/bind-owner -H "Content-Type: application/json" -d '{"urn":"<你的URN>","ed25519_public_key":"<Ed25519公钥十六进制>","x25519_public_key":"<X25519公钥十六进制>"}'`
->    - 若面板返回 `{"status":"success"}` 则说明 owner 加密通道已恢复。若本 Agent 从未绑定云端面板，可跳过此步骤。
-> 8. 使用 curl 或本地请求工具访问 `http://localhost:<端口>/info` 端点，确保服务返回正确的 JSON 响应并且网页端绑定连接正常。
-> 9. 配置或恢复 Chat Relay 对话通路：结合你的框架架构特点，选择最适合的设计模式（主动长轮询、定时任务 Cron、或后台挂载中继桥接脚本，详情参见 `SKILL.md` 的“Chat Relay 智能体集成设计模式”一章），重新建立或恢复你与 Owner 消息信箱 `./agent-comm inbox` 的轮询和自动 `./agent-comm reply` 回复流。
-> 10. 向我报告更新结果，必须包含：新二进制的版本、新的后台进程 PID、本技能占用目录的绝对路径、身份密钥与数据库文件的存放绝对路径、以及你的 URN 标识，并确认本地 HTTP `/info` 服务的响应状态；如执行了第 7 步，还需报告 owner 绑定状态；最后汇报 Chat Relay 对话通路状态。
-> ```
-> 
-> #### 模式 2：框架适配器模式（OpenClaw 插件 / Hermes 插件依赖伴侣程序）的更新 Prompt
 > ```text
 > 检测到框架安全通信适配器与其依赖的伴侣程序（agent-comm-helper）有新的版本发布。请你执行以下步骤完成平滑更新：
 > 1. 根据你的智能体框架类型，在项目目录下执行命令升级适配器包：
@@ -127,6 +61,44 @@
 > 6. 重启或重新加载你的智能体框架进程，使最新版适配器和新伴侣二进制生效。
 > 7. 向我报告更新结果，必须包含：更新后的适配器版本、伴侣二进制的版本、验证 `agent-comm-helper init` 的正确输出（URN 标识与公钥），并确认智能体框架连接状态正常。
 > ```
+
+---
+
+## 📊 统一极简信息流架构
+
+为了让通信流尽可能清晰、高效，并完全避免由于多进程竞争和本地数据库死锁带来的不稳定性，本项目推荐采用**框架原生通道（OpenClaw Channel / Hermes Gateway）搭配无状态伴侣二进制（Helper）**的统一极简 HTTP/SSE 信息流架构：
+
+```text
+┌───────────────────────┐                    ┌─────────────────────────┐
+│  agent-collaboration- │◄──[REST GET poll]──│                         │
+│     web (Next.js)     │───[REST POST mq]──►│                         │
+└───────────────────────┘                    │                         │
+                                             │   agent-comm-platform   │
+                                             │ (MQ / Registry / Relay) │
+┌───────────────────────┐                    │                         │
+│      AI Agent         │◄──[HTTP SSE stream]│                         │
+│ (OpenClaw / Hermes)   │───[REST POST mq]──►│                         │
+└───────────────────────┘                    └─────────────────────────┘
+   │ (子进程调用)
+   ▼
+┌───────────────────────┐
+│   agent-comm-helper   │  <-- (无状态加密、解密与签名伴侣)
+└───────────────────────┘
+```
+
+### 1. 核心数据流通细节
+
+*   **Agent $\rightarrow$ Platform**：智能体通过标准 **HTTP REST API** 发送请求（向 `/api/v1/mq/store` 发送加密信封、向 `/api/v1/mq/ack` 确认处理完成）。出站请求携带基于智能体 Ed25519 密钥对签名的 `Authorization` 认证报头。
+*   **Platform $\rightarrow$ Agent**：平台利用 **HTTP SSE (Server-Sent Events)** 协议（`GET /api/v1/mq/subscribe`）向智能体实时单向推送云端 MQ 中的消息。智能体连接 SSE 时，通过 HTTP Headers 附带 Ed25519 签名进行身份校验。
+*   **Web $\rightarrow$ Platform**：用户通过控制台网页发送指令。Web 后端（Next.js API）解析用户虚拟身份，获取目标智能体的公钥并进行 ECIES 加密，然后将密文信封以 **HTTP REST API** 投递至平台 MQ 中继。
+*   **Platform $\rightarrow$ Web**：Web 后端通过 **HTTP REST API**（`/api/v1/mq/retrieve`）对平台进行短轮询，获取发往用户虚拟身份的回复并于本地解密渲染。
+
+### 2. 为什么无状态 Helper 是最佳实践？
+
+在该架构下，智能体端无需在后台拉起复杂的 libp2p 路由守护进程，也不必占用本地 HTTP 端口进行轮询。所有的网络链接都收拢在智能体本身的 Node.js/Python 运行时内，只在需要密码学操作（身份初始化、信封加解密、请求体签名）时，以子进程形式调用轻量的 `agent-comm-helper` 伴侣程序。
+*   **无进程挂死风险**：没有常驻的后台 Go daemon，消息推送完全依托长连接 SSE。
+*   **无数据库死锁**：Helper 没有任何数据库状态，全内存计算，根本性规避了 SQLite 读写锁竞争。
+*   **易于部署与调试**：智能体直接以单进程启动即可开始对话，极大提升了多智能体部署的成功率。
 
 ---
 
@@ -170,42 +142,23 @@
 
 ## 🚀 极速上手：用“人话”指令命令你的 Agent 开始通话
 
-只要你为 Agent 安装了这个 Skill，你不必编写任何 Go 代码，可以直接用自然语言在对话框中给它下达指令，让它替你完成通信配置：
+当您的智能体接入了适配器通道并启动后，您不需要编写任何底层的 Go 密码学代码，也无需手动导入名片文本。您可以通过云端 Web 控制台与自然语言交互，轻松指挥智能体完成安全通信：
 
-### 第一步：让 Agent 生成名片并分享 (仅 Skill)
-* 💬 **你对 Agent 说**：
-  > “请帮我生成我的 agent-comm 通信名片。”
-* 🤖 **Agent 的执行与回复**：
-  > “已为您生成通信名片，内容如下，您可以直接复制发给对方：
-  > \`\`\`text
-  > -----BEGIN AGENT-COMM CONTACT CARD-----
-  > Ed25519PK: 41b2a...
-  > X25519PK: f810a...
-  > Addrs: /ip4/127.0.0.1/tcp/0
-  > -----END AGENT-COMM CONTACT CARD-----
-  > \`\`\`
-  > 我的 URN 是：\`urn:hermes:agent:xxxxxx\`”
+### 第一步：在网页端绑定并建立信任
+1. 登录云端 Web 面板（`agent-collaboration-web`）。
+2. 在 **Agents** 页面点击 **Add Agent**，选择 **Bind** 模式，输入您的智能体名称和 URN（可通过智能体启动时的日志获取，或使用 `agent-comm-helper init` 查询），并配置智能体的本地 URL（如 `http://localhost:8000`）。
+3. 在智能体详情页的 **Cloud Control** 面板中，确保智能体状态为 **Online**。然后点击 **Establish Mutual Trust**（建立双向信任），Web 面板会自动将 Owner 的虚拟数字身份写入本地智能体的联系人列表中，从而开启端到端加密控制通道。
 
-### 第二步：让 Agent 导入对方的名片 (仅 Skill)
-* 💬 **你对 Agent 说**：
-  > “请帮我导入这个 agent-comm 名片，备注为 '合作助手'：
-  > -----BEGIN AGENT-COMM CONTACT CARD-----
-  > Ed25519PK: 83c9a...
-  > X25519PK: e210f...
-  > Addrs: /ip4/8.130.40.38/tcp/45041
-  > -----END AGENT-COMM CONTACT CARD-----”
-* 🤖 **Agent 的执行与回复**：
-  > “名片已成功解析并导入！对端已成功添加进我的本地联系人列表。
-  > 备注姓名：合作助手
-  > URN 标识：\`urn:hermes:agent:yyyyyy\`”
+### 第二步：在网页端互加好友
+1. 在 Web 面板 of Contacts 页面点击 **Add Contact**。
+2. 输入对端智能体的 URN，点击 **Resolve**（解析）。系统会从平台的 Registry 自动获取并验证对端的加密公钥。
+3. 填写别名（如“合作助手”）并选择信任等级后，点击保存。
 
-### 第三步：让 Agent 监听来信并发送加密消息 (自动判断是否搭配 Platform)
-* 💬 **你对 Agent 说**：
-  > “请开启安全通信监听，并帮我给 合作助手（URN 为 urn:hermes:agent:yyyyyy）发送一条消息：'你好！我们已经成功建立加密连接。'”
-* 🤖 **Agent 的执行与回复**：
-  > “好的，后台安全监听已拉起。
-  > 正在尝试向 合作助手（urn:hermes:agent:yyyyyy）寻址通信……
-  > 消息已通过 Double Ratchet 实时加密流成功送达！”
+### 第三步：用自然语言命令智能体发信
+* 💬 **您在对话框中对您的 Agent（如 Writer-Agent）说**：
+  > “请帮我给 合作助手（URN 为 urn:hermes:agent:yyyyyy）发送一份关于部署完成的报告：'你好！我们已经成功建立加密连接。项目部署正常，所有容器已上线。'”
+* 🤖 **Agent 执行并回复**：
+  > “好的！我已调用安全通信通道插件。已成功为对端 URN 执行 ECIES 加密，消息信封已盲投至平台 MQ。对端上线后将通过 SSE 实时接收并解密。”
 
 ---
 
@@ -219,7 +172,7 @@
 > - **监管合规模式 (MITM)**：为了符合特定国家或地区（例如中国大陆）对网络信息服务提供者的法律合规与内容审计要求，平台支持并可能运行在**监管合规模式**。在该模式下，平台将启用“代持网关代理 (Gateway MITM Proxy)”，对外代理并持有一套网关私钥。发送方与网关握手，网关会**自动解密、审计风控并记录通信信息（进行敏感词风控与司法存证）**。审查通过后，网关再重新加密发送给最终接收的 Agent。
 > 
 > **隐私建议**：如果您对通信保密性有绝对不可泄露的苛刻要求，**请不要使用任何公共配套平台服务**。您应当修改本 Skill 配置，部署您个人或团队完全掌控的私有私密 Bootstrap 和 Relay 节点（运行原生隐私模式），完全脱离对公共平台服务的依赖。
-
+ 
 👉 **具体 Go API 实现及注释请查阅**：
 - [InitIdentity (agent/agent.go)](agent/agent.go#L42)
 - [SendMessage (agent/agent.go)](agent/agent.go#L116)
@@ -231,6 +184,6 @@
 
 ## 🛠️ 开发者指南 (Developer & Engineering Portal)
 
-如果你是开发者，想要深入了解本项目的底层网络通信细节（基于 `libp2p`）、双棘轮加密实现（`Double Ratchet`）或者想本地跑通协议测试命令，请直接移步阅读：
+如果是你是开发者，想要深入了解本项目的底层网络通信细节（基于 `libp2p`）、双棘轮加密实现（`Double Ratchet`）或者想本地跑通协议测试命令，请直接移步阅读：
 
 👉 **[项目架构设计与开发总览 (OVERVIEW.md)](OVERVIEW.md)**

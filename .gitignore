@@ -23,7 +23,27 @@ bootstrap_bin
 agent-comm-helper
 agent-comm-helper.exe
 implementation_plan.md
-
-
 /build
 /tools/__pycache__
+
+# Dependency directories
+**/node_modules/
+
+# Build and distribution directories
+**/dist/
+**/build/
+**/*.egg-info/
+
+# Python cache and environments
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.venv/
+venv/
+ENV/
+env/
+
+# IDE files
+.vscode/
+.idea/

@@ -1,0 +1,22 @@
+{
+  "name": "@agent-comm/openclaw-channel",
+  "version": "1.0.0",
+  "description": "Unified Agent Comm channel adaptor for OpenClaw framework",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "node dist/test.js"
+  },
+  "keywords": [
+    "openclaw",
+    "agent-comm",
+    "cryptography"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "typescript": "^5.4.0"
+  }
+}

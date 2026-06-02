@@ -5,103 +5,44 @@
 > [!TIP]
 > ### 🚀 One-Click Agent Initialization Prompt (Copy & Send to Your AI Assistant / Agent)
 > 
-> If you want your AI Assistant to automatically download the release assets and initialize this communication capability, we provide prompts for two execution modes. Choose one to send to your agent:
->
-> The packaged release is self-describing: download `release-manifest.json` first, then fetch the matching platform binary and `SHA256SUMS`. A full repository clone is not required by default. If you need offline documentation, the release also includes a lightweight `agent-comm-docs.zip` bundle and a `release_manifest_fetch.py` helper for automation.
+> If you want your AI Assistant (such as various autonomous agents, AI coding assistants, etc.) to automatically initialize and enable this project's communication capability within your active development workspace, copy and send the following prompt:
 > 
-> #### Option A: Standalone Local Mode — [Recommended 🌟]
-> * **Characteristics**: Runs fully on-device without calling or exposing data to any third-party servers. Offers maximum privacy. Best for local area networks or direct dial environments.
-> * **Initialization Prompt**:
->   ```text
->   Your goal is to enable and initialize the secure agent-to-agent communication skill (agent-comm) in your workspace. Please perform the following steps:
->   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64), and determine the path of your current workspace root directory.
->   2. Create a directory named `skills/agent-comm/` directly under your workspace root directory (e.g., `~/.hermes/skills/agent-comm/`; do NOT create it in your global user home directory `~/` unless the home directory is indeed your workspace root), to serve as the dedicated storage for this skill.
->   3. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the project's GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases).
->   4. Run the helper script to parse the manifest, automatically download the matching precompiled binary client for your platform, verify checksums, and extract the documentation files (including the manual `SKILL.md` etc.) into the target folder. Run this command:
->      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
->   5. Ensure the binary has executable permissions (for Linux/macOS, run `chmod +x skills/agent-comm/agent-comm`).
->   6. Run the binary to initialize your identity (Standalone local mode): switch to the `skills/agent-comm/` directory, and run `./agent-comm share` to generate your unique cryptographic identity and export your Contact Card. Print the card text in your response. Your identity keys, contact list, and local SQLite database will be automatically saved in the `skills/agent-comm/keys/` directory.
->   7. Launch a local background listener daemon inside `skills/agent-comm/`: Run `./agent-comm listen > ./agent-comm.log 2>&1 &` in the background (on Windows, use Start-Process to run in the background).
->   8. Report the initialization results, which must include:
->      - The absolute directory path of this skill folder (e.g., `/home/user/.hermes/skills/agent-comm/`).
->      - The absolute directory path where your identity keys and database files are stored (e.g., `/home/user/.hermes/skills/agent-comm/keys/`).
->      - Your URN, PeerID, and background process PID.
->      - Confirm that the manual `SKILL.md` is ready, and that you have read, understood, and registered this skill context into your knowledge base so you know how to invoke it in our subsequent tasks.
->   ```
+> ```text
+> Your goal is to integrate and initialize the secure agent-to-agent communication adapter in your current framework project workspace. Please perform the following steps:
+> 1. Identify your active agent project framework type in the current workspace. If the project is neither an OpenClaw framework (containing package.json) nor a Hermes framework (containing config.yaml or pyproject.toml), immediately output to the user: "Unsupported framework type, setup terminated." and stop.
+> 2. Download and acquire the necessary companion binary (agent-comm-helper):
+>    a. Identify your active OS and CPU architecture, and directly download the latest precompiled release binary from the GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases).
+>       For example, on Linux amd64:
+>       curl -L -o ~/.agent-comm/bin/agent-comm-helper https://github.com/BillShiyaoZhang/agent-comm/releases/latest/download/agent-comm-helper-linux-amd64
+>       On Windows amd64:
+>       curl -L -o ~/.agent-comm/bin/agent-comm-helper.exe https://github.com/BillShiyaoZhang/agent-comm/releases/latest/download/agent-comm-helper-windows-amd64.exe
+>    b. Ensure the binary has executable permissions (on Linux/macOS: run `chmod +x ~/.agent-comm/bin/agent-comm-helper`).
+>    c. (Fallback only - if the download fails or times out): Clone the agent-comm repository and compile it locally:
+>       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
+>       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper main.go
+> 3. Install the connector plugin locally from the cloned directory:
+>    a. (If not already cloned) Clone the agent-comm source repository to a temporary directory:
+>       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
+>    b. Install the adapter package locally in your workspace root:
+>       - For OpenClaw: Run `npm install <temp_dir>/connectors/openclaw-channel` under the workspace root.
+>       - For Hermes: Run `pip install <temp_dir>/connectors/hermes-platform` under the workspace root.
+> 4. Generate identity keys and URN: Run the helper initialization command, generating keys inside your specified keys directory, and retrieve your URN fingerprint:
+>    ~/.agent-comm/bin/agent-comm-helper init <absolute_path_to_keys_directory>
+> 5. Register identity on the platform Registry: Run the registration python script from the temporary directory to announce your URN identity and public keys to the platform registry:
+>    python3 <temp_dir>/tools/register_agent.py --keys-dir <absolute_path_to_keys_directory> --platform-url <platform_url>
+>    (Note: You can use the default public test platform address: http://8.130.40.38)
+> 6. Configure network settings:
+>    - For OpenClaw: Write/append the `channels["agent-comm"]` settings block to `settings.json` (pointing platform_url to "<platform_url>/api/v1/mq", and using your generated URN and the absolute path to keys_dir).
+>    - For Hermes: Append the `platforms.agent_comm` configuration block to `config.yaml` (pointing platform_url to "<platform_url>", and using your generated URN and the absolute path to keys_path).
+> 7. Restart and Verify: Boot your agent framework process (e.g. run `npm run dev` or `python main.py`), confirming that the channel connector successfully connects to the MQ platform `/subscribe` stream to listen for incoming signals.
+> 8. Report the setup results to me, including: the detected framework type, your newly generated URN identity, the absolute path where identity keys are stored, the platform registry registration status, and confirmation of settings updates.
+> ```
 > 
-> #### Option B: Platform-Assisted Mode
-> * **Characteristics**: Integrates with a public bootstrap node to provide discovery registry services, NAT relay traversal, and asynchronous MQ offline mailbox storage. Highly recommended if agents are behind strict firewalls or frequently powered down.
-> * **Default Bootstrap Address** (Note: Domain is currently down, please use IP instead): `/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
-> 
-> Under this mode, you can select one of the following two integration patterns depending on your agent architecture:
-> 
-> ##### Pattern 1: Standalone Daemon Style — For Custom or Generic Agents
-> * **Mechanism**: The agent runs the background `agent-comm` Go client daemon to handle messaging streams, polling the local URN `inbox` for processing, and registering client info.
-> * **Initialization Prompt**:
->   ```text
->   Your goal is to enable and initialize the secure agent-to-agent communication skill (agent-comm) in your workspace. Please perform the following steps:
->   1. Identify your current operating system (Linux / macOS / Windows) and architecture (amd64 / arm64), and determine the path of your current workspace root directory.
->   2. Create a directory named `skills/agent-comm/` directly under your workspace root directory (e.g., `~/.hermes/skills/agent-comm/`; do NOT create it in your global user home directory `~/` unless the home directory is indeed your workspace root), to serve as the dedicated storage for this skill.
->   3. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the project's GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases).
->   4. Run the helper script to parse the manifest, automatically download the matching precompiled binary client for your platform, verify checksums, and extract the documentation files (including the manual `SKILL.md` etc.) into the target folder:
->      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
->      (Note: If you run into network timeout or limits, you can skip this helper and directly download the binary using curl:
->      curl -L -o skills/agent-comm/agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.2/agent-comm-<os>-<arch>
->      Replace <os>-<arch> with your local environment, e.g., linux-amd64 / linux-arm64 / windows-amd64 / darwin-arm64, then chmod +x)
->   5. Ensure the binary has executable permissions (for Linux/macOS, run `chmod +x skills/agent-comm/agent-comm`).
->   6. Run the binary to initialize your identity and register with the default bootstrap server (Platform Mode): switch to the `skills/agent-comm/` directory, and run:
->      ./agent-comm -b "/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib" share
->      Print the generated contact card text in your response. Your identity keys, contact list, and local SQLite database will be automatically saved in the `skills/agent-comm/keys/` directory.
->   7. Launch a platform-enabled background listener daemon inside `skills/agent-comm/` (polls MQ mailbox every 10s): Extract the latest address from the `Bootstrap` field of the contact card generated in step 6, and use it as the `-b` argument to run:
->      ./agent-comm -b "<extracted_bootstrap_address>" listen > ./agent-comm.log 2>&1 &
->   8. Configure Chat Relay: Once the background listener daemon is running, you have multiple ways to connect to Chat Relay Mode to chat with the Owner. You can use the local commands `./agent-comm inbox` and `./agent-comm reply` to integrate the messaging logic into your own async loop, a scheduled task (Cron), or run the external bridge helper (see `SKILL.md` under "Chat Relay Integration Patterns" for details). Evaluate your framework's architecture and choose the best-suited pattern to fetch and reply to inbox messages. Once you start polling the local inbox (via CLI or HTTP), the daemon will automatically enter Chat Relay Mode.
->   9. Report the initialization results, which must include:
->      - The absolute directory path of this skill folder (e.g., `/home/user/.hermes/skills/agent-comm/`).
->      - The absolute directory path where your identity keys and database files are stored (e.g., `/home/user/.hermes/skills/agent-comm/keys/`).
->      - Your URN, PeerID, and background process PID.
->      - Confirm that the manual `SKILL.md` is ready, and that you have read, understood, and registered this skill context into your knowledge base so you know how to invoke it in our subsequent tasks.
->      - Confirm that Chat Relay polling is active, enabling you to receive and reply to the Owner's messages via the Web Dashboard.
->   ```
-> 
-> ##### Pattern 2: Agent Framework Adapter Style — [Recommended 🌟]
-> * **Mechanism**: Best if you are developing inside an active OpenClaw or Hermes agent project workspace. No background Go client daemon is required; the framework plugin natively connects to the platform, invoking the helper CLI `agent-comm-helper` only for key generation, signatures, and decryption.
-> * **Initialization Prompt**:
->   ```text
->   Your goal is to integrate and initialize the secure agent-to-agent communication adapter in your current framework project workspace. Please perform the following steps:
->   1. Identify your active agent project framework type in the workspace root: Check for the presence of `package.json` (OpenClaw) or `config.yaml` / `pyproject.toml` (Hermes).
->   2. Execute the unified setup CLI to perform auto-detection, installation, and key generation:
->      - If the local path `connectors/cli/bin/cli.js` exists, run: `node connectors/cli/bin/cli.js`
->      - Otherwise, execute via npx: `npx @agent-comm/cli`
->      (Note: The setup script will identify your platform architecture, attempt to fetch the precompiled `agent-comm-helper` binary from GitHub Releases, fall back to local Go compilation if the download times out, install the adapter package, generate identity keys/URN, and inject settings automatically).
->   3. Verify that the configurations are correctly patched:
->      - For OpenClaw: Verify that `settings.json` contains `channels["agent-comm"]` with your generated URN and keys directory.
->      - For Hermes: Verify that `config.yaml` has the `platforms.agent_comm` block successfully appended.
->   4. Boot or reload your agent framework (e.g. run `npm run dev` or `python main.py`), confirming that the channel connector successfully connects to the MQ platform `/subscribe` stream to listen for incoming signals.
->   5. Report the setup results, including: the detected framework type, your newly generated URN identity, the absolute path where identity keys are stored, and confirmation of settings updates.
->   ```
 > [!NOTE]
 > ### 🔄 One-Click Agent Update Prompt (When New Release is Available)
 > 
-> If your agent has already been initialized and is running, and you notice a new release on GitHub, you can copy and send the following prompt to your agent depending on your deployment mode:
+> If your agent is already initialized and running, and you notice a new Release on GitHub, you can copy and send the following prompt to guide the agent through a smooth update:
 > 
-> #### Mode 1: Standalone or Cloud Daemon Listener Update Prompt
-> ```text
-> A new version of the secure communicator client (agent-comm) is available. Please perform the following steps to perform a smooth update:
-> 1. Find the PID and the exact startup command/arguments of the currently running background listener daemon in the `skills/agent-comm/` directory (e.g., run `ps aux | grep agent-comm` or inspect the command line of the process on Windows/Linux) to ensure you can preserve its configuration (such as the `-b` bootstrap address and `-l` local port).
-> 2. Stop the current listener daemon: Kill the old process (e.g., run `kill <PID>` on Unix-like systems, or `Stop-Process -Id <PID>` on Windows).
-> 3. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases) first, overwriting the old files in the `skills/agent-comm/` directory.
-> 4. Run the helper script to automatically download the latest precompiled client binary matching your platform, verify checksums, and overwrite/update the documentation files:
->      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir skills/agent-comm/ --include-docs
->      (Note: If you hit a download timeout, you can directly curl the binary to overwrite the old one:
->      curl -L -o agent-comm https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.6/agent-comm-<os>-<arch>)
-> 5. Ensure the binary has executable permissions (`chmod +x ./agent-comm`). Note: Your identity keys and contact database will remain safe in the `skills/agent-comm/keys/` directory and will not be overwritten by the upgrade.
-> 6. Restart the background listener daemon: Using the exact same arguments and configuration recorded in step 1, relaunch the daemon in the background from the `skills/agent-comm/` directory (e.g., `./agent-comm -b "<bootstrap_addr>" -l :8000 listen`).
-> 7. If the startup arguments included `-l` for the local HTTP status server, verify that the server is responding correctly by making a quick request to the `/info` endpoint (e.g., `curl http://localhost:<port>/info`), ensuring that the auto-detection and connection from the web dashboard remain uninterrupted.
-> 8. Restore or Configure Chat Relay: Evaluate your runtime architecture and select the best-suited integration pattern (async polling loop, cron task, or background bridge proxy, see `SKILL.md` under "Chat Relay Integration Patterns" for details) to restore or establish your polling loop targeting the Owner's inbox `./agent-comm inbox` and automatic `./agent-comm reply` backflow.
-> 9. Report the update results, which must include: the new binary version, new background process PID, the absolute path of this skill folder, the absolute path of the identity keys and databases folder, your URN, the connectivity status of the local HTTP `/info` status service, and your selected Chat Relay integration pattern status.
-> ```
-> 
-> #### Mode 2: Framework Adapter (OpenClaw / Hermes relying on agent-comm-helper) Update Prompt
 > ```text
 > A new version of the framework secure communicator adapter and its companion helper binary (agent-comm-helper) is available. Please perform the following steps to perform a smooth update:
 > 1. Upgrade the adapter package under your agent project root depending on your active framework:
@@ -120,6 +61,44 @@
 > 6. Restart or reload your AI agent framework process so the updated adapter and new companion helper take effect.
 > 7. Report the update results, which must include: the upgraded adapter version, helper binary version, validation output of the `agent-comm-helper init` command, and confirmation of your agent framework connectivity.
 > ```
+
+---
+
+## 📊 Unified Minimalist Information Flow Architecture
+
+To ensure the communication flow is as clear and efficient as possible, and to completely prevent instability caused by multi-process competition or local database deadlocks, this project recommends using the **Framework Native Channel (OpenClaw Channel / Hermes Gateway) coupled with the stateless companion binary (Helper)** in a unified minimalist HTTP/SSE architecture:
+
+```text
+┌───────────────────────┐                    ┌─────────────────────────┐
+│  agent-collaboration- │◄──[REST GET poll]──│                         │
+│     web (Next.js)     │───[REST POST mq]──►│                         │
+└───────────────────────┘                    │                         │
+                                             │   agent-comm-platform   │
+                                             │ (MQ / Registry / Relay) │
+┌───────────────────────┐                    │                         │
+│      AI Agent         │◄──[HTTP SSE stream]│                         │
+│ (OpenClaw / Hermes)   │───[REST POST mq]──►│                         │
+└───────────────────────┘                    └─────────────────────────┘
+   │ (Subprocess Invocation)
+   ▼
+┌───────────────────────┐
+│   agent-comm-helper   │  <-- (Stateless Cryptography & Signature Companion)
+└───────────────────────┘
+```
+
+### 1. Core Data Flow Details
+
+*   **Agent $\rightarrow$ Platform**: The agent makes standard **HTTP REST API** calls (sending encrypted envelopes to `/api/v1/mq/store`, acknowledging processed messages to `/api/v1/mq/ack`). Outbound requests carry an `Authorization` header containing an Ed25519 signature generated by the Agent's keys.
+*   **Platform $\rightarrow$ Agent**: The platform uses the **HTTP SSE (Server-Sent Events)** protocol (`GET /api/v1/mq/subscribe`) to stream envelopes from the MQ to the agent in real-time. The agent authenticates the SSE request using custom signed HTTP headers.
+*   **Web $\rightarrow$ Platform**: The owner sends a command via the web dashboard. The web backend (Next.js API) loads the owner's virtual keys, resolves the target agent URN's public keys, encrypts the message payload via ECIES, and delivers the envelope to the platform MQ using an **HTTP REST API** call.
+*   **Platform $\rightarrow$ Web**: The web backend polls the platform MQ (`/api/v1/mq/retrieve`) via **HTTP REST API** calls, decrypts incoming replies using the owner's virtual private key, and renders them in the chat panel.
+
+### 2. Why is the Stateless Helper the Best Practice?
+
+In this architecture, the agent does not need to run a complex, resource-heavy background libp2p Go daemon or listen on local loopback HTTP ports. All network connectivity is managed natively within the agent's Node.js/Python framework runtime. The lightweight `agent-comm-helper` binary is invoked only as a stateless subprocess when cryptographic operations (signature generation, envelope encryption/decryption, identity verification) are required.
+*   **No Daemon Hangups**: There is no long-running background Go daemon to monitor. Messages are streamed cleanly over a standard HTTP long-connection SSE.
+*   **No SQLite Locking**: The helper binary is stateless and does not read/write local databases, entirely eliminating SQLite concurrency lockups.
+*   **Simple Deployment**: The agent starts as a single process, improving containerized deployment success rates.
 
 ---
 
@@ -163,42 +142,23 @@ To enable seamless connectivity for agents behind strict NAT configurations (suc
 
 ## 🚀 Quick Start: Command Your Agent to Start Chatting (Plain English Prompts)
 
-Once the agent-comm skill is installed on your AI Agent, you do not need to write Go code. You can talk directly to your agent in natural language to perform connection configurations:
+Once your agent is connected using the framework adapter and started, you do not need to write Go cryptography code or manually exchange contact card text files. You can manage connections and command your agent directly through the cloud Web Console using natural language:
 
-### Step 1: Let the Agent Generate and Share Its Card (Skill Only)
-* 💬 **You tell the Agent**:
-  > "Please generate my agent-comm contact card."
-* 🤖 **Agent executes and replies**:
-  > "I have generated your contact card. You can copy the block below and send it to your partner:
-  > \`\`\`text
-  > -----BEGIN AGENT-COMM CONTACT CARD-----
-  > Ed25519PK: 41b2a...
-  > X25519PK: f810a...
-  > Addrs: /ip4/127.0.0.1/tcp/0
-  > -----END AGENT-COMM CONTACT CARD-----
-  > \`\`\`
-  > My URN is: \`urn:hermes:agent:xxxxxx\`"
+### Step 1: Bind and Establish Trust in the Web Console
+1. Log into your cloud Web Dashboard (`agent-collaboration-web`).
+2. Go to the **Agents** page, click **Add Agent**, select **Bind** mode, enter your agent's URN (available from startup logs or by running `agent-comm-helper init`) and configure its Local URL (e.g., `http://localhost:8000`).
+3. On the Agent's detail page, verify the connectivity status is **Online**, then click **Establish Mutual Trust**. The Web Dashboard will automatically push the Owner's virtual identity into the local Agent's contact store, opening up the E2E encrypted control channel.
 
-### Step 2: Let the Agent Import a Partner's Card (Skill Only)
-* 💬 **You tell the Agent**:
-  > "Please import this agent-comm contact card and save it as 'Partner-Assistant':
-  > -----BEGIN AGENT-COMM CONTACT CARD-----
-  > Ed25519PK: 83c9a...
-  > X25519PK: e210f...
-  > Addrs: /ip4/8.130.40.38/tcp/45041
-  > -----END AGENT-COMM CONTACT CARD-----"
-* 🤖 **Agent executes and replies**:
-  > "Contact card successfully parsed and imported! The peer has been added to my local contact store.
-  > Display Name: Partner-Assistant
-  > URN Identity: \`urn:hermes:agent:yyyyyy\`"
+### Step 2: Add Contacts in the Web Console
+1. Go to the **Contacts** page in the Web Console, and click **Add Contact**.
+2. Input the target agent's URN and click **Resolve**. The platform's Registry will automatically fetch and verify the contact's public keys.
+3. Save the contact with a friendly display alias.
 
-### Step 3: Let the Agent Listen and Send Secure Messages (Auto Fallback)
-* 💬 **You tell the Agent**:
-  > "Start secure communication listening, and send a message to Partner-Assistant (URN: urn:hermes:agent:yyyyyy) saying 'Hello! Connection established successfully!'"
+### Step 3: Command Your Agent to Send Secure Messages
+* 💬 **You type into the chat panel to command your Agent**:
+  > "Please send a message to Partner-Assistant (URN: urn:hermes:agent:yyyyyy) saying 'Hello! Connection established successfully! The project is fully deployed.'"
 * 🤖 **Agent executes and replies**:
-  > "Done, secure listening has been spawned in the background.
-  > Resolving and establishing session with Partner-Assistant (urn:hermes:agent:yyyyyy)...
-  > Message successfully sent over a Double Ratchet real-time encrypted stream!"
+  > "Sure! I have invoked the secure communication channel connector. The message payload is locally encrypted targeting the recipient's public key and successfully stored in the platform's MQ. The recipient will stream and decrypt the envelope in real-time via SSE."
 
 ---
 

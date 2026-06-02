@@ -82,7 +82,7 @@ jobs:
         working-directory: ./
         run: |
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
-          go build -ldflags="-s -w" -o build/${{ matrix.artifact_name }} ./cmd/client/main.go
+          go build -ldflags="-s -w" -o build/${{ matrix.artifact_name }} ./cmd/helper/main.go
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
