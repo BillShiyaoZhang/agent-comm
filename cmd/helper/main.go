@@ -37,6 +37,8 @@ func main() {
 		runEncryptEnvelope()
 	case "decrypt-envelope":
 		runDecryptEnvelope()
+	case "daemon":
+		runDaemon()
 	default:
 		printError(fmt.Sprintf("unknown command: %s", cmd))
 		os.Exit(1)

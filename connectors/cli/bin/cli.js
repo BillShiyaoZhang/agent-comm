@@ -261,71 +261,7 @@ try {
   process.exit(1);
 }
 
-// 3.5 Register identity with Platform Registry
-console.log("\n3.5 Registering URN identity with the platform Registry...");
-try {
-  const platformUrl = "http://8.130.40.38";
-  const timestamp = Math.floor(Date.now() / 1000);
-  const peerId = "12D3KooWKzoJzGnRpfd9ohJTYzGQbebi4rvRh1LWNnb4EaUBTThS";
-  const flag = "0";
-
-  // Build registry payload bytes
-  const canonicalStr = `${initRes.urn}|${peerId}|${initRes.x25519_pubkey}|${flag}|`;
-  
-  // Write big-endian int64 to buffer
-  const tsBuf = Buffer.alloc(8);
-  tsBuf.writeBigInt64BE(BigInt(timestamp));
-  const payloadBytes = Buffer.concat([Buffer.from(canonicalStr, "utf8"), tsBuf]);
-  
-  // Sign payload
-  let signRes;
-  if (process.platform === "win32") {
-    const wslKeysDir = execSync(`wsl wslpath '${keysDir.replace(/\\/g, "/")}'`).toString().trim();
-    const helperOutput = execFileSync("wsl", ["~/.agent-comm/bin/agent-comm-helper", "sign-store", wslKeysDir, payloadBytes.toString("hex")]).toString().trim();
-    signRes = JSON.parse(helperOutput);
-  } else {
-    const home = os.homedir();
-    const helperPath = path.join(home, ".agent-comm", "bin", "agent-comm-helper");
-    const helperOutput = execFileSync(helperPath, ["sign-store", keysDir, payloadBytes.toString("hex")]).toString().trim();
-    signRes = JSON.parse(helperOutput);
-  }
-
-  // Construct registry request JSON body
-  const registryBody = {
-    urn: initRes.urn,
-    peer_id: peerId,
-    addrs: [],
-    relay_addrs: [],
-    x25519_pubkey: Buffer.from(initRes.x25519_pubkey, "hex").toString("base64"),
-    ed25519_pubkey: Buffer.from(initRes.ed25519_pubkey, "hex").toString("base64"),
-    stores_user_data: false,
-    signature: Buffer.from(signRes.signature, "hex").toString("base64"),
-    timestamp: timestamp
-  };
-
-  const bodyBytes = Buffer.from(JSON.stringify(registryBody), "utf8");
-  
-  // Sign HTTP body
-  let httpSignRes;
-  if (process.platform === "win32") {
-    const wslKeysDir = execSync(`wsl wslpath '${keysDir.replace(/\\/g, "/")}'`).toString().trim();
-    const helperOutput = execFileSync("wsl", ["~/.agent-comm/bin/agent-comm-helper", "sign-store", wslKeysDir, bodyBytes.toString("hex")]).toString().trim();
-    httpSignRes = JSON.parse(helperOutput);
-  } else {
-    const home = os.homedir();
-    const helperPath = path.join(home, ".agent-comm", "bin", "agent-comm-helper");
-    const helperOutput = execFileSync(helperPath, ["sign-store", keysDir, bodyBytes.toString("hex")]).toString().trim();
-    httpSignRes = JSON.parse(helperOutput);
-  }
-
-  const authHeader = `Ed25519 ${httpSignRes.signature}:${initRes.ed25519_pubkey}`;
-
-  const regUrl = `${platformUrl}/api/v1/registry/register`;
-  await postJson(regUrl, { "Authorization": authHeader }, registryBody);
-  console.log("Successfully registered URN identity with the platform registry!");
-} catch (err) {
-  console.warn(`[⚠️ Warning] Platform registration failed: ${err.message}. Your agent will boot, but peer routing might fail until registered.`);
-}
+// 3.5 [Removed] URN registration is now handled automatically by the Go Helper Daemon on startup.
 
 // 4. Update configuration file
 console.log("\n4. Injecting configuration into framework settings...");
@@ -344,7 +280,7 @@ try {
     if (!settings.channels) settings.channels = {};
     settings.channels["agent-comm"] = {
       enabled: true,
-      platform_url: "http://8.130.40.38/api/v1/mq",
+      platform_url: "http://127.0.0.1:45042/api/v1/mq",
       urn: initRes.urn,
       keys_dir: "~/.openclaw/keys/agent-comm"
     };
@@ -363,18 +299,17 @@ try {
 platforms:
   agent_comm:
     enabled: true
-    platform_url: "http://8.130.40.38"
+    platform_url: "http://127.0.0.1:45042"
     urn: "${initRes.urn}"
     keys_path: "~/.hermes/keys/agent-comm"
 `;
 
     // Simple robust yaml patch
     if (content.includes("platforms:")) {
-      // Find where platforms starts, check if agent_comm is already there, or append to it
       if (content.includes("agent_comm:")) {
         console.log("Configuration for agent_comm already exists in config.yaml. Skipping YAML write.");
       } else {
-        content = content.replace("platforms:", "platforms:\n  agent_comm:\n    enabled: true\n    platform_url: \"http://8.130.40.38\"\n    urn: \"" + initRes.urn + "\"\n    keys_path: \"~/.hermes/keys/agent-comm\"");
+        content = content.replace("platforms:", "platforms:\n  agent_comm:\n    enabled: true\n    platform_url: \"http://127.0.0.1:45042\"\n    urn: \"" + initRes.urn + "\"\n    keys_path: \"~/.hermes/keys/agent-comm\"");
         fs.writeFileSync(configPath, content, "utf8");
         console.log(`Successfully patched ${configPath}`);
       }
@@ -389,5 +324,14 @@ platforms:
   process.exit(1);
 }
 
-console.log("\nSetup completed successfully! Your Agent Comm connector is configured and ready.");
+console.log("\nSetup completed successfully! Your Agent Comm connector is configured.");
+console.log("\n=== 💡 HOW TO START THE LOCAL P2P DAEMON ===");
+console.log("To enable P2P secure communications, please start the background daemon:");
+if (process.platform === "win32") {
+  const wslKeysDir = execSync(`wsl wslpath '${keysDir.replace(/\\/g, "/")}'`).toString().trim();
+  console.log(`  wsl ~/.agent-comm/bin/agent-comm-helper daemon ${wslKeysDir} http://8.130.40.38`);
+} else {
+  console.log(`  ~/.agent-comm/bin/agent-comm-helper daemon ${keysDir} http://8.130.40.38`);
+}
+console.log("============================================\n");
 }

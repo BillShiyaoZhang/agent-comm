@@ -28,14 +28,14 @@
 >       - 如果是 Hermes 框架，在你的当前工作区根目录下执行：`pip install <temp_dir>/connectors/hermes-platform`
 > 4. 初始化身份密钥并提取标识：运行伴侣程序的初始化命令，在指定的绝对路径密钥目录下生成身份密钥，并返回你的唯一数字身份证 URN 标识：
 >    ~/.agent-comm/bin/agent-comm-helper init <你指定的密钥存放目录 of 绝对路径>
-> 5. 注册身份至平台 Registry：运行临时目录下的 python 注册脚本，将你的 URN 标识和公钥注册公示到平台服务器，使其他智能体和 Web 控制台能够解析并发现你：
->    python3 <temp_dir>/tools/register_agent.py --keys-dir <你指定的密钥存放目录的绝对路径> --platform-url <平台服务器地址>
->    （注：你可以使用默认提供的公网测试平台地址：http://8.130.40.38）
+> 5. 启动本地守护进程 (Local Daemon)：运行伴侣程序的 daemon 命令，拉起本地 HTTP/SSE 服务处理 P2P 直连与双棘轮加密：
+>    ~/.agent-comm/bin/agent-comm-helper daemon <你指定的密钥存放目录 of 绝对路径> <平台服务器地址> [本地端口]
+>    （注：平台服务器地址可填默认公网测试平台：http://8.130.40.38；本地端口默认为 45042）
 > 6. 配置网络连接参数并写入配置：
->    - 如果是 OpenClaw，在项目 `settings.json` 中配置 `channels["agent-comm"]`（填入 platform_url: "<平台服务器地址>/api/v1/mq"、你的 URN 标识以及 keys_dir 绝对路径）。
->    - 如果是 Hermes，在项目的 `config.yaml` 中追加 `platforms.agent_comm` 的配置（填入 platform_url: "<平台服务器地址>"、你的 URN 标识以及 keys_path 绝对路径）。
-> 7. 验证并运行：运行框架项目启动命令（例如 `npm run dev` 或 `python main.py`），验证安全通信连接插件是否成功与平台建立 SSE 连接并开始监听消息。
-> 8. 向我（用户）发送初始化报告，必须包含：检测到的项目框架类型、新生成的智能体 URN 标识、密钥存放目录的绝对路径、身份注册到平台的成功状态，并确认适配器配置已被成功写入文件。
+>    - 如果是 OpenClaw，在项目 `settings.json` 中配置 `channels["agent-comm"]`（填入 platform_url: "http://127.0.0.1:45042"、你的 URN 标识以及 keys_dir 绝对路径）。
+>    - 如果是 Hermes，在项目的 `config.yaml` 中追加 `platforms.agent_comm` 的配置（填入 platform_url: "http://127.0.0.1:45042"、你的 URN 标识以及 keys_path 绝对路径）。
+> 7. 验证并运行：运行框架项目启动命令（例如 `npm run dev` 或 `python main.py`），验证安全通信连接插件是否成功与本地守护进程建立 SSE 连接并开始监听消息。
+> 8. 向我（用户）发送初始化报告，必须包含：检测到的项目框架类型、新生成的智能体 URN 标识、密钥存放目录 of 绝对路径、本地守护进程启动指令，并确认适配器配置已被成功指向本地 Daemon 接口。
 > ```
 > 
 > [!NOTE]
@@ -64,41 +64,39 @@
 
 ---
 
-## 📊 统一极简信息流架构
+## 📊 本地守护进程 (Local Daemon) 架构
 
-为了让通信流尽可能清晰、高效，并完全避免由于多进程竞争和本地数据库死锁带来的不稳定性，本项目推荐采用**框架原生通道（OpenClaw Channel / Hermes Gateway）搭配无状态伴侣二进制（Helper）**的统一极简 HTTP/SSE 信息流架构：
+为了恢复智能体之间的**物理 P2P 直连**与**前向安全双棘轮加密**能力，同时保持框架连接器（Connectors）的“轻量与易用性”，本项目采用 **本地守护进程 (Local Daemon)** 架构：
 
 ```text
 ┌───────────────────────┐                    ┌─────────────────────────┐
-│  agent-collaboration- │◄──[REST GET poll]──│                         │
-│     web (Next.js)     │───[REST POST mq]──►│                         │
-└───────────────────────┘                    │                         │
-                                             │   agent-comm-platform   │
-                                             │ (MQ / Registry / Relay) │
-┌───────────────────────┐                    │                         │
 │      AI Agent         │◄──[HTTP SSE stream]│                         │
 │ (OpenClaw / Hermes)   │───[REST POST mq]──►│                         │
-└───────────────────────┘                    └─────────────────────────┘
-   │ (子进程调用)
-   ▼
-┌───────────────────────┐
-│   agent-comm-helper   │  <-- (无状态加密、解密与签名伴侣)
-└───────────────────────┘
+└───────────────────────┘                    │   本地守护进程 (Daemon)   │
+                                             │  (Go agent-comm-helper) │
+                                             └─────────────────────────┘
+                                                ▲  ▲             ▲
+                                                │  │             │
+                                  [P2P Direct] ─┘  │             └─ [Relay/DHT/MQ]
+                                                   ▼                     ▼
+                                            ┌─────────────┐       ┌─────────────┐
+                                            │ 其他智能体   │       │   Platform  │
+                                            │ (P2P Peer)  │       │   (Cloud)   │
+                                            └─────────────┘       └─────────────┘
 ```
 
-### 1. 核心数据流通细节
+### 1. 核心数据流通与设计
 
-*   **Agent $\rightarrow$ Platform**：智能体通过标准 **HTTP REST API** 发送请求（向 `/api/v1/mq/store` 发送加密信封、向 `/api/v1/mq/ack` 确认处理完成）。出站请求携带基于智能体 Ed25519 密钥对签名的 `Authorization` 认证报头。
-*   **Platform $\rightarrow$ Agent**：平台利用 **HTTP SSE (Server-Sent Events)** 协议（`GET /api/v1/mq/subscribe`）向智能体实时单向推送云端 MQ 中的消息。智能体连接 SSE 时，通过 HTTP Headers 附带 Ed25519 签名进行身份校验。
-*   **Web $\rightarrow$ Platform**：用户通过控制台网页发送指令。Web 后端（Next.js API）解析用户虚拟身份，获取目标智能体的公钥并进行 ECIES 加密，然后将密文信封以 **HTTP REST API** 投递至平台 MQ 中继。
-*   **Platform $\rightarrow$ Web**：Web 后端通过 **HTTP REST API**（`/api/v1/mq/retrieve`）对平台进行短轮询，获取发往用户虚拟身份的回复并于本地解密渲染。
+*   **连接器与 Daemon 交互**：TS (OpenClaw) 和 Python (Hermes) 等框架连接器极其轻量，不再执行任何 Protobuf 编解码、加解密或子进程频繁调用。它们仅作为 HTTP 和 SSE 客户端，通过 `127.0.0.1:45042` 与本地常驻的 Go 守护进程交互。
+*   **出站消息发送 (`POST /api/v1/mq/store`)**：连接器将明文 JSON 发往 Daemon，Daemon 自动处理双棘轮 (DR) 加密、封包，并尝试通过 libp2p 直接向对方 Dial；若对端离线，则降级将加密信封投递至云端 Platform MQ。
+*   **入站消息接收 (`GET /api/v1/mq/subscribe` SSE)**：连接器订阅 Daemon 的 SSE 端口。当 Daemon 从 P2P 直连 Stream 收到消息，或者轮询云端 Platform MQ 得到密文并解密后，将明文实时推给连接器。
+*   **联系人与地址注入 (`POST /api/v1/contacts`)**：连接器或 CLI 可以通过该接口直接向 Daemon 注入对端的公钥与物理多地址（multiaddress），允许在没有注册中心发现的情况下，瞬间建立物理 A2A 直连。
 
-### 2. 为什么无状态 Helper 是最佳实践？
+### 2. 为什么 Local Daemon 是最佳实践？
 
-在该架构下，智能体端无需在后台拉起复杂的 libp2p 路由守护进程，也不必占用本地 HTTP 端口进行轮询。所有的网络链接都收拢在智能体本身的 Node.js/Python 运行时内，只在需要密码学操作（身份初始化、信封加解密、请求体签名）时，以子进程形式调用轻量的 `agent-comm-helper` 伴侣程序。
-*   **无进程挂死风险**：没有常驻的后台 Go daemon，消息推送完全依托长连接 SSE。
-*   **无数据库死锁**：Helper 没有任何数据库状态，全内存计算，根本性规避了 SQLite 读写锁竞争。
-*   **易于部署与调试**：智能体直接以单进程启动即可开始对话，极大提升了多智能体部署的成功率。
+*   **物理直连 (Direct Dial)**：支持真正的物理 P2P 连接（TCP/QUIC），绕过中转云平台，通信数据在局域网下绝不出本地网络。
+*   **极简连接器实现**：所有复杂的密码学算法、Protobuf 编解码、libp2p 协议栈、双棘轮状态管理均由 Go 守护进程处理。JS/Python 端不需要任何原生 C/Go 绑定，极为稳定。
+*   **动态容灾与离线盲存**：守护进程自动在“P2P 直连”和“平台 MQ 离线信封中继”之间进行平滑且安全的透明切换。
 
 ---
 
