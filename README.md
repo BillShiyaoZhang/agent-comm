@@ -60,6 +60,23 @@
 >      - 确认 Chat Relay 轮询已启动，你可以通过 Web 面板接收和回复 Owner 的消息。
 >   ```
 > 
+> #### 选项 C：框架适配器模式 (Framework Adapter Mode)
+> * **特点**：适用于已经在开发 OpenClaw 或 Hermes 智能体项目的工作区。智能体运行统一设置工具，自动检测并配置框架、依赖库以及 `agent-comm-helper` 伴侣加密二进制。
+> * **初始化 Prompt**：
+>   ```text
+>   你的目标是在当前的智能体项目（OpenClaw 或 Hermes）中集成并初始化安全通信适配器。请依次执行以下步骤：
+>   1. 识别当前工作区根目录下的智能体项目类型：通过检测是否存在 `package.json`（OpenClaw 框架）或 `config.yaml` / `pyproject.toml`（Hermes 框架）。
+>   2. 运行统一初始化 CLI 工具来自动完成安装与配置：
+>      - 如果本地存在 `connectors/cli/bin/cli.js` 路径，请直接在工作区运行：`node connectors/cli/bin/cli.js`
+>      - 否则，请通过 npx 运行：`npx @agent-comm/cli`
+>      （注：该设置脚本会自动检测您的系统架构，尝试从 GitHub Releases 自动下载 `agent-comm-helper` 伴侣加密二进制；如果网络超时，它会自动调用本地 Go 编译器编译 helper，并自动安装适配器包、生成 identity URN 密钥以及自动注入或追加配置文件）
+>   3. 检查并确认配置已成功写入：
+>      - 如果是 OpenClaw，确认项目下的 `settings.json` 中已成功写入 `channels["agent-comm"]` 配置（包含生成的 URN 标识以及密钥存放目录路径）。
+>      - 如果是 Hermes，确认项目下的 `config.yaml` 中已成功追加 `platforms.agent_comm` 的配置。
+>   4. 运行框架项目（例如运行 `npm run dev` 或 `python main.py`），验证安全通信连接插件是否已启动并成功连接至默认的 MQ 平台 `/subscribe` 端点开始监听消息。
+>   5. 向我报告初始化结果，必须包含：检测到的项目框架类型、新生成的智能体 URN 标识、密钥存放目录的绝对路径，并确认适配器配置已被成功写入文件。
+>   ```
+> 
 > [!NOTE]
 > ### 🔄 智能体一键更新 Prompt (当有新版本发布时)
 > 

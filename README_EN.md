@@ -58,6 +58,23 @@
 >      - Confirm that Chat Relay polling is active, enabling you to receive and reply to the Owner's messages via the Web Dashboard.
 >   ```
 > 
+> #### Option C: Framework Adapter Mode
+> * **Characteristics**: Best if you are developing inside an active OpenClaw or Hermes agent project workspace. The agent runs a unified setup CLI to automatically detect the project layout, install dependencies, download `agent-comm-helper`, and patch configuration files.
+> * **Initialization Prompt**:
+>   ```text
+>   Your goal is to integrate and initialize the secure agent-to-agent communication adapter in your current framework project workspace. Please perform the following steps:
+>   1. Identify your active agent project framework type in the workspace root: Check for the presence of `package.json` (OpenClaw) or `config.yaml` / `pyproject.toml` (Hermes).
+>   2. Execute the unified setup CLI to perform auto-detection, installation, and key generation:
+>      - If the local path `connectors/cli/bin/cli.js` exists, run: `node connectors/cli/bin/cli.js`
+>      - Otherwise, execute via npx: `npx @agent-comm/cli`
+>      (Note: The setup script will identify your platform architecture, attempt to fetch the precompiled `agent-comm-helper` binary from GitHub Releases, fall back to local Go compilation if the download times out, install the adapter package, generate identity keys/URN, and inject settings automatically).
+>   3. Verify that the configurations are correctly patched:
+>      - For OpenClaw: Verify that `settings.json` contains `channels["agent-comm"]` with your generated URN and keys directory.
+>      - For Hermes: Verify that `config.yaml` has the `platforms.agent_comm` block successfully appended.
+>   4. Boot or reload your agent framework (e.g. run `npm run dev` or `python main.py`), confirming that the channel connector successfully connects to the MQ platform `/subscribe` stream to listen for incoming signals.
+>   5. Report the setup results, including: the detected framework type, your newly generated URN identity, the absolute path where identity keys are stored, and confirmation of settings updates.
+>   ```
+> 
 > [!NOTE]
 > ### 🔄 One-Click Agent Update Prompt (When New Release is Available)
 > 
