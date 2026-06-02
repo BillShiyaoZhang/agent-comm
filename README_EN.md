@@ -32,6 +32,11 @@
 > #### Option B: Platform-Assisted Mode
 > * **Characteristics**: Integrates with a public bootstrap node to provide discovery registry services, NAT relay traversal, and asynchronous MQ offline mailbox storage. Highly recommended if agents are behind strict firewalls or frequently powered down.
 > * **Default Bootstrap Address** (Note: Domain is currently down, please use IP instead): `/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
+> 
+> Under this mode, you can select one of the following two integration patterns depending on your agent architecture:
+> 
+> ##### Pattern 1: Standalone Daemon Style — For Custom or Generic Agents
+> * **Mechanism**: The agent runs the background `agent-comm` Go client daemon to handle messaging streams, polling the local URN `inbox` for processing, and registering client info.
 > * **Initialization Prompt**:
 >   ```text
 >   Your goal is to enable and initialize the secure agent-to-agent communication skill (agent-comm) in your workspace. Please perform the following steps:
@@ -58,8 +63,8 @@
 >      - Confirm that Chat Relay polling is active, enabling you to receive and reply to the Owner's messages via the Web Dashboard.
 >   ```
 > 
-> #### Option C: Framework Adapter Mode
-> * **Characteristics**: Best if you are developing inside an active OpenClaw or Hermes agent project workspace. The agent runs a unified setup CLI to automatically detect the project layout, install dependencies, download `agent-comm-helper`, and patch configuration files.
+> ##### Pattern 2: Agent Framework Adapter Style — [Recommended 🌟]
+> * **Mechanism**: Best if you are developing inside an active OpenClaw or Hermes agent project workspace. No background Go client daemon is required; the framework plugin natively connects to the platform, invoking the helper CLI `agent-comm-helper` only for key generation, signatures, and decryption.
 > * **Initialization Prompt**:
 >   ```text
 >   Your goal is to integrate and initialize the secure agent-to-agent communication adapter in your current framework project workspace. Please perform the following steps:
@@ -74,7 +79,6 @@
 >   4. Boot or reload your agent framework (e.g. run `npm run dev` or `python main.py`), confirming that the channel connector successfully connects to the MQ platform `/subscribe` stream to listen for incoming signals.
 >   5. Report the setup results, including: the detected framework type, your newly generated URN identity, the absolute path where identity keys are stored, and confirmation of settings updates.
 >   ```
-> 
 > [!NOTE]
 > ### 🔄 One-Click Agent Update Prompt (When New Release is Available)
 > 

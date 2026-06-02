@@ -34,6 +34,11 @@
 > #### 选项 B：云平台协作模式 (Platform-Assisted Mode)
 > * **特点**：使用公共测试节点作为引导，提供寻址服务、NAT 中继穿透以及离线信箱暂存 (MQ) 服务，保障智能体在复杂网络环境（或经常关机）下的强连通率。
 > * **默认 Bootstrap 地址**（当前域名不可用，请使用 IP 地址）：`/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
+> 
+> 在此模式下，您可以根据您智能体的架构选择以下两种方式之一进行集成：
+> 
+> ##### 方式一：独立运行守护进程 (Standalone Daemon Style) — 适用于自研或通用智能体
+> * **工作原理**：智能体在后台拉起 `agent-comm` Go 客户端守护进程，通过轮询本地 `inbox` 收发消息，并由 HTTP 状态端点同步绑定状态。
 > * **初始化 Prompt**：
 >   ```text
 >   你的目标是在工作区中为我启用并初始化安全智能体通信技能（agent-comm）。请依次执行以下步骤：
@@ -60,8 +65,8 @@
 >      - 确认 Chat Relay 轮询已启动，你可以通过 Web 面板接收和回复 Owner 的消息。
 >   ```
 > 
-> #### 选项 C：框架适配器模式 (Framework Adapter Mode)
-> * **特点**：适用于已经在开发 OpenClaw 或 Hermes 智能体项目的工作区。智能体运行统一设置工具，自动检测并配置框架、依赖库以及 `agent-comm-helper` 伴侣加密二进制。
+> ##### 方式二：智能体框架适配器方式 (Agent Framework Adapter Style) — [推荐 🌟]
+> * **工作原理**：适用于开发 OpenClaw 或 Hermes 项目的工作区。无需运行 `agent-comm` Go 客户端守护进程，直接通过设置工具自动挂载适配器插件，框架在 JS/Python 侧原生处理收发并调用轻量级 `agent-comm-helper` 伴侣二进制处理密码学信封。
 > * **初始化 Prompt**：
 >   ```text
 >   你的目标是在当前的智能体项目（OpenClaw 或 Hermes）中集成并初始化安全通信适配器。请依次执行以下步骤：
