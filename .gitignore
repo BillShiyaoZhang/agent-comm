@@ -20,6 +20,8 @@ bootstrap_bin
 /agent-comm
 /agent-comm.exe
 /agent-comm-test
+agent-comm-helper
+agent-comm-helper.exe
 implementation_plan.md
 
 

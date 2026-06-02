@@ -49,11 +49,16 @@ jobs:
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
           go build -ldflags="-s -w" -o build/${{ matrix.artifact_name }} ./cmd/client/main.go
 
+          HELPER_NAME=$(echo "${{ matrix.artifact_name }}" | sed 's/agent-comm/agent-comm-helper/')
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
+          go build -ldflags="-s -w" -o build/$HELPER_NAME ./cmd/helper/main.go
+
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: build/${{ matrix.artifact_name }}
+          path: |
+            build/agent-comm-*
 
   publish:
     name: Create GitHub Release
@@ -118,7 +123,7 @@ jobs:
 
           dist = Path("release-dist")
           assets = []
-          binary_re = re.compile(r"^agent-comm-(linux|windows|darwin)-(amd64|arm64)(?:\.exe)?$")
+          binary_re = re.compile(r"^(agent-comm|agent-comm-helper)-(linux|windows|darwin)-(amd64|arm64)(?:\.exe)?$")
 
           for path in sorted(dist.iterdir()):
               if not path.is_file():
@@ -139,13 +144,15 @@ jobs:
               elif path.name.endswith(".py"):
                   asset["kind"] = "helper"
               else:
-                  asset["kind"] = "binary"
                   match = binary_re.match(path.name)
                   if match:
+                      asset["kind"] = "binary" if match.group(1) == "agent-comm" else "helper-binary"
                       asset["platform"] = {
-                          "os": match.group(1),
-                          "arch": match.group(2),
+                          "os": match.group(2),
+                          "arch": match.group(3),
                       }
+                  else:
+                      asset["kind"] = "binary"
 
               assets.append(asset)
 
