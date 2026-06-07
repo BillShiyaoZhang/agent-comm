@@ -9,7 +9,7 @@
 > 
 > ```text
 > Your goal is to integrate and initialize the secure agent-to-agent communication adapter in your current framework project workspace. Please perform the following steps:
-> 1. Identify your active agent project framework type in the current workspace. If the project is neither an OpenClaw framework (containing package.json) nor a Hermes framework (containing config.yaml or pyproject.toml), immediately output to the user: "Unsupported framework type, setup terminated." and stop.
+> 1. Identify your active agent project framework type. Prioritize checking if the `~/.hermes/` (Hermes) or `~/.openclaw/` (OpenClaw) directory exists in the user's home path. If unable to determine from home directories, check if the current workspace contains package.json (OpenClaw) or config.yaml / pyproject.toml (Hermes). If still not detected, immediately output to the user: "Unsupported framework type, setup terminated." and stop.
 > 2. Download and acquire the necessary companion binary (agent-comm-helper):
 >    a. Identify your active OS and CPU architecture, and directly download the latest precompiled release binary from the GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases).
 >       For example, on Linux amd64:
@@ -45,21 +45,40 @@
 > 
 > ```text
 > A new version of the framework secure communicator adapter and its companion helper binary (agent-comm-helper) is available. Please perform the following steps to perform a smooth update:
-> 1. Upgrade the adapter package under your agent project root depending on your active framework:
->    - For OpenClaw: Upgrade npm package via `npm install --save @agent-comm/openclaw-channel` or `npm update @agent-comm/openclaw-channel`
->    - For Hermes: Upgrade pip package via `pip install --upgrade hermes-platform-agent-comm` or `uv pip install --upgrade hermes-platform-agent-comm`
-> 2. Download the latest `release-manifest.json` and the automation helper script `release_manifest_fetch.py` from the GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases), saving them to the `~/.agent-comm/bin/` directory.
-> 3. Run the helper script to automatically download the latest precompiled helper binary (`agent-comm-helper`) matching your platform, and verify its checksum:
->      python3 release_manifest_fetch.py --manifest release-manifest.json --output-dir ~/.agent-comm/bin/ --helper
->      (Note: If you hit a download timeout, you can directly curl the helper binary to overwrite the old one:
->      curl -L -o ~/.agent-comm/bin/agent-comm-helper https://github.com/BillShiyaoZhang/agent-comm/releases/download/v0.5.6/agent-comm-helper-<os>-<arch>
->      Replace <os>-<arch> with your local environment, e.g., linux-amd64 / linux-arm64 / windows-amd64 / darwin-arm64)
-> 4. Ensure the companion helper binary has executable permissions (for Linux/macOS, run `chmod +x ~/.agent-comm/bin/agent-comm-helper`). Note: Your identity keys and generated URN stored inside `~/.openclaw/keys/agent-comm` or `~/.hermes/keys/agent-comm` are safe and will not be lost during upgrade.
-> 5. Run the companion initialization command to verify the helper works correctly and reports the same URN and public keys:
->    - Unix/macOS or WSL: `~/.agent-comm/bin/agent-comm-helper init <your_keys_directory_path>`
->    - Confirm the returned URN matches your original URN.
-> 6. Restart or reload your AI agent framework process so the updated adapter and new companion helper take effect.
-> 7. Report the update results, which must include: the upgraded adapter version, helper binary version, validation output of the `agent-comm-helper init` command, and confirmation of your agent framework connectivity.
+> 1. Stop the running local daemon process (agent-comm-helper):
+>    - Check if the daemon is managed by a system supervisor (e.g. `launchd` on macOS or `systemd` on Linux).
+>      - If using macOS `launchd` (such as `com.billshiyaozhang.agent-comm-helper` service): Run `launchctl unload ~/Library/LaunchAgents/com.billshiyaozhang.agent-comm-helper.plist` (or `launchctl stop com.billshiyaozhang.agent-comm-helper`) to stop it.
+>      - If using Linux `systemd` user service: Run `systemctl --user stop agent-comm-helper.service` to stop it.
+>    - If the daemon is run manually (normal background process):
+>      - On Linux/macOS: Run `pkill -f agent-comm-helper` or `kill $(lsof -t -i:45042)`.
+>      - On Windows: Run `taskkill /f /im agent-comm-helper.exe`.
+> 2. Download or compile the latest version of the companion helper binary (`agent-comm-helper`):
+>    a. Identify your active OS and CPU architecture, and directly download the latest precompiled release binary from the GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases) to overwrite the old binary (usually at `~/.agent-comm/bin/agent-comm-helper`).
+>    b. Ensure the companion helper binary has executable permissions (on Linux/macOS: run `chmod +x ~/.agent-comm/bin/agent-comm-helper`).
+>    c. (Fallback only - if the download fails or times out): Clone the latest agent-comm repository and compile it locally:
+>       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
+>       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper .
+> 3. Update the connector adapter plugin:
+>    a. Clone or pull the latest `agent-comm` source repository to a temporary directory.
+>    b. Install or upgrade the adapter package under your workspace root depending on your active framework:
+>       - For OpenClaw: Run `npm install <temp_dir>/connectors/openclaw-channel` under the workspace root.
+>       - For Hermes: Upgrade the package inside Hermes's own venv (usually `~/.hermes/hermes-agent/venv/bin/pip3`):
+>         ~/.hermes/hermes-agent/venv/bin/pip3 install --upgrade <temp_dir>/connectors/hermes-platform
+> 4. Verify the new helper binary works correctly and loads your original identity keys:
+>    Run the companion initialization command, pointing to your previous keys directory, and confirm the returned URN fingerprint matches your original URN:
+>    ~/.agent-comm/bin/agent-comm-helper init <your_keys_directory_path>
+> 5. Restart the local daemon (Local Daemon):
+>    - If the daemon is managed by a system supervisor (e.g. `launchd` or `systemd`), restart/load it using the service command:
+>      - macOS `launchd`: Run `launchctl load -w ~/Library/LaunchAgents/com.billshiyaozhang.agent-comm-helper.plist` (or `launchctl start com.billshiyaozhang.agent-comm-helper`).
+>      - Linux `systemd`: Run `systemctl --user start agent-comm-helper.service`.
+>    - If it was run manually, launch the daemon in the background:
+>      ~/.agent-comm/bin/agent-comm-helper daemon <your_keys_directory_path> <platform_url> [local_port]
+>      (Note: You can use the default platform address: http://8.130.40.38, local port defaults to 45042)
+>    - Verify the daemon is running: `curl http://127.0.0.1:45042/info`
+> 6. Restart or reload your AI agent framework process so the updated adapter connects to the restarted daemon:
+>    - For OpenClaw: Restart your framework dev server (e.g. run `npm run dev`).
+>    - For Hermes: Restart the gateway process (e.g. run `hermes gateway restart`) and verify in the logs that it successfully connects to the local daemon.
+> 7. Report the update results to me, including: the upgraded adapter version, helper binary version, verification of your URN matching the original, and confirmation of agent framework connectivity.
 > ```
 
 ---

@@ -19,6 +19,7 @@ import (
 	"github.com/BillShiyaoZhang/agent-comm/agent"
 	"github.com/BillShiyaoZhang/agent-comm/contacts"
 	pb "github.com/BillShiyaoZhang/agent-comm/proto"
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	goproto "google.golang.org/protobuf/proto"
@@ -45,6 +46,13 @@ type ContactRequest struct {
 	DisplayName string   `json:"display_name"`
 	Trusted     bool     `json:"trusted"`
 	Addrs       []string `json:"addrs"`      // Optional addresses to inject into Peerstore
+
+	// Mappings for agent-collaboration-web compatibility:
+	ContactURN       string `json:"contact_urn"`
+	Alias            string `json:"alias"`
+	TrustTier        string `json:"trust_tier"`
+	Ed25519PublicKey string `json:"ed25519_public_key"`
+	X25519PublicKey  string `json:"x25519_public_key"`
 }
 
 func runDaemon() {
@@ -213,36 +221,78 @@ func (ds *DaemonServer) handleAddContact(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if req.URN == "" || req.PeerID == "" || req.X25519PK == "" {
-		http.Error(w, "Missing urn, peer_id or x25519_pk", http.StatusBadRequest)
+	urn := req.URN
+	if urn == "" {
+		urn = req.ContactURN
+	}
+	displayName := req.DisplayName
+	if displayName == "" {
+		displayName = req.Alias
+	}
+	x25519PKHex := req.X25519PK
+	if x25519PKHex == "" {
+		x25519PKHex = req.X25519PublicKey
+	}
+	ed25519PKHex := req.Ed25519PK
+	if ed25519PKHex == "" {
+		ed25519PKHex = req.Ed25519PublicKey
+	}
+	trusted := req.Trusted
+	if !trusted && req.TrustTier != "" {
+		trusted = req.TrustTier == "self" || req.TrustTier == "family" || req.TrustTier == "friend"
+	}
+
+	if urn == "" || x25519PKHex == "" {
+		http.Error(w, "Missing URN or X25519 Public Key", http.StatusBadRequest)
 		return
 	}
 
-	x25519Bytes, err := hex.DecodeString(req.X25519PK)
+	x25519Bytes, err := hex.DecodeString(x25519PKHex)
 	if err != nil {
 		http.Error(w, "Invalid x25519_pk hex", http.StatusBadRequest)
 		return
 	}
 
 	var ed25519Bytes []byte
-	if req.Ed25519PK != "" {
-		ed25519Bytes, err = hex.DecodeString(req.Ed25519PK)
+	if ed25519PKHex != "" {
+		ed25519Bytes, err = hex.DecodeString(ed25519PKHex)
 		if err != nil {
 			http.Error(w, "Invalid ed25519_pk hex", http.StatusBadRequest)
 			return
 		}
 	}
 
-	c := &contacts.Contact{
-		URN:         req.URN,
-		PeerID:      req.PeerID,
-		X25519PK:    x25519Bytes,
-		Ed25519PK:   ed25519Bytes,
-		DisplayName: req.DisplayName,
-		Trusted:     req.Trusted,
+	peerIDStr := req.PeerID
+	if peerIDStr == "" && len(ed25519Bytes) > 0 {
+		libp2pPub, err := libp2pcrypto.UnmarshalEd25519PublicKey(ed25519Bytes)
+		if err != nil {
+			http.Error(w, "Failed to unmarshal ed25519 public key: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		pid, err := peer.IDFromPublicKey(libp2pPub)
+		if err != nil {
+			http.Error(w, "Failed to derive PeerID: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		peerIDStr = pid.String()
 	}
 
-	log.Printf("Adding contact: URN=%s, PeerID=%s\n", req.URN, req.PeerID)
+	if peerIDStr == "" {
+		http.Error(w, "Missing peer_id and unable to derive it without ed25519_public_key", http.StatusBadRequest)
+		return
+	}
+
+	c := &contacts.Contact{
+		URN:         urn,
+		PeerID:      peerIDStr,
+		X25519PK:    x25519Bytes,
+		Ed25519PK:   ed25519Bytes,
+		DisplayName: displayName,
+		Trusted:     trusted,
+		TrustTier:   req.TrustTier,
+	}
+
+	log.Printf("Adding contact: URN=%s, PeerID=%s\n", urn, peerIDStr)
 	if err := ds.agent.Contacts.Add(c); err != nil {
 		log.Printf("Failed to add contact: %v\n", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -263,12 +313,12 @@ func (ds *DaemonServer) handleAddContact(w http.ResponseWriter, r *http.Request)
 			}
 		}
 		if len(peerAddrs) > 0 {
-			peerID, err := peer.Decode(req.PeerID)
+			peerID, err := peer.Decode(peerIDStr)
 			if err == nil {
 				ds.agent.Host.Peerstore().AddAddrs(peerID, peerAddrs, 24*time.Hour)
-				log.Printf("Injected peerstore addrs for %s: %v\n", req.PeerID, peerAddrs)
+				log.Printf("Injected peerstore addrs for %s: %v\n", peerIDStr, peerAddrs)
 			} else {
-				log.Printf("Failed to decode peer ID '%s': %v\n", req.PeerID, err)
+				log.Printf("Failed to decode peer ID '%s': %v\n", peerIDStr, err)
 			}
 		}
 	}

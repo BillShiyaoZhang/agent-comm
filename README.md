@@ -6,7 +6,7 @@
 > ### 🚀 智能体一键启用 Prompt
 > ```text
 > 你的目标是在当前的智能体项目中集成并初始化安全通信适配器。请依次执行以下步骤：
-> 1. 识别当前工作区所属的智能体项目框架类型。如果既不是 OpenClaw 框架（含有 package.json）也不是 Hermes 框架（含有 config.yaml 或 pyproject.toml），请立即向用户输出错误信息："当前项目框架不受支持，已终止配置。"并停止执行后续步骤。
+> 1. 识别当前工作区所属的智能体项目框架类型。优先通过检测用户家目录下是否存在 `~/.hermes/`（Hermes）或 `~/.openclaw/`（OpenClaw）目录来确认当前运行的智能体框架。如果无法通过家目录路径确定，再检查当前工作区是否含有 package.json（OpenClaw）或 config.yaml / pyproject.toml（Hermes）。如果仍未检测到，请立即向用户输出错误信息："当前项目框架不受支持，已终止配置。"并停止执行后续步骤。
 > 2. 下载并安装必要组件（本地守护进程二进制 agent-comm-helper）：
 >    a. 识别当前的操作系统与 CPU 架构，直接从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新发布的匹配预编译二进制。
 >       例如在 Linux amd64 环境下：
@@ -52,7 +52,7 @@
 >      "
 > 7. 验证并运行：
 >    - 如果是 OpenClaw，运行框架项目启动命令（例如 `npm run dev`），验证安全通信连接插件是否成功与本地守护进程建立 SSE 连接并开始监听消息。
->    - 如果是 Hermes，重启 gateway 进程（`hermes gateway restart`），然后在日志中确认出现 `[agent-comm-platform] Starting connection to local daemon` 字样，表明插件已被 Hermes 成功加载并连接到本地守护进程。
+>    - 如果是 Hermes，重启 gateway 进程（`hermes gateway restart`），然后在日志中确认出现 `gateway.run: Connecting to agent_comm...` 和 `✓ agent_comm connected`（或 `[agent-comm-platform] Starting connection to local daemon`）字样，表明插件已被 Hermes 成功加载并连接到本地守护进程。
 > 8. 向我（用户）发送初始化报告，必须包含：检测到的项目框架类型、新生成的智能体 URN 标识、密钥存放目录的绝对路径、本地守护进程启动指令（含 PID），以及适配器/插件是否已成功被框架加载并与本地 Daemon 建立 SSE 连接的确认状态。
 > ```
 > 
@@ -64,10 +64,14 @@
 > ```text
 > 检测到框架安全通信适配器与其依赖的伴侣程序（agent-comm-helper）有新的版本发布。请你执行以下步骤完成平滑更新：
 > 1. 停止运行当前的本地守护进程（agent-comm-helper）：
->    - 在 Linux/macOS 环境下，运行：`pkill -f agent-comm-helper` 或 `kill $(lsof -t -i:45042)`
->    - 在 Windows 环境下，运行：`taskkill /f /im agent-comm-helper.exe`
+>    - 检查该守护进程是否由系统服务管理器托管（例如 macOS 的 `launchd` 或 Linux 的 `systemd`）。
+>      - 若使用 macOS `launchd`（如 `com.billshiyaozhang.agent-comm-helper` 服务）：运行 `launchctl unload ~/Library/LaunchAgents/com.billshiyaozhang.agent-comm-helper.plist`（或 `launchctl stop com.billshiyaozhang.agent-comm-helper`）将其停止。
+>      - 若使用 Linux `systemd` 用户服务：运行 `systemctl --user stop agent-comm-helper.service` 将其停止。
+>    - 若非系统服务托管（手动后台运行的普通进程）：
+>      - 在 Linux/macOS 环境下，运行：`pkill -f agent-comm-helper` 或 `kill $(lsof -t -i:45042)`。
+>      - 在 Windows 环境下，运行：`taskkill /f /im agent-comm-helper.exe`。
 > 2. 下载或编译最新版的守护进程二进制（`agent-comm-helper`）：
->    a. 识别当前的操作系统与 CPU 架构，直接从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新发布的匹配预编译二进制并覆盖旧文件。
+>    a. 识别当前的操作系统与 CPU 架构，直接从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新发布的匹配预编译二进制并覆盖旧文件（默认为 `~/.agent-comm/bin/agent-comm-helper`）。
 >    b. 赋予其可执行权限（在 Linux/macOS 环境下运行 `chmod +x ~/.agent-comm/bin/agent-comm-helper`）。
 >    c. （仅当下载超时或失败时作为兜底）：克隆或拉取最新的 agent-comm 源码仓库并本地编译：
 >       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
@@ -82,8 +86,13 @@
 >    运行伴侣程序的初始指令，确保返回的 URN 与你升级前的 URN 完全一致（密钥及 URN 不会因更新而丢失）：
 >    ~/.agent-comm/bin/agent-comm-helper init <你之前存储密钥的目录绝对路径>
 > 5. 重新启动本地守护进程 (Local Daemon)：
->    ~/.agent-comm/bin/agent-comm-helper daemon <你之前存储密钥的目录绝对路径> <平台服务器地址> [本地端口]
->    （验证启动：curl http://127.0.0.1:45042/info）
+>    - 若该守护进程由系统服务管理器托管，请使用相应命令重新启动/加载它：
+>      - macOS `launchd`：运行 `launchctl load -w ~/Library/LaunchAgents/com.billshiyaozhang.agent-comm-helper.plist`（或 `launchctl start com.billshiyaozhang.agent-comm-helper`）。
+>      - Linux `systemd`：运行 `systemctl --user start agent-comm-helper.service`。
+>    - 若非系统服务托管，在后台重新拉起进程：
+>      ~/.agent-comm/bin/agent-comm-helper daemon <你之前存储密钥的目录绝对路径> <平台服务器地址> [本地端口]
+>      （注：平台服务器地址可填默认公网测试平台：http://8.130.40.38；本地端口默认为 45042）
+>    - 验证启动：curl http://127.0.0.1:45042/info
 > 6. 重启或重新加载你的智能体框架进程：
 >    - 如果是 OpenClaw，重新运行启动命令（例如 `npm run dev`）。
 >    - 如果是 Hermes，重启 gateway 进程（`hermes gateway restart`）并查看日志确认成功连接至本地守护进程。
