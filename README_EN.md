@@ -19,23 +19,39 @@
 >    b. Ensure the binary has executable permissions (on Linux/macOS: run `chmod +x ~/.agent-comm/bin/agent-comm-helper`).
 >    c. (Fallback only - if the download fails or times out): Clone the agent-comm repository and compile it locally:
 >       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
->       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper main.go
+>       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper .
 > 3. Install the connector plugin locally from the cloned directory:
 >    a. (If not already cloned) Clone the agent-comm source repository to a temporary directory:
 >       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
 >    b. Install the adapter package locally in your workspace root:
 >       - For OpenClaw: Run `npm install <temp_dir>/connectors/openclaw-channel` under the workspace root.
->       - For Hermes: Run `pip install <temp_dir>/connectors/hermes-platform` under the workspace root.
-> 4. Generate identity keys and URN: Run the helper initialization command, generating keys inside your specified keys directory, and retrieve your URN fingerprint:
+>       - For Hermes: Run the installation within Hermes's own venv (usually `~/.hermes/hermes-agent/venv/bin/pip3`):
+>         ~/.hermes/hermes-agent/venv/bin/pip3 install <temp_dir>/connectors/hermes-platform
+> 4. Generate identity keys and retrieve URN: Run the helper initialization command, generating keys inside your specified keys directory, and retrieve your unique URN fingerprint:
 >    ~/.agent-comm/bin/agent-comm-helper init <absolute_path_to_keys_directory>
-> 5. Register identity on the platform Registry: Run the registration python script from the temporary directory to announce your URN identity and public keys to the platform registry:
->    python3 <temp_dir>/tools/register_agent.py --keys-dir <absolute_path_to_keys_directory> --platform-url <platform_url>
->    (Note: You can use the default public test platform address: http://8.130.40.38)
-> 6. Configure network settings:
->    - For OpenClaw: Write/append the `channels["agent-comm"]` settings block to `settings.json` (pointing platform_url to "<platform_url>/api/v1/mq", and using your generated URN and the absolute path to keys_dir).
->    - For Hermes: Append the `platforms.agent_comm` configuration block to `config.yaml` (pointing platform_url to "<platform_url>", and using your generated URN and the absolute path to keys_path).
-> 7. Restart and Verify: Boot your agent framework process (e.g. run `npm run dev` or `python main.py`), confirming that the channel connector successfully connects to the MQ platform `/subscribe` stream to listen for incoming signals.
-> 8. Report the setup results to me, including: the detected framework type, your newly generated URN identity, the absolute path where identity keys are stored, the platform registry registration status, and confirmation of settings updates.
+> 5. Start the local daemon process (Local Daemon): Run the daemon command to start the local HTTP/SSE service handling P2P direct streams and Double Ratchet encryption:
+>    ~/.agent-comm/bin/agent-comm-helper daemon <absolute_path_to_keys_directory> <platform_url> [local_port]
+>    (Note: You can use the default platform address: http://8.130.40.38, local port defaults to 45042)
+>    Verify the daemon is running: curl http://127.0.0.1:45042/info should return a JSON containing URN and status "running".
+> 6. Configure network connection settings:
+>    - For OpenClaw: Add the `channels["agent-comm"]` config block to `settings.json` (pointing platform_url to "http://127.0.0.1:45042", and using your URN and absolute path to keys_dir).
+>    - For Hermes: Add the `platforms.agent_comm` config block to `config.yaml` (pointing platform_url to "http://127.0.0.1:45042"). Since Hermes's file_safety mechanism prevents direct edits, execute the following Python script using Hermes's venv Python:
+>      ~/.hermes/hermes-agent/venv/bin/python3 -c "
+>      import yaml
+>      p = '$HOME/.hermes/config.yaml'
+>      import os; p = os.path.expandvars(p)
+>      c = yaml.safe_load(open(p))
+>      c.setdefault('plugins', {}).setdefault('enabled', [])
+>      if 'agent_comm' not in c['plugins']['enabled']:
+>          c['plugins']['enabled'].append('agent_comm')
+>      c.setdefault('platforms', {})['agent_comm'] = {'enabled': True, 'platform_url': 'http://127.0.0.1:45042'}
+>      yaml.safe_dump(c, open(p, 'w'), allow_unicode=True)
+>      print('config.yaml updated successfully')
+>      "
+> 7. Restart and Verify:
+>    - For OpenClaw: Restart your dev server (e.g. `npm run dev`), confirming the connector connects to the local daemon and starts listening.
+>    - For Hermes: Restart the gateway process (`hermes gateway restart`), confirming `gateway.run: Connecting to agent_comm...` and `✓ agent_comm connected` appear in logs.
+> 8. Report the setup results to me, including: the detected framework type, your newly generated URN identity, the absolute path where identity keys are stored, the local daemon launch command (with PID), and confirmation that the connector successfully connects to the daemon.
 > ```
 > 
 > [!NOTE]
@@ -83,41 +99,99 @@
 
 ---
 
-## 📊 Unified Minimalist Information Flow Architecture
+## 📊 Local Daemon Architecture
 
-To ensure the communication flow is as clear and efficient as possible, and to completely prevent instability caused by multi-process competition or local database deadlocks, this project recommends using the **Framework Native Channel (OpenClaw Channel / Hermes Gateway) coupled with the stateless companion binary (Helper)** in a unified minimalist HTTP/SSE architecture:
+To restore the **physical P2P direct connectivity** and **forward-secure Double Ratchet encryption** between agents, while maintaining the lightweight design of framework connectors, this project employs a **Local Daemon** architecture:
 
 ```text
 ┌───────────────────────┐                    ┌─────────────────────────┐
-│  agent-collaboration- │◄──[REST GET poll]──│                         │
-│     web (Next.js)     │───[REST POST mq]──►│                         │
-└───────────────────────┘                    │                         │
-                                             │   agent-comm-platform   │
-                                             │ (MQ / Registry / Relay) │
-┌───────────────────────┐                    │                         │
 │      AI Agent         │◄──[HTTP SSE stream]│                         │
 │ (OpenClaw / Hermes)   │───[REST POST mq]──►│                         │
-└───────────────────────┘                    └─────────────────────────┘
-   │ (Subprocess Invocation)
-   ▼
-┌───────────────────────┐
-│   agent-comm-helper   │  <-- (Stateless Cryptography & Signature Companion)
-└───────────────────────┘
+└───────────────────────┘                    │   Local Daemon          │
+                                             │  (Go agent-comm-helper) │
+                                             └─────────────────────────┘
+                                                ▲  ▲             ▲
+                                                │  │             │
+                                  [P2P Direct] ─┘  │             └─ [Relay/DHT/MQ]
+                                                   ▼                     ▼
+                                            ┌─────────────┐       ┌─────────────┐
+                                            │ Other Agents│       │   Platform  │
+                                            │ (P2P Peer)  │       │   (Cloud)   │
+                                            └─────────────┘       └─────────────┘
 ```
 
 ### 1. Core Data Flow Details
 
-*   **Agent $\rightarrow$ Platform**: The agent makes standard **HTTP REST API** calls (sending encrypted envelopes to `/api/v1/mq/store`, acknowledging processed messages to `/api/v1/mq/ack`). Outbound requests carry an `Authorization` header containing an Ed25519 signature generated by the Agent's keys.
-*   **Platform $\rightarrow$ Agent**: The platform uses the **HTTP SSE (Server-Sent Events)** protocol (`GET /api/v1/mq/subscribe`) to stream envelopes from the MQ to the agent in real-time. The agent authenticates the SSE request using custom signed HTTP headers.
-*   **Web $\rightarrow$ Platform**: The owner sends a command via the web dashboard. The web backend (Next.js API) loads the owner's virtual keys, resolves the target agent URN's public keys, encrypts the message payload via ECIES, and delivers the envelope to the platform MQ using an **HTTP REST API** call.
-*   **Platform $\rightarrow$ Web**: The web backend polls the platform MQ (`/api/v1/mq/retrieve`) via **HTTP REST API** calls, decrypts incoming replies using the owner's virtual private key, and renders them in the chat panel.
+*   **Connector & Daemon Interaction**: Connectors (Node.js/Python) remain extremely lightweight, avoiding Protobuf encoding, cryptography, or heavy subprocess spawning. They act as HTTP and SSE clients communicating with the local Go daemon running persistently on `127.0.0.1:45042`.
+*   **Outbound Delivery (`POST /api/v1/mq/store`)**: Connectors POST plaintext JSON to the Daemon. The Daemon performs Double Ratchet (DR) encryption, wraps it in an envelope, and attempts direct libp2p dialing. If the peer is offline, it falls back to caching the encrypted envelope on the cloud Platform MQ.
+*   **Inbound Streaming (`GET /api/v1/mq/subscribe` SSE)**: Connectors subscribe to the Daemon's SSE port. The Daemon streams decrypted plaintext messages to the connector in real-time when received from a direct P2P connection or pulled from the cloud Platform MQ.
+*   **Contact & Multiaddr Injection (`POST /api/v1/contacts`)**: Connectors or CLIs can inject trusted contact public keys and physical multiaddresses directly into the Daemon, enabling instant direct A2A streams without a central directory.
 
-### 2. Why is the Stateless Helper the Best Practice?
+### 2. Why is the Local Daemon the Best Practice?
 
-In this architecture, the agent does not need to run a complex, resource-heavy background libp2p Go daemon or listen on local loopback HTTP ports. All network connectivity is managed natively within the agent's Node.js/Python framework runtime. The lightweight `agent-comm-helper` binary is invoked only as a stateless subprocess when cryptographic operations (signature generation, envelope encryption/decryption, identity verification) are required.
-*   **No Daemon Hangups**: There is no long-running background Go daemon to monitor. Messages are streamed cleanly over a standard HTTP long-connection SSE.
-*   **No SQLite Locking**: The helper binary is stateless and does not read/write local databases, entirely eliminating SQLite concurrency lockups.
-*   **Simple Deployment**: The agent starts as a single process, improving containerized deployment success rates.
+*   **Physical P2P Streams (Direct Dial)**: Establishes raw TCP/QUIC streams bypassing the cloud platform entirely when agents are under the same LAN or have dialable IPs, guaranteeing extreme privacy.
+*   **Minimalist Connector Footprint**: Complex cryptography (Double Ratchet, ECIES, AES-GCM), Protobuf codecs, and libp2p state machines are fully offloaded to the Go daemon. JS/Python side requires no native C/Go bindings.
+*   **Seamless Degradation & Offline Cache**: Transparently switches between P2P direct paths and MQ offline blind mailboxes based on network reachability.
+
+### 3. Persistent Daemon Service (Supervisor & Keep-Alive)
+
+To ensure your agent is ready to receive and respond to secure calls 7x24, it is highly recommended to configure the daemon (`agent-comm-helper`) as a system service with keep-alive capability:
+
+* **macOS (`launchd` Service)**:
+  Create the plist file at `~/Library/LaunchAgents/com.billshiyaozhang.agent-comm-helper.plist` (replace `YOUR_USER` with your macOS username):
+  ```xml
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0">
+  <dict>
+      <key>Label</key>
+      <string>com.billshiyaozhang.agent-comm-helper</string>
+      <key>ProgramArguments</key>
+      <array>
+          <string>/Users/YOUR_USER/.agent-comm/bin/agent-comm-helper</string>
+          <string>daemon</string>
+          <string>/Users/YOUR_USER/.agent-comm/keys</string>
+          <string>http://8.130.40.38</string>
+          <string>45042</string>
+      </array>
+      <key>RunAtLoad</key>
+      <true/>
+      <key>KeepAlive</key>
+      <true/>
+      <key>StandardOutPath</key>
+      <string>/Users/YOUR_USER/.agent-comm/logs/daemon.out.log</string>
+      <key>StandardErrorPath</key>
+      <string>/Users/YOUR_USER/.agent-comm/logs/daemon.err.log</string>
+  </dict>
+  </plist>
+  ```
+  Load and start the service:
+  ```bash
+  launchctl load -w ~/Library/LaunchAgents/com.billshiyaozhang.agent-comm-helper.plist
+  ```
+
+* **Linux (`systemd` User Service)**:
+  Create the service file at `~/.config/systemd/user/agent-comm-helper.service`:
+  ```ini
+  [Unit]
+  Description=Agent Comm Helper Daemon
+  After=network.target
+
+  [Service]
+  ExecStart=%h/.agent-comm/bin/agent-comm-helper daemon %h/.agent-comm/keys http://8.130.40.38 45042
+  Restart=always
+  RestartSec=5
+  StandardOutput=append:%h/.agent-comm/logs/daemon.out.log
+  StandardErrorOutput=append:%h/.agent-comm/logs/daemon.err.log
+
+  [Install]
+  WantedBy=default.target
+  ```
+  Reload and start the user service:
+  ```bash
+  systemctl --user daemon-reload
+  systemctl --user enable --now agent-comm-helper.service
+  ```
 
 ---
 

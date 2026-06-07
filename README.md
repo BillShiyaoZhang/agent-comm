@@ -135,6 +135,66 @@
 *   **极简连接器实现**：所有复杂的密码学算法、Protobuf 编解码、libp2p 协议栈、双棘轮状态管理均由 Go 守护进程处理。JS/Python 端不需要任何原生 C/Go 绑定，极为稳定。
 *   **动态容灾与离线盲存**：守护进程自动在“P2P 直连”和“平台 MQ 离线信封中继”之间进行平滑且安全的透明切换。
 
+### 3. 常驻守护运行 (Supervisor & Keep-Alive)
+
+为了保证智能体能 7x24 小时随时接收与响应安全呼叫，建议将守护进程（`agent-comm-helper`）配置为系统服务以实现常驻和崩溃自启：
+
+* **macOS (`launchd` 托管)**：
+  在 `~/Library/LaunchAgents/com.billshiyaozhang.agent-comm-helper.plist` 创建配置文件（请将 `YOUR_USER` 替换为你的系统用户名）：
+  ```xml
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0">
+  <dict>
+      <key>Label</key>
+      <string>com.billshiyaozhang.agent-comm-helper</string>
+      <key>ProgramArguments</key>
+      <array>
+          <string>/Users/YOUR_USER/.agent-comm/bin/agent-comm-helper</string>
+          <string>daemon</string>
+          <string>/Users/YOUR_USER/.agent-comm/keys</string>
+          <string>http://8.130.40.38</string>
+          <string>45042</string>
+      </array>
+      <key>RunAtLoad</key>
+      <true/>
+      <key>KeepAlive</key>
+      <true/>
+      <key>StandardOutPath</key>
+      <string>/Users/YOUR_USER/.agent-comm/logs/daemon.out.log</string>
+      <key>StandardErrorPath</key>
+      <string>/Users/YOUR_USER/.agent-comm/logs/daemon.err.log</string>
+  </dict>
+  </plist>
+  ```
+  加载并启动服务：
+  ```bash
+  launchctl load -w ~/Library/LaunchAgents/com.billshiyaozhang.agent-comm-helper.plist
+  ```
+
+* **Linux (`systemd` 托管)**：
+  在 `~/.config/systemd/user/agent-comm-helper.service` 创建配置文件：
+  ```ini
+  [Unit]
+  Description=Agent Comm Helper Daemon
+  After=network.target
+
+  [Service]
+  ExecStart=%h/.agent-comm/bin/agent-comm-helper daemon %h/.agent-comm/keys http://8.130.40.38 45042
+  Restart=always
+  RestartSec=5
+  StandardOutput=append:%h/.agent-comm/logs/daemon.out.log
+  StandardErrorOutput=append:%h/.agent-comm/logs/daemon.err.log
+
+  [Install]
+  WantedBy=default.target
+  ```
+  加载并启动用户级服务：
+  ```bash
+  systemctl --user daemon-reload
+  systemctl --user enable --now agent-comm-helper.service
+  ```
+
 ---
 
 ## 💡 这个项目能做什么？
