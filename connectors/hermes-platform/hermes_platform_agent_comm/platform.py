@@ -79,6 +79,7 @@ class AgentCommAdapter(BasePlatformAdapter):
             if response.status != 200:
                 raise Exception(f"Subscribe returned status code {response.status}")
 
+            print(f"[agent-comm-platform] SSE connection successfully established to daemon: {url}")
             self._log_debug("sse_connected", {"url": url})
             while self.running:
                 line = response.readline()

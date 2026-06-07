@@ -404,11 +404,12 @@ func (ds *DaemonServer) handleSubscribe(w http.ResponseWriter, r *http.Request) 
 func (ds *DaemonServer) broadcast(msg string) {
 	ds.clientsMu.Lock()
 	defer ds.clientsMu.Unlock()
+	log.Printf("Broadcasting SSE event to %d active subscriber(s): %s\n", len(ds.clients), msg)
 	for ch := range ds.clients {
 		select {
 		case ch <- msg:
 		default:
-			// Client channel full, skip
+			log.Printf("Warning: Client subscriber channel full, skipping event broadcast\n")
 		}
 	}
 }
