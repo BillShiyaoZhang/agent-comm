@@ -266,6 +266,18 @@ func LoadOrCreateIdentity(keysDir string) (*IdentityKeys, error) {
 		keysDir = DefaultKeysDir()
 	}
 
+	// Expand ~ or ~/ to user home directory
+	if keysDir == "~" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			keysDir = home
+		}
+	} else if len(keysDir) > 2 && (keysDir[:2] == "~/" || keysDir[:2] == "~\\") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			keysDir = filepath.Join(home, keysDir[2:])
+		}
+	}
+	keysDir = filepath.Clean(keysDir)
+
 	if err := os.MkdirAll(keysDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create keys directory: %w", err)
 	}
