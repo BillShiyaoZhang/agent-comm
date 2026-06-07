@@ -1,2 +1,2 @@
-from .platform import AgentCommAdapter
+from .plugin import register
 

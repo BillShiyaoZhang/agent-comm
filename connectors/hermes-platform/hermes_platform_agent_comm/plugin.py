@@ -1,7 +1,7 @@
 import os
 from gateway.platforms.base import BasePlatformAdapter
 from gateway.config import Platform
-from hermes_platform_agent_comm.platform import AgentCommAdapter
+from .platform import AgentCommAdapter
 
 def check_requirements() -> bool:
     return True

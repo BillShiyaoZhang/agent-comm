@@ -1,0 +1,6 @@
+name: agent_comm
+label: "Agent Comm"
+kind: platform
+version: 1.0.0
+description: "Unified P2P Encryption Agent Messaging Platform adapter for Hermes"
+author: "Bill Shiyao Zhang"

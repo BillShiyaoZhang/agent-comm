@@ -6,7 +6,7 @@
 > ### 🚀 智能体一键启用 Prompt
 > ```text
 > 你的目标是在当前的智能体项目中集成并初始化安全通信适配器。请依次执行以下步骤：
-> 1. 识别当前工作区所属的智能体项目框架类型。优先通过检测用户家目录下是否存在 `~/.hermes/`（Hermes）或 `~/.openclaw/`（OpenClaw）目录来确认当前运行的智能体框架。如果无法通过家目录路径确定，再检查当前工作区是否含有 package.json（OpenClaw）或 config.yaml / pyproject.toml（Hermes）。如果仍未检测到，请立即向用户输出错误信息："当前项目框架不受支持，已终止配置。"并停止执行后续步骤。
+> 1. 识别当前工作区所属的智能体项目框架类型。你的 Agent 框架是以下当中的任何一种吗？OpenClaw, Hermes。如果无法确定，请立即向用户输出错误信息："无法确定当前项目框架（或不受支持），已终止配置。"并停止执行后续步骤。
 > 2. 下载并安装必要组件（本地守护进程二进制 agent-comm-helper）：
 >    a. 识别当前的操作系统与 CPU 架构，直接从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新发布的匹配预编译二进制。
 >       例如在 Linux amd64 环境下：
@@ -17,15 +17,18 @@
 >    c. （仅当网络超时或下载失败时作为兜底）：克隆 agent-comm 源码仓库并本地编译：
 >       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
 >       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper .
-> 3. 本地集成安装适配器插件：
+> 3. 本地集成安装适配器插件与技能手册：
 >    a. （若未克隆）将 agent-comm 源码仓库克隆至本地临时目录中：
 >       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
->    b. 本地安装适配器包：
+>    b. 本地部署/安装适配器与技能：
 >       - 如果是 OpenClaw 框架，在你的当前工作区根目录下执行：`npm install <temp_dir>/connectors/openclaw-channel`
->       - 如果是 Hermes 框架，必须安装到 Hermes 自身的 venv 中（注意不是当前工作区的 venv）：
->         找到 Hermes 的 venv pip 路径（通常为 `~/.hermes/hermes-agent/venv/bin/pip3`），然后执行：
->         ~/.hermes/hermes-agent/venv/bin/pip3 install <temp_dir>/connectors/hermes-platform
->         这会将 `hermes-platform-agent-comm` 包安装到 Hermes 的运行环境中，并自动注册 `hermes_agent.plugins` entry point，使 Hermes 能在启动时发现该平台插件。
+>       - 如果是 Hermes 框架，不需要运行 pip 安装，而是执行以下操作以进行本地 User Plugin 和 Skill 部署：
+>         1. 创建用户插件及技能存放目录（如果不存在）：
+>            mkdir -p ~/.hermes/plugins/agent_comm ~/.hermes/skills/agent-comm
+>         2. 将适配器平台插件拷贝至 Hermes 用户插件目录下：
+>            cp -r <temp_dir>/connectors/hermes-platform/hermes_platform_agent_comm/* ~/.hermes/plugins/agent_comm/
+>         3. 将技能手册拷贝至 Hermes 技能目录下，以确保 Hermes 自动识别该技能：
+>            cp <temp_dir>/SKILL.md ~/.hermes/skills/agent-comm/SKILL.md
 > 4. 初始化身份密钥并提取标识：运行伴侣程序的初始化命令，在指定的绝对路径密钥目录下生成身份密钥，并返回你的唯一数字身份证 URN 标识：
 >    ~/.agent-comm/bin/agent-comm-helper init <你指定的密钥存放目录 of 绝对路径>
 > 5. 启动本地守护进程 (Local Daemon)：运行伴侣程序的 daemon 命令，拉起本地 HTTP/SSE 服务处理 P2P 直连与双棘轮加密：
@@ -77,12 +80,13 @@
 >    c. （仅当下载超时或失败时作为兜底）：克隆或拉取最新的 agent-comm 源码仓库并本地编译：
 >       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
 >       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper .
-> 3. 更新适配器插件：
+> 3. 更新适配器插件与技能手册：
 >    a. 拉取或克隆最新的 `agent-comm` 源码仓库至临时目录中。
 >    b. 根据你的智能体框架类型更新安装：
 >       - 如果是 OpenClaw 框架，在你的当前工作区根目录下执行：`npm install <temp_dir>/connectors/openclaw-channel`
->       - 如果是 Hermes 框架，在 Hermes 自身的 venv 中执行升级安装：
->         ~/.hermes/hermes-agent/venv/bin/pip3 install --upgrade <temp_dir>/connectors/hermes-platform
+>       - 如果是 Hermes 框架，直接覆盖拷贝插件文件与技能手册：
+>         cp -r <temp_dir>/connectors/hermes-platform/hermes_platform_agent_comm/* ~/.hermes/plugins/agent_comm/
+>         cp <temp_dir>/SKILL.md ~/.hermes/skills/agent-comm/SKILL.md
 > 4. 验证新版伴侣程序是否工作正常，且能正确加载原有身份密钥：
 >    运行伴侣程序的初始指令，确保返回的 URN 与你升级前的 URN 完全一致（密钥及 URN 不会因更新而丢失）：
 >    ~/.agent-comm/bin/agent-comm-helper init <你之前存储密钥的目录绝对路径>

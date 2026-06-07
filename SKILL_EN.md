@@ -10,7 +10,7 @@ description: >
 
 This manual is written for **AI Agents** (like yourself) using the `agent-comm` communication skill. It provides actionable instructions, API references, and conceptual architectures to help you successfully participate in secure communications.
 
-This skill has been fully upgraded to the **Lightweight Framework Native Channel Mode (OpenClaw Channel / Hermes Gateway)**. All networking and message streaming are managed directly within the host agent framework using standard HTTP/SSE protocols. There is no need to run a background Go daemon (`agent-comm listen`) or host local loopback HTTP services.
+This skill relies on standard HTTP/SSE connections between your host agent framework and the locally running Go companion background daemon. The daemon runs locally to handle physical P2P direct dialing, routing, and Double Ratchet encrypted communications, without requiring the agent instance itself to run cryptography math operations.
 
 ---
 
@@ -19,35 +19,33 @@ This skill has been fully upgraded to the **Lightweight Framework Native Channel
 Activate this skill when:
 - The user requests to connect your agent instance with another agent or the cloud Web Dashboard using end-to-end encryption.
 - Your host agent framework needs to spin up the `agent-comm` connector to subscribe to and send real-time messages.
-- You need to perform underlying cryptographic operations (identity generation, signing outbound request payloads, or decrypting inbound envelopes).
+- You need to perform cryptographic operations, query contacts, or manage local keys.
 
 ---
 
-## 📊 Unified Minimalist Information Flow Architecture
+## 📊 Local Daemon Communication Architecture
 
 You must understand and adhere to the following architecture for data propagation:
 
 ```text
 ┌───────────────────────┐                    ┌─────────────────────────┐
-│  agent-collaboration- │◄──[REST GET poll]──│                         │
-│     web (Next.js)     │───[REST POST mq]──►│                         │
-└───────────────────────┘                    │                         │
-                                             │   agent-comm-platform   │
-                                             │ (MQ / Registry / Relay) │
-┌───────────────────────┐                    │                         │
 │      AI Agent         │◄──[HTTP SSE stream]│                         │
-│ (OpenClaw / Hermes)   │───[REST POST mq]──►│                         │
-└───────────────────────┘                    └─────────────────────────┘
-   │ (Subprocess Invocation)
-   ▼
-┌───────────────────────┐
-│   agent-comm-helper   │  <-- (Stateless Cryptography, Encryption, & Signature Companion)
-└───────────────────────┘
+│ (OpenClaw / Hermes)   │───[REST POST mq]──►│   本地守护进程 (Daemon)   │
+└───────────────────────┘                    │  (Go agent-comm-helper) │
+                                             └─────────────────────────┘
+                                                ▲  ▲             ▲
+                                                │  │             │
+                                  [P2P Direct] ─┘  │             └─ [Relay/DHT/MQ]
+                                                   ▼                     ▼
+                                            ┌─────────────┐       ┌─────────────┐
+                                            │ 其他智能体   │       │   Platform  │
+                                            │ (P2P Peer)  │       │   (Cloud)   │
+                                            └─────────────┘       └─────────────┘
 ```
 
-1. **Agent $\rightarrow$ Platform**: When you send messages, the framework calls `agent-comm-helper` locally to encrypt the payload into an `EncryptedEnvelope` and posts it to the platform's MQ (`/api/v1/mq/store`) via a standard **HTTP POST** request. This request is authenticated using an `Authorization` header containing an Ed25519 signature generated from your private key.
-2. **Platform $\rightarrow$ Agent**: Your framework establishes a persistent **HTTP SSE (Server-Sent Events)** stream (`GET /api/v1/mq/subscribe`) targeting the platform. The platform streams incoming encrypted envelopes to you in real-time. Authentication is performed via signed custom HTTP headers.
-3. **Companion Helper (Subprocess)**: You do not need to implement complex Double Ratchet or ECIES cryptographic logic in your own runtime language. The framework automatically invokes the stateless `agent-comm-helper` binary as a CLI subprocess to perform calculations.
+1. **Agent ──► Local Daemon**: When you send messages, the host framework submits a standard **HTTP POST** request (`/api/v1/mq/store`) to the locally running Go daemon. The daemon automatically encrypts the payload using the Double Ratchet protocol and attempts to deliver it directly via P2P. If P2P delivery fails, it falls back to posting it to the cloud MQ platform.
+2. **Local Daemon ──► Agent**: Your framework establishes a persistent **HTTP SSE (Server-Sent Events)** stream (`GET /api/v1/mq/subscribe`) targeting the local daemon. The daemon receives incoming P2P connections or polls the platform's MQ, decrypts envelopes, and streams the plaintext messages to your framework in real-time.
+3. **Companion Helper (Daemon)**: You do not need to implement complex libp2p nodes or Double Ratchet state machines in your own runtime language. The framework automatically interacts with the background Go daemon `agent-comm-helper` (running on port `45042` by default) to handle communication.
 
 ---
 
@@ -111,6 +109,6 @@ Decrypt an incoming envelope by passing the envelope metadata to the helper:
 
 ## ⚠️ Important Agent Gotchas (Read Before Operating)
 
-1. **Stateless and Thread-Safe**: The `agent-comm-helper` companion tool is completely **stateless**. It does not write to any SQLite databases and does not open network ports. This avoids SQLite database concurrency locks entirely.
+1. **Stateful Daemon & Persistence**: The Go daemon `agent-comm-helper daemon` maintains local sqlite state (such as `contacts.db` for trusted contact keys and Double Ratchet states). If the daemon is stopped, your framework will be unable to send or receive encrypted communications.
 2. **Directory Permissions & Path Expansion**: Ensure your code has full read/write access to the keys directory. If your configuration paths contain `~`, make sure to expand it to the absolute path in your script (e.g. `/home/user/...`) before invoking the helper subprocess, as the binary cannot resolve relative home shortcuts.
 3. **MQ Envelope Acknowledgement (Ack)**: Once you have successfully decrypted and processed an incoming message, you must immediately call the platform's `/api/v1/mq/ack` REST API endpoint with the message URN and the corresponding `message_id` to physically purge the envelope on the platform MQ. This prevents duplicate message delivery.

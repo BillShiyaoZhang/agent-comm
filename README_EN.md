@@ -20,13 +20,18 @@
 >    c. (Fallback only - if the download fails or times out): Clone the agent-comm repository and compile it locally:
 >       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
 >       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper .
-> 3. Install the connector plugin locally from the cloned directory:
+> 3. Install the connector plugin & skill manual locally from the cloned directory:
 >    a. (If not already cloned) Clone the agent-comm source repository to a temporary directory:
 >       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
->    b. Install the adapter package locally in your workspace root:
+>    b. Deploy/install the adapter and skill locally:
 >       - For OpenClaw: Run `npm install <temp_dir>/connectors/openclaw-channel` under the workspace root.
->       - For Hermes: Run the installation within Hermes's own venv (usually `~/.hermes/hermes-agent/venv/bin/pip3`):
->         ~/.hermes/hermes-agent/venv/bin/pip3 install <temp_dir>/connectors/hermes-platform
+>       - For Hermes: Do not run pip installation. Instead, execute the following commands to deploy the user plugin and skill:
+>         1. Create the user plugin and skill directories (if they do not exist):
+>            mkdir -p ~/.hermes/plugins/agent_comm ~/.hermes/skills/agent-comm
+>         2. Copy the platform adapter plugin to the Hermes plugins directory:
+>            cp -r <temp_dir>/connectors/hermes-platform/hermes_platform_agent_comm/* ~/.hermes/plugins/agent_comm/
+>         3. Copy the skill manual to the Hermes skills directory to ensure Hermes automatically detects this skill:
+>            cp <temp_dir>/SKILL_EN.md ~/.hermes/skills/agent-comm/SKILL.md
 > 4. Generate identity keys and retrieve URN: Run the helper initialization command, generating keys inside your specified keys directory, and retrieve your unique URN fingerprint:
 >    ~/.agent-comm/bin/agent-comm-helper init <absolute_path_to_keys_directory>
 > 5. Start the local daemon process (Local Daemon): Run the daemon command to start the local HTTP/SSE service handling P2P direct streams and Double Ratchet encryption:
@@ -75,12 +80,13 @@
 >    c. (Fallback only - if the download fails or times out): Clone the latest agent-comm repository and compile it locally:
 >       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
 >       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper .
-> 3. Update the connector adapter plugin:
+> 3. Update the connector adapter plugin & skill manual:
 >    a. Clone or pull the latest `agent-comm` source repository to a temporary directory.
->    b. Install or upgrade the adapter package under your workspace root depending on your active framework:
+>    b. Upgrade the adapter package depending on your active framework:
 >       - For OpenClaw: Run `npm install <temp_dir>/connectors/openclaw-channel` under the workspace root.
->       - For Hermes: Upgrade the package inside Hermes's own venv (usually `~/.hermes/hermes-agent/venv/bin/pip3`):
->         ~/.hermes/hermes-agent/venv/bin/pip3 install --upgrade <temp_dir>/connectors/hermes-platform
+>       - For Hermes: Directly copy/overwrite the plugin files and skill manual:
+>         cp -r <temp_dir>/connectors/hermes-platform/hermes_platform_agent_comm/* ~/.hermes/plugins/agent_comm/
+>         cp <temp_dir>/SKILL_EN.md ~/.hermes/skills/agent-comm/SKILL.md
 > 4. Verify the new helper binary works correctly and loads your original identity keys:
 >    Run the companion initialization command, pointing to your previous keys directory, and confirm the returned URN fingerprint matches your original URN:
 >    ~/.agent-comm/bin/agent-comm-helper init <your_keys_directory_path>
