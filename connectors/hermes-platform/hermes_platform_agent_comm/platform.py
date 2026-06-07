@@ -105,6 +105,52 @@ class AgentCommAdapter(BasePlatformAdapter):
             print(f"[agent-comm-platform] Received incoming plaintext message from {sender_urn}")
             self._log_debug("incoming_event_parsed", {"sender_urn": sender_urn, "text": text})
 
+            # Check if URN is trusted in local contacts database
+            is_trusted = False
+            try:
+                db_paths = [
+                    os.path.expanduser("~/.agent-comm/keys/contacts.db"),
+                    os.path.expanduser("~/.hermes/keys/agent-comm/contacts.db")
+                ]
+                keys_path = self.config.extra.get("keys_path") if hasattr(self.config, "extra") else None
+                if keys_path:
+                    if keys_path.startswith("~"):
+                        keys_path = os.path.expanduser(keys_path)
+                    db_paths.append(os.path.join(keys_path, "contacts.db"))
+
+                for db_path in db_paths:
+                    if os.path.isfile(db_path):
+                        import sqlite3
+                        conn = sqlite3.connect(db_path)
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "SELECT trusted, trust_tier FROM contacts WHERE urn = ?",
+                            (sender_urn,)
+                        )
+                        row = cursor.fetchone()
+                        conn.close()
+                        if row:
+                            trusted, trust_tier = row
+                            if trusted == 1 or trust_tier in {"self", "family", "friend"}:
+                                is_trusted = True
+                                break
+            except Exception as e:
+                print(f"[agent-comm-platform] Error checking trusted contacts: {e}", file=sys.stderr)
+
+            # Auto-approve in pairing store if trusted
+            if is_trusted:
+                try:
+                    if self._message_handler and hasattr(self._message_handler, "__self__"):
+                        runner = self._message_handler.__self__
+                        pairing_store = getattr(runner, "pairing_store", None)
+                        if pairing_store:
+                            with pairing_store._lock:
+                                if not pairing_store.is_approved("agent_comm", sender_urn):
+                                    print(f"[agent-comm-platform] Auto-approving trusted contact: {sender_urn}")
+                                    pairing_store._approve_user("agent_comm", sender_urn, sender_urn)
+                except Exception as e:
+                    print(f"[agent-comm-platform] Error auto-approving in pairing store: {e}", file=sys.stderr)
+
             # Build a MessageEvent and hand it to the base class handler on the main loop
             source = self.build_source(
                 chat_id=sender_urn,
