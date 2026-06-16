@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -27,15 +28,19 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Keep all per-run fixtures under os.TempDir() so the test never writes
+	// to a hardcoded absolute path that might be read-only on a foreign host.
+	tmpRoot := filepath.Join(os.TempDir(), "agent_comm_test_mq")
+
 	// Clean up old keys
-	os.RemoveAll("/tmp/mq_relay_keys")
-	os.RemoveAll("/tmp/mq_sender_keys")
-	os.RemoveAll("/tmp/mq_receiver_keys")
-	os.RemoveAll("/tmp/mq_relay_db")
+	os.RemoveAll(filepath.Join(tmpRoot, "relay_keys"))
+	os.RemoveAll(filepath.Join(tmpRoot, "sender_keys"))
+	os.RemoveAll(filepath.Join(tmpRoot, "receiver_keys"))
+	os.RemoveAll(filepath.Join(tmpRoot, "relay_db"))
 
 	// --- Relay Node (Bootstrap) ---
 	fmt.Println("--- Setting up Relay (Bootstrap) ---")
-	relayKeys, _ := crypto.LoadOrCreateIdentity("/tmp/mq_relay_keys")
+	relayKeys, _ := crypto.LoadOrCreateIdentity(filepath.Join(tmpRoot, "relay_keys"))
 	relayURN := relayKeys.Ed25519.URN()
 	relayCfg := libp2p.Config{
 		ListenAddrs:  []string{"/ip4/0.0.0.0/tcp/45200", "/ip4/0.0.0.0/udp/0/quic"},
@@ -53,7 +58,7 @@ func main() {
 	regServer.Register()
 	regServer.HandleRegister(relayURN, relayHost.ID(), relayHost.Addrs(), relayKeys.X25519PK)
 
-	sqliteStore, _ := mq.NewSQLiteStore("/tmp/mq_relay_db")
+	sqliteStore, _ := mq.NewSQLiteStore(filepath.Join(tmpRoot, "relay_db"))
 	mqServer, _ := mq.NewServer(relayHost, sqliteStore)
 	defer mqServer.Close()
 
@@ -62,7 +67,7 @@ func main() {
 
 	// --- Sender Node (B) ---
 	fmt.Println("--- Setting up Sender (B) ---")
-	senderKeys, _ := crypto.LoadOrCreateIdentity("/tmp/mq_sender_keys")
+	senderKeys, _ := crypto.LoadOrCreateIdentity(filepath.Join(tmpRoot, "sender_keys"))
 	senderURN := senderKeys.Ed25519.URN()
 	senderCfg := libp2p.Config{
 		ListenAddrs:  []string{"/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic"},
@@ -89,7 +94,7 @@ func main() {
 
 	// --- Receiver Node (A) — NOT STARTED YET ---
 	fmt.Println("--- Setting up Receiver (A) keys only (offline) ---")
-	receiverKeys, _ := crypto.LoadOrCreateIdentity("/tmp/mq_receiver_keys")
+	receiverKeys, _ := crypto.LoadOrCreateIdentity(filepath.Join(tmpRoot, "receiver_keys"))
 	receiverURN := receiverKeys.Ed25519.URN()
 	fmt.Printf("Receiver: URN=%s (offline)\n\n", receiverURN)
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -100,10 +101,14 @@ func main() {
 	fmt.Printf("Registered self: %s -> %s\n", urn, h.ID())
 	fmt.Println()
 
-	// Step 5: Start MQ relay server (async message storage)
+	// Step 5: Start MQ relay server (async message storage). We default to a
+// platform-appropriate data directory ($XDG_DATA_HOME/agent-comm on Linux,
+// %LOCALAPPDATA%\agent-comm on Windows, ~/Library/Application Support/agent-comm
+// on macOS) instead of /tmp so the data survives restarts. The path can
+// always be overridden via the MQ_DB_PATH environment variable.
 	dbPath := os.Getenv("MQ_DB_PATH")
 	if dbPath == "" {
-		dbPath = "/tmp/relay_mq.db"
+		dbPath = defaultDataPath("relay_mq.db")
 	}
 	sqliteStore, err := mq.NewSQLiteStore(dbPath)
 	if err != nil {
@@ -119,10 +124,11 @@ func main() {
 	fmt.Printf("  DB: %s\n", dbPath)
 	fmt.Println()
 
-	// Step 6: Start WoT store and register handler
+	// Step 6: Start WoT store and register handler. Same defaulting strategy as
+// the MQ DB above; override via WOT_DB_PATH.
 	wotDBPath := os.Getenv("WOT_DB_PATH")
 	if wotDBPath == "" {
-		wotDBPath = "/tmp/relay_wot.db"
+		wotDBPath = defaultDataPath("relay_wot.db")
 	}
 	wotStore, err := wot.NewStore(wotDBPath, keys)
 	if err != nil {
@@ -179,4 +185,20 @@ func main() {
 	mqServer.Close()
 	wotStore.Close()
 	fmt.Println("Shutdown clean")
+}
+
+// defaultDataPath returns an OS-appropriate path under the agent-comm data
+// directory for the given file name. We prefer os.UserConfigDir() (which
+// resolves to ~/Library/Application Support, ~/.config, or %LOCALAPPDATA%
+// depending on platform) and fall back to os.TempDir() if even that fails.
+//
+// Using a real data directory instead of /tmp ensures the bootstrap node's
+// SQLite state survives reboots, which is critical for any production
+// deployment.
+func defaultDataPath(fileName string) string {
+	base, err := os.UserConfigDir()
+	if err != nil || base == "" {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "agent-comm", fileName)
 }

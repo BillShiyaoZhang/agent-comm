@@ -15,9 +15,15 @@ import (
 )
 
 const (
-	RealPlatformDomain = "8.130.40.38"
+	// RealPlatformDomain and RealPlatformPeerID are documented in
+	// agent.PlatformConfig; they default to the public Platform served over
+	// HTTPS at agent-communication.online. Tests that need to point at a
+	// different deployment should override the AGENT_PLATFORM_DOMAIN /
+	// AGENT_PLATFORM_PEER_ID environment variables when building the
+	// multiaddr below instead of editing this file.
+	RealPlatformDomain = "agent-communication.online"
 	RealPlatformPeerID = "12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib"
-	RemoteAgentURN     = "urn:hermes:agent:VBYEE9xFV6AiTZQcsvbBEz"
+	RemoteAgentURN     = "urn:agent-comm:agent:VBYEE9xFV6AiTZQcsvbBEz"
 )
 
 func TestRealPlatformLifecycle(t *testing.T) {
@@ -28,8 +34,10 @@ func TestRealPlatformLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// 1. Set up platform address info
-	quicMaddrStr := "/ip4/" + RealPlatformDomain + "/udp/45041/quic-v1/p2p/" + RealPlatformPeerID
+	// 1. Set up platform address info. We prefer /dns4/ so libp2p re-resolves
+	// the host at dial time; the underlying DNS cache will be primed by the
+	// first successful connection.
+	quicMaddrStr := "/dns4/" + RealPlatformDomain + "/udp/45041/quic-v1/p2p/" + RealPlatformPeerID
 	platformAddrInfo, err := peer.AddrInfoFromString(quicMaddrStr)
 	if err != nil {
 		t.Fatalf("failed to parse platform multiaddr: %v", err)

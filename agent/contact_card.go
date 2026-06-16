@@ -207,7 +207,7 @@ func ImportContactCard(h host.Host, mgr *session.Manager, store *contacts.Store,
 func URNFromEd25519PK(pubKey []byte) string {
 	h := sha256.Sum256(pubKey)
 	fingerprint := base58.Encode(h[:16])
-	return fmt.Sprintf("urn:hermes:agent:%s", fingerprint)
+	return fmt.Sprintf("%s:%s", crypto.DefaultURNPrefix, fingerprint)
 }
 
 // PeerIDFromEd25519PK derives a libp2p peer.ID from an Ed25519 public key.

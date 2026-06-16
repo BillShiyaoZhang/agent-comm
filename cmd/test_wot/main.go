@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
@@ -19,17 +20,22 @@ func main() {
 
 	ctx := context.Background()
 
+	// Pin all per-test fixtures under os.TempDir() so the program does not
+	// leak state outside the user's scratch directory or collide with other
+	// concurrent runs of the same binary.
+	tmpRoot := filepath.Join(os.TempDir(), "agent_comm_test_wot")
+
 	// Clean up
-	os.RemoveAll("/tmp/wot_alice_db")
-	os.RemoveAll("/tmp/wot_bob_db")
-	os.RemoveAll("/tmp/wot_carol_db")
-	os.RemoveAll("/tmp/wot_dave_db")
+	os.RemoveAll(filepath.Join(tmpRoot, "alice_db"))
+	os.RemoveAll(filepath.Join(tmpRoot, "bob_db"))
+	os.RemoveAll(filepath.Join(tmpRoot, "carol_db"))
+	os.RemoveAll(filepath.Join(tmpRoot, "dave_db"))
 
 	// --- Create 4 identities ---
-	aliceKeys, _ := crypto.LoadOrCreateIdentity("/tmp/wot_alice_keys")
-	bobKeys, _ := crypto.LoadOrCreateIdentity("/tmp/wot_bob_keys")
-	carolKeys, _ := crypto.LoadOrCreateIdentity("/tmp/wot_carol_keys")
-	daveKeys, _ := crypto.LoadOrCreateIdentity("/tmp/wot_dave_keys")
+	aliceKeys, _ := crypto.LoadOrCreateIdentity(filepath.Join(tmpRoot, "alice_keys"))
+	bobKeys, _ := crypto.LoadOrCreateIdentity(filepath.Join(tmpRoot, "bob_keys"))
+	carolKeys, _ := crypto.LoadOrCreateIdentity(filepath.Join(tmpRoot, "carol_keys"))
+	daveKeys, _ := crypto.LoadOrCreateIdentity(filepath.Join(tmpRoot, "dave_keys"))
 
 	fmt.Printf("Alice: %s\n", aliceKeys.Ed25519.URN())
 	fmt.Printf("Bob:   %s\n", bobKeys.Ed25519.URN())
@@ -55,7 +61,7 @@ func main() {
 
 	// --- Alice creates Bob's trust claim (direct trust) ---
 	fmt.Println("--- Alice creates TRUSTED claim about Bob ---")
-	aliceStore, _ := wot.NewStore("/tmp/wot_alice_db", aliceKeys)
+	aliceStore, _ := wot.NewStore(filepath.Join(tmpRoot, "alice_db"), aliceKeys)
 	defer aliceStore.Close()
 
 	// Alice knows Bob's identity info from out-of-band verification
@@ -82,7 +88,7 @@ func main() {
 
 	// --- Carol creates Alice's trust claim ---
 	fmt.Println("--- Carol creates TRUSTED claim about Alice ---")
-	carolStore, _ := wot.NewStore("/tmp/wot_carol_db", carolKeys)
+	carolStore, _ := wot.NewStore(filepath.Join(tmpRoot, "carol_db"), carolKeys)
 	defer carolStore.Close()
 
 	aliceX25519PK := aliceKeys.X25519PK
@@ -221,7 +227,7 @@ func main() {
 
 	// --- Test 6: Untrusted path (Dave doesn't trust anyone) ---
 	fmt.Println("--- Test 6: Untrusted path (Dave has no trust relationships) ---")
-	daveStore, _ := wot.NewStore("/tmp/wot_dave_db", daveKeys)
+	daveStore, _ := wot.NewStore(filepath.Join(tmpRoot, "dave_db"), daveKeys)
 	defer daveStore.Close()
 	daveResolver := wot.NewResolver(aliceHost, daveStore)
 

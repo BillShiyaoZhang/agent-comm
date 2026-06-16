@@ -9,4 +9,10 @@ type Config struct {
 	ListenAddrs    []string
 	EnableRelay    bool
 	BootstrapNodes []peer.AddrInfo
+
+	// URNPrefix overrides the namespace prefix used to derive the agent's
+	// self-URN. An empty string means "use crypto.DefaultURNPrefix" which is
+	// framework-agnostic ("urn:agent-comm:agent"). Set this if you need a
+	// custom namespace, e.g. for migration from a previous prefix.
+	URNPrefix string
 }

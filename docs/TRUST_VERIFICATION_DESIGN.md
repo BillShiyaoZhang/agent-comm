@@ -7,7 +7,7 @@
 ## 1. 核心设计原则
 
 Hermes 安全通信体系的核心资产是 **自证明唯一标识 (URN)**。每个 URN 派生自节点的 Ed25519 身份公钥：
-$$\text{URN} = \text{urn:hermes:agent:base58(SHA256(Ed25519\_PK)[:16])}$$
+$$\text{URN} = \text{urn:agent-comm:agent:base58(SHA256(Ed25519\_PK)[:16])}$$
 
 本方案以此为信任根（Root of Trust），通过**签名强绑定**与**离线可验证性**，使得任何中间中转平台无法悄悄替换加密公钥（X25519）而不被端侧察觉。
 

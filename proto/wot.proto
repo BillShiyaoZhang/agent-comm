@@ -13,8 +13,8 @@ enum TrustLevel {
 // A signed claim that issuer vouches for subject's identity.
 // The signature is over SHA256(issuer_urn || subject_urn || subject_peer_id || subject_x25519_pk || level || issued_at).
 message TrustClaim {
-  string issuer_urn = 1;          // Who made this claim (e.g., "urn:hermes:agent:Charlie")
-  string subject_urn = 2;          // Who is being claimed about (e.g., "urn:hermes:agent:Alice")
+  string issuer_urn = 1;          // Who made this claim (e.g., "urn:agent-comm:agent:Charlie")
+  string subject_urn = 2;          // Who is being claimed about (e.g., "urn:agent-comm:agent:Alice")
   string subject_peer_id = 3;      // Subject's libp2p PeerID (e.g., "12D3KooW...")
   bytes  subject_x25519_pk = 4;   // Subject's X25519 static public key (32 bytes)
   TrustLevel level = 5;           // TRUSTED, UNTRUSTED, or UNKNOWN

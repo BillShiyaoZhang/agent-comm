@@ -8,7 +8,9 @@ import os
 
 # Paths
 helper_path = os.path.expanduser("~/.agent-comm/bin/agent-comm-helper")
-platform_url = "http://8.130.40.38"
+# Default to the public HTTPS-enabled Platform; override via AGENT_PLATFORM_URL
+# if you want to point at a private deployment.
+platform_url = os.environ.get("AGENT_PLATFORM_URL", "https://agent-communication.online")
 
 def main():
     print("=== Integration Test: Double Daemon P2P Secure Delivery ===")
@@ -139,7 +141,7 @@ def main():
     # Check received message matches
     print("\n=== Result Verification ===")
     if len(received_messages) > 0:
-        expected_senders = {urn1, f"urn:hermes:peer:{peer_id1}"}
+        expected_senders = {urn1, f"urn:agent-comm:peer:{peer_id1}"}
         for msg in received_messages:
             sender = msg.get("sender_urn")
             if sender in expected_senders and msg.get("text") == "Hello Agent 2! This is a direct test message.":

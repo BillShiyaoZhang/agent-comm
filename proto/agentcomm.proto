@@ -22,7 +22,7 @@ message Envelope {
 // Contact JSON 对应的 Protobuf 结构
 message Contact {
     string version = 1;            // "1.0"
-    string urn = 2;                 // URN: urn:hermes:agent:<fingerprint>
+    string urn = 2;                 // URN: urn:agent-comm:agent:<fingerprint>
     string fingerprint = 3;        // Base58(SHA256(Ed25519PubKey))[:16]
     string peer_id = 4;            // libp2p PeerID (base58 encoded)
     bytes public_key = 5;          // Ed25519 公钥 (32 bytes)

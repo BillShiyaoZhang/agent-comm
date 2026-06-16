@@ -52,7 +52,7 @@
 - **Ed25519**：用于构建 `libp2p.Identity()` 并导出稳定的 PeerID。它也是 URN 计算的唯一源。
 - **X25519**：用于 ECIES 加密密钥协商。与 Ed25519 身份密钥分离，以实现密钥角色的安全隔离。
 
-URN 格式定义：`urn:hermes:agent:<base58(随机16字节公钥哈希)>`
+URN 格式定义：`urn:agent-comm:agent:<base58(随机16字节公钥哈希)>`
 
 URN 从 Ed25519 公钥直接派生，具备自证明属性（Self-Certifying）。
 
@@ -227,10 +227,10 @@ CREATE INDEX idx_expiry ON messages(expiry);
 ## Phase 4a — 信任网络 (Web of Trust / WoT)
 
 ### 待解决问题
-当 Bob 首次联系 Alice 时，如何保证 `urn:hermes:agent:Alice` 所指向的公钥真正属于 Alice 而不是中间人冒充的？Registry 寻址服务只提供物理寻址，无法确保证明其真实所有权。
+当 Bob 首次联系 Alice 时，如何保证 `urn:agent-comm:agent:Alice` 所指向的公钥真正属于 Alice 而不是中间人冒充的？Registry 寻址服务只提供物理寻址，无法确保证明其真实所有权。
 
 ### 解决方案
-对等节点签署信任声明。例如 Charlie 声明：“我信任 `urn:hermes:agent:Alice` (公钥=X，节点ID=12D3...)”。若 Bob 已经信任了 Charlie，那么 Bob 可以通过图的遍历推导出对 Alice 的传递信任。
+对等节点签署信任声明。例如 Charlie 声明：“我信任 `urn:agent-comm:agent:Alice` (公钥=X，节点ID=12D3...)”。若 Bob 已经信任了 Charlie，那么 Bob 可以通过图的遍历推导出对 Alice 的传递信任。
 
 ### 信任声明数据结构
 

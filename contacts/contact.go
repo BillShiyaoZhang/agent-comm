@@ -17,7 +17,7 @@ import (
 // Contact represents a known peer with their verified public keys.
 // A contact may be "trusted" (explicitly vouched for via WoT) or "known" (seen but not trusted).
 type Contact struct {
-	URN         string    // "urn:hermes:agent:Alice"
+	URN         string    // "urn:agent-comm:agent:Alice"
 	PeerID      string    // libp2p PeerID
 	X25519PK    []byte    // 32 bytes, for ECIES encryption
 	Ed25519PK   []byte    // 32 bytes, for verifying WoT claims

@@ -36,7 +36,7 @@ class TestAgentCommPlatform(unittest.TestCase):
 
         config = PlatformConfig(enabled=True, extra={
             "platform_url": "http://localhost:8080",
-            "urn": "urn:hermes:agent:VVDkKJJAExLmCgqhLW26AM",
+            "urn": "urn:agent-comm:agent:VVDkKJJAExLmCgqhLW26AM",
             "keys_path": test_keys_dir
         })
 

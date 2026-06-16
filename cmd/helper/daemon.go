@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -414,6 +415,19 @@ func (ds *DaemonServer) broadcast(msg string) {
 	}
 }
 
+// resolvePlatformBootstrap contacts the public Platform's HTTP API to discover
+// its current libp2p PeerID, then builds an AddrInfo suitable for dialing the
+// Platform over QUIC (preferred) or TCP.
+//
+// The HTTP API is treated as the source of truth for the PeerID. When the API
+// is unreachable we fall back to the well-known DefaultPlatformPeerID shipped
+// with the helper. Both QUIC and TCP multiaddrs are constructed and exposed
+// to libp2p so it can pick the best transport at dial time.
+//
+// In addition to the canonical /dns4/<host>/... and /ip4/<host>/... entries
+// we opportunistically resolve the host via a DNSCache and inject any cached
+// IPs as additional /ip4/<cached>/... addresses. This means DNS outages do not
+// take the daemon down: libp2p simply falls back to the last-known IP.
 func resolvePlatformBootstrap(platformURL string) (*peer.AddrInfo, error) {
 	parsed, err := url.Parse(platformURL)
 	if err != nil {
@@ -425,7 +439,7 @@ func resolvePlatformBootstrap(platformURL string) (*peer.AddrInfo, error) {
 		host = parsed.Path
 	}
 
-	// Try fetching bootstrap info from API
+	// Try fetching bootstrap info from API.
 	apiURL := platformURL
 	if !strings.HasSuffix(apiURL, "/") {
 		apiURL += "/"
@@ -435,8 +449,7 @@ func resolvePlatformBootstrap(platformURL string) (*peer.AddrInfo, error) {
 	var peerIDStr string
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(apiURL)
-	if err == nil && resp.StatusCode == 200 {
+	if resp, err := client.Get(apiURL); err == nil && resp.StatusCode == 200 {
 		var data struct {
 			PeerID string `json:"peer_id"`
 		}
@@ -447,44 +460,92 @@ func resolvePlatformBootstrap(platformURL string) (*peer.AddrInfo, error) {
 	}
 
 	if peerIDStr == "" {
-		// Fallback for public platform
-		if host == "8.130.40.38" {
-			peerIDStr = "12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib"
+		// Fall back to the bundled default peer ID for the well-known public
+		// platform. Hosts other than the bundled default do not get a magic
+		// fallback because we cannot know their PeerID.
+		if host == agent.DefaultPlatformDomain || host == "agent-communication.online" {
+			peerIDStr = agent.DefaultPlatformPeerID
 		} else {
 			return nil, fmt.Errorf("failed to fetch bootstrap info from platform, and no fallback peer ID for host %s", host)
 		}
 	}
 
-	// Construct multiaddr
-	var maddrStr string
-	// Check if host is IP
-	isIP := true
-	for _, char := range host {
-		if (char < '0' || char > '9') && char != '.' && char != ':' {
-			isIP = false
+	port := agent.DefaultPlatformP2PPort
+
+	// Build candidate multiaddrs. We always include a /dns4/ entry so libp2p
+	// can re-resolve on its own; we additionally include /ip4/<ip>/ entries
+	// resolved via the DNSCache to act as a fallback if DNS is unreachable.
+	var candidates []multiaddr.Multiaddr
+
+	appendCandidates := func(hostOrIP string, isIPLiteral bool) {
+		// QUIC is the preferred transport; TCP is the safety net.
+		quicTemplate := "/%s/%s/udp/%d/quic-v1/p2p/%s"
+		tcpTemplate := "/%s/%s/tcp/%d/p2p/%s"
+		proto := "dns4"
+		if isIPLiteral {
+			proto = "ip4"
+		}
+
+		if ma, err := multiaddr.NewMultiaddr(fmt.Sprintf(quicTemplate, proto, hostOrIP, port, peerIDStr)); err == nil {
+			candidates = append(candidates, ma)
+		}
+		if ma, err := multiaddr.NewMultiaddr(fmt.Sprintf(tcpTemplate, proto, hostOrIP, port, peerIDStr)); err == nil {
+			candidates = append(candidates, ma)
+		}
+	}
+
+	if !isIPLiteral(host) {
+		// Always expose the DNS form first.
+		appendCandidates(host, false)
+
+		// Try to also inject cached IPs. Failures here are non-fatal; libp2p
+		// will still be able to use the /dns4/ entry on its own.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if cache, cacheErr := agent.NewDNSCache(""); cacheErr == nil {
+			if ips, lookupErr := cache.LookupHost(ctx, host); lookupErr == nil {
+				for _, ip := range ips {
+					appendCandidates(ip, true)
+				}
+			}
+		}
+	} else {
+		appendCandidates(host, true)
+	}
+
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("failed to construct any bootstrap multiaddr for host %s", host)
+	}
+
+	pid, err := peer.Decode(peerIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid peer id from bootstrap: %w", err)
+	}
+	return &peer.AddrInfo{ID: pid, Addrs: candidates}, nil
+}
+
+// isIPLiteral reports whether host is a bare IPv4 or IPv6 address with no
+// DNS lookup required. Bracketed IPv6 forms (e.g. "[::1]") are also accepted.
+func isIPLiteral(host string) bool {
+	if host == "" {
+		return false
+	}
+	if h := strings.TrimPrefix(strings.TrimSuffix(host, "]"), "["); h != host {
+		host = h
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return true
+	}
+	// Heuristic: anything that contains only digits and dots is treated as
+	// an IPv4 literal even if it cannot be parsed by net.ParseIP (e.g. with
+	// a leading zero). This mirrors the behaviour of libp2p's multiaddr
+	// /ip4/ parser.
+	allDigitsAndDots := true
+	for _, c := range host {
+		if (c < '0' || c > '9') && c != '.' {
+			allDigitsAndDots = false
 			break
 		}
 	}
-
-	if isIP {
-		maddrStr = fmt.Sprintf("/ip4/%s/udp/45041/quic-v1/p2p/%s", host, peerIDStr)
-	} else {
-		maddrStr = fmt.Sprintf("/dns4/%s/udp/45041/quic-v1/p2p/%s", host, peerIDStr)
-	}
-
-	maddr, err := multiaddr.NewMultiaddr(maddrStr)
-	if err != nil {
-		// Try TCP fallback
-		if isIP {
-			maddrStr = fmt.Sprintf("/ip4/%s/tcp/45041/p2p/%s", host, peerIDStr)
-		} else {
-			maddrStr = fmt.Sprintf("/dns4/%s/tcp/45041/p2p/%s", host, peerIDStr)
-		}
-		maddr, err = multiaddr.NewMultiaddr(maddrStr)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return peer.AddrInfoFromP2pAddr(maddr)
+	return allDigitsAndDots && strings.Contains(host, ".")
 }

@@ -41,7 +41,11 @@ def invoke_helper(args: list[str]) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Register agent-comm identity with the Platform registry.")
     parser.add_argument("--keys-dir", "-k", required=True, help="Path to your keys directory")
-    parser.add_argument("--platform-url", "-p", default="http://8.130.40.38", help="Platform base URL (default: http://8.130.40.38)")
+    parser.add_argument(
+        "--platform-url", "-p",
+        default=os.environ.get("AGENT_PLATFORM_URL", "https://agent-communication.online"),
+        help="Platform base URL (default: https://agent-communication.online, override via AGENT_PLATFORM_URL env var)",
+    )
     args = parser.parse_args()
 
     keys_dir = os.path.abspath(os.path.expanduser(args.keys_dir))
@@ -67,7 +71,15 @@ def main() -> int:
     # Build registry signed message
     # Format: urn + "|" + peerID + "|" + x25519PubkeyHex + "|" + flag + "|" + big_endian_timestamp (8 bytes)
     timestamp = int(time.time())
-    peer_id = "12D3KooWKzoJzGnRpfd9ohJTYzGQbebi4rvRh1LWNnb4EaUBTThS" # virtual peer ID placeholder
+    # The peer_id is normally derived from the libp2p host started by the
+    # helper daemon. The helper subprocess used here does not expose that
+    # value, so we accept it from AGENT_PLATFORM_PEER_ID (or fall back to a
+    # well-known placeholder). Override this when running against a custom
+    # platform deployment.
+    peer_id = os.environ.get(
+        "AGENT_PLATFORM_PEER_ID",
+        "12D3KooWKzoJzGnRpfd9ohJTYzGQbebi4rvRh1LWNnb4EaUBTThS",  # virtual peer ID placeholder
+    )
     flag = "0" # stores_user_data is false
 
     canonical_str = f"{urn}|{peer_id}|{x25519_pubkey_hex}|{flag}|"

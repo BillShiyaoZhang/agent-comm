@@ -52,7 +52,7 @@ Each node has a pair of `IdentityKeys` (persisted to disk):
 - **Ed25519**: used for `libp2p.Identity()` — stable PeerID, URN derivation
 - **X25519**: used for ECIES encryption — separated from Ed25519 to ensure forward secrecy
 
-URN format: `urn:hermes:agent:<base58(random16bytes)>`
+URN format: `urn:agent-comm:agent:<base58(random16bytes)>`
 
 The URN is derived from the Ed25519 public key, hence it is self-certifying.
 
@@ -244,11 +244,11 @@ go run ./cmd/test_mq/    # Three-node test: Relay + Sender + Receiver (offline t
 
 ### Problem
 
-When Bob sends a message to Alice for the first time, how does Bob verify that `urn:hermes:agent:Alice` belongs to the real Alice and not an impostor? The Registry only provides URN→PeerID→pubkey mapping, without identity authentication.
+When Bob sends a message to Alice for the first time, how does Bob verify that `urn:agent-comm:agent:Alice` belongs to the real Alice and not an impostor? The Registry only provides URN→PeerID→pubkey mapping, without identity authentication.
 
 ### Solution
 
-Signed trust claims. If Charlie says "I trust `urn:hermes:agent:Alice` (key=X, peer=12D3...)", and Bob already trusts Charlie, Bob can infer transitive trust for Alice.
+Signed trust claims. If Charlie says "I trust `urn:agent-comm:agent:Alice` (key=X, peer=12D3...)", and Bob already trusts Charlie, Bob can infer transitive trust for Alice.
 
 ### Trust Claim
 
@@ -262,8 +262,8 @@ enum TrustLevel {
 }
 
 message TrustClaim {
-  string issuer_urn = 1;          // issuer (e.g., "urn:hermes:agent:Charlie")
-  string subject_urn = 2;          // subject (e.g., "urn:hermes:agent:Alice")
+  string issuer_urn = 1;          // issuer (e.g., "urn:agent-comm:agent:Charlie")
+  string subject_urn = 2;          // subject (e.g., "urn:agent-comm:agent:Alice")
   string subject_peer_id = 3;      // Subject's libp2p PeerID
   bytes  subject_x25519_pk = 4;   // Subject's X25519 static public key (32 bytes)
   TrustLevel level = 5;            // TRUSTED / UNTRUSTED / UNKNOWN

@@ -155,7 +155,7 @@ type Contact struct {
 	unknownFields protoimpl.UnknownFields
 
 	Version         string   `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`                                          // "1.0"
-	Urn             string   `protobuf:"bytes,2,opt,name=urn,proto3" json:"urn,omitempty"`                                                  // URN: urn:hermes:agent:<fingerprint>
+	Urn             string   `protobuf:"bytes,2,opt,name=urn,proto3" json:"urn,omitempty"`                                                  // URN: urn:agent-comm:agent:<fingerprint>
 	Fingerprint     string   `protobuf:"bytes,3,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`                                  // Base58(SHA256(Ed25519PubKey))[:16]
 	PeerId          string   `protobuf:"bytes,4,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`                              // libp2p PeerID (base58 encoded)
 	PublicKey       []byte   `protobuf:"bytes,5,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`                     // Ed25519 公钥 (32 bytes)

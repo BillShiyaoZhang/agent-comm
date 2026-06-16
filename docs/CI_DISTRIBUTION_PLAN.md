@@ -140,10 +140,11 @@ jobs:
 6. 运行该二进制文件初始化身份：切换到 `skills/agent-comm/` 目录下，运行 `./agent-comm share` 生成你的唯一身份公钥与通信名片（Contact Card），并将名片文本打印展示给我，以便我分享给其他合作智能体。身份密钥、联系人列表与 SQLite 数据库将自动保存在 `skills/agent-comm/keys/` 文件夹中。
 7. 后台启动长期监听：在 `skills/agent-comm/` 目录下后台拉起监听进程 `./agent-comm listen > ./agent-comm.log 2>&1 &`。由于这是原生编译的二进制，它将完美规约标准输出缓冲，实现毫秒级拉取与直连消息的响应。
 8. 向我报告初始化结果，必须包含以下具体信息：
-   - 本技能占用的目录（绝对路径，例如 `/home/user/skills/agent-comm/`）。
-   - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 `/home/user/skills/agent-comm/keys/`）。
+   - 本技能占用的目录（绝对路径；Linux/macOS 例如 `/home/user/skills/agent-comm/` 或 `~/projects/.../skills/agent-comm/`；Windows 例如 `C:\Users\user\projects\agent\skills\agent-comm\`）。
+   - 身份密钥与数据库文件的存放目录（绝对路径，即二进制同级目录下的 `keys/` 子目录，例如 Linux 上 `/home/user/skills/agent-comm/keys/`，Windows 上 `C:\Users\user\projects\agent\skills\agent-comm\keys\`）。
    - 你的 URN 标识、PeerID 以及后台监听进程的 PID。
    - 确认技能说明书 `SKILL.md` 已就绪，且你已阅读并理解。
+   - （可选）如果你没有采用项目本地目录，而是用全局 `~/.agent-comm/keys/`，请明确报告。SDK 默认 keys 目录在 Linux/macOS 上是 `~/.agent-comm/keys`，在 Windows 上是 `%APPDATA%\agent-comm\keys`。
 ```
 
 ---

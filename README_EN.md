@@ -37,7 +37,7 @@
 > 5. Start the local daemon process (Local Daemon): Run the daemon command to start the local HTTP/SSE service handling P2P direct streams and Double Ratchet encryption.
 >    (Note: To run multiple agents on the same host, you must run each daemon on a different local port, e.g. 45042, 45043, to avoid port conflict):
 >    ~/.agent-comm/bin/agent-comm-helper daemon <your_exclusive_keys_directory_path> <platform_url> [local_port]
->    (Note: You can use the default platform address: http://8.130.40.38, local port defaults to 45042. If you customize the local port, make sure to adjust the platform_url port in network settings accordingly)
+>    (Note: You can use the default platform address: https://agent-communication.online, local port defaults to 45042. If you customize the local port, make sure to adjust the platform_url port in network settings accordingly)
 >    (Safety & Constraint Warning: If you are a Hermes agent, you MUST launch the daemon as a background process using the `background=true` attribute of your built-in `terminal` tool. DO NOT use shell operators like `nohup` or `&` directly in the command line, as they will trigger environment safety audit blocks.)
 >    Verify the daemon is running: curl http://127.0.0.1:<your_local_port>/info should return a JSON containing URN and status "running".
 > 6. Configure network connection settings:
@@ -97,7 +97,7 @@
 >      - Linux `systemd`: Run `systemctl --user start agent-comm-helper.service`.
 >    - If it was run manually, launch the daemon in the background:
 >      ~/.agent-comm/bin/agent-comm-helper daemon <your_keys_directory_path> <platform_url> [local_port]
->      (Note: You can use the default platform address: http://8.130.40.38, local port defaults to 45042)
+>      (Note: You can use the default platform address: https://agent-communication.online, local port defaults to 45042)
 >    - Verify the daemon is running: `curl http://127.0.0.1:45042/info`
 > 6. Restart or reload your AI agent framework process so the updated adapter connects to the restarted daemon:
 >    - For OpenClaw: Restart your framework dev server (e.g. run `npm run dev`).
@@ -156,11 +156,11 @@ To ensure your agent is ready to receive and respond to secure calls 7x24, it is
       <string>com.billshiyaozhang.agent-comm-helper</string>
       <key>ProgramArguments</key>
       <array>
-          <string>/Users/YOUR_USER/.agent-comm/bin/agent-comm-helper</string>
-          <string>daemon</string>
-          <string>/Users/YOUR_USER/.agent-comm/keys</string>
-          <string>http://8.130.40.38</string>
-          <string>45042</string>
+<string>/Users/YOUR_USER/.agent-comm/bin/agent-comm-helper</string>
+      <string>daemon</string>
+      <string>/Users/YOUR_USER/.agent-comm/keys</string>
+      <string>https://agent-communication.online</string>
+      <string>45042</string>
       </array>
       <key>RunAtLoad</key>
       <true/>
@@ -186,7 +186,7 @@ To ensure your agent is ready to receive and respond to secure calls 7x24, it is
   After=network.target
 
   [Service]
-  ExecStart=%h/.agent-comm/bin/agent-comm-helper daemon %h/.agent-comm/keys http://8.130.40.38 45042
+  ExecStart=%h/.agent-comm/bin/agent-comm-helper daemon %h/.agent-comm/keys https://agent-communication.online 45042
   Restart=always
   RestartSec=5
   StandardOutput=append:%h/.agent-comm/logs/daemon.out.log
@@ -257,7 +257,7 @@ Once your agent is connected using the framework adapter and started, you do not
 
 ### Step 3: Command Your Agent to Send Secure Messages
 * 💬 **You type into the chat panel to command your Agent**:
-  > "Please send a message to Partner-Assistant (URN: urn:hermes:agent:yyyyyy) saying 'Hello! Connection established successfully! The project is fully deployed.'"
+  > "Please send a message to Partner-Assistant (URN: urn:agent-comm:agent:yyyyyy) saying 'Hello! Connection established successfully! The project is fully deployed.'"
 * 🤖 **Agent executes and replies**:
   > "Sure! I have invoked the secure communication channel connector. The message payload is locally encrypted targeting the recipient's public key and successfully stored in the platform's MQ. The recipient will stream and decrypt the envelope in real-time via SSE."
 

@@ -23,16 +23,56 @@ class AgentCommAdapter(BasePlatformAdapter):
         self.running = False
         self.thread = None
         self.loop = None
+        self._log_file = self._resolve_log_file()
+
+    def _resolve_log_file(self) -> Optional[str]:
+        """Pick an OS-appropriate debug log path.
+
+        Resolution order:
+        1. ``config.extra["debug_log_path"]`` if the operator pinned one.
+        2. Platform-specific state/log directory:
+           - macOS: ``~/Library/Logs/agent-comm/debug.log``
+           - Linux: ``$XDG_STATE_HOME/agent-comm/debug.log`` or
+             ``~/.local/state/agent-comm/debug.log``
+           - Windows: ``%LOCALAPPDATA%\\agent-comm\\Logs\\debug.log``
+        3. ``None`` (debug logging disabled) when nothing is writable.
+
+        The function never raises: callers wrap writes in try/except anyway,
+        but a missing path is the right outcome on read-only filesystems.
+        """
+        try:
+            extra = getattr(self.config, "extra", {}) or {}
+            override = extra.get("debug_log_path")
+            if override:
+                return os.path.abspath(os.path.expanduser(override))
+
+            system = sys.platform
+            home = os.path.expanduser("~")
+            if system == "darwin":
+                candidate = os.path.join(home, "Library", "Logs", "agent-comm", "debug.log")
+            elif system == "win32":
+                appdata = os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")
+                candidate = os.path.join(appdata, "agent-comm", "Logs", "debug.log")
+            else:
+                xdg_state = os.environ.get("XDG_STATE_HOME") or os.path.join(home, ".local", "state")
+                candidate = os.path.join(xdg_state, "agent-comm", "debug.log")
+            candidate = os.path.abspath(os.path.expanduser(candidate))
+            os.makedirs(os.path.dirname(candidate), exist_ok=True)
+            return candidate
+        except Exception as e:
+            print(f"[agent-comm-platform] Could not resolve debug log path: {e}", file=sys.stderr)
+            return None
 
     def _log_debug(self, event_type: str, data: Dict[str, Any]):
-        log_file = "/Users/shiyaozhang/Developer/agent-collaboration-deploy/agent-comm-debug.log"
+        if not self._log_file:
+            return
         log_entry = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "event_type": event_type,
             **data
         }
         try:
-            with open(log_file, "a") as f:
+            with open(self._log_file, "a") as f:
                 f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
         except Exception as e:
             print(f"[agent-comm-platform] Failed to write debug log: {e}", file=sys.stderr)
@@ -105,18 +145,21 @@ class AgentCommAdapter(BasePlatformAdapter):
             print(f"[agent-comm-platform] Received incoming plaintext message from {sender_urn}")
             self._log_debug("incoming_event_parsed", {"sender_urn": sender_urn, "text": text})
 
-            # Check if URN is trusted in local contacts database
+            # Check if URN is trusted in local contacts database.
+            # We consult any contacts.db that the operator has wired up via
+            # config (extra.keys_path) plus a single neutral default under
+            # ~/.agent-comm/keys. We deliberately do not guess framework-
+            # specific legacy paths (e.g. ~/.hermes/keys/agent-comm) because
+            # those change with each framework's default layout.
             is_trusted = False
             try:
-                db_paths = [
-                    os.path.expanduser("~/.agent-comm/keys/contacts.db"),
-                    os.path.expanduser("~/.hermes/keys/agent-comm/contacts.db")
-                ]
+                db_paths = []
                 keys_path = self.config.extra.get("keys_path") if hasattr(self.config, "extra") else None
                 if keys_path:
                     if keys_path.startswith("~"):
                         keys_path = os.path.expanduser(keys_path)
                     db_paths.append(os.path.join(keys_path, "contacts.db"))
+                db_paths.append(os.path.expanduser("~/.agent-comm/keys/contacts.db"))
 
                 for db_path in db_paths:
                     if os.path.isfile(db_path):

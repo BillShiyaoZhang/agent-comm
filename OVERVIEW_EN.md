@@ -147,12 +147,15 @@ go run ./cmd/platform_test/
 ```
 
 > [!NOTE]
-> **Staging Platform Configuration** (Note: Domain is currently down, please use IP instead. Refer to **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** for deployment details):
-> - **Public IP**: `8.130.40.38` (Replacing original domain `agent-communication.online`)
+> **配套公共 Platform 配置信息**（详情参考 **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** 仓库）：
+> - **HTTP API Base URL**：`https://agent-communication.online`（HTTPS，证书由 Let's Encrypt 颁发）
+> - **平台域名（用于 P2P 拨号）**：`agent-communication.online`
 > - **Platform PeerID**: `12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
-> - **Platform URN**: `urn:hermes:platform:ee8be13add63a020`
-> - **Recommended QUIC Bootstrap**: `/ip4/8.130.40.38/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
-> - **Backup TCP Bootstrap**: `/ip4/8.130.40.38/tcp/45041/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
+> - **Platform URN**: `urn:agent-comm:platform:ee8be13add63a020`
+> - **Recommended QUIC Bootstrap**: `/dns4/agent-communication.online/udp/45041/quic-v1/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
+> - **Backup TCP Bootstrap**: `/dns4/agent-communication.online/tcp/45041/p2p/12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib`
+> 
+> The defaults above can be overridden by environment variables: `AGENT_PLATFORM_URL`, `AGENT_PLATFORM_DOMAIN`, `AGENT_PLATFORM_PEER_ID`, `AGENT_PLATFORM_PORT`. DNS resolutions are cached to `os.UserCacheDir()/agent-comm/dns_cache.json` (default 1h TTL), with automatic fallback to cached IPs on DNS failure.
 
 ---
 

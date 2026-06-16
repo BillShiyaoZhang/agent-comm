@@ -27,6 +27,10 @@ const openclawChannelPath = path.resolve(__dirname, "../../openclaw-channel");
 const hermesPlatformPath = path.resolve(__dirname, "../../hermes-platform");
 const goSDKPath = path.resolve(__dirname, "../../../");
 
+// Default public Platform endpoint. Override with AGENT_PLATFORM_URL env var.
+const DEFAULT_PLATFORM_URL =
+  process.env.AGENT_PLATFORM_URL || "https://agent-communication.online";
+
 const https = require("https");
 const http = require("http");
 
@@ -228,11 +232,23 @@ try {
   process.exit(1);
 }
 
-// 3. Generate URN and Keys
+// 3. Generate URN and Keys. We default all frameworks to a single
+// framework-agnostic directory under the user's home so the same identity
+// can be reused across frameworks. Operators can still pass --keys-dir to
+// use a custom path.
 console.log("\n3. Generating secure keys & identity URN...");
-const keysDir = isOpenClaw
-  ? path.join(os.homedir(), ".openclaw", "keys", "agent-comm")
-  : path.join(os.homedir(), ".hermes", "keys", "agent-comm");
+let keysDir = process.env.AGENT_COMM_KEYS_DIR;
+if (!keysDir) {
+  // Process CLI flag overrides (e.g. "node cli.js init --keys-dir <path>")
+  const cliKeysIdx = process.argv.indexOf("--keys-dir");
+  if (cliKeysIdx >= 0 && process.argv[cliKeysIdx + 1]) {
+    keysDir = process.argv[cliKeysIdx + 1];
+  }
+}
+if (!keysDir) {
+  keysDir = path.join(os.homedir(), ".agent-comm", "keys");
+}
+keysDir = path.resolve(keysDir);
 
 fs.mkdirSync(keysDir, { recursive: true });
 
@@ -282,7 +298,9 @@ try {
       enabled: true,
       platform_url: "http://127.0.0.1:45042/api/v1/mq",
       urn: initRes.urn,
-      keys_dir: "~/.openclaw/keys/agent-comm"
+      // Use the resolved absolute path so frameworks that do not perform
+      // their own ~ expansion still locate the keys directory.
+      keys_dir: keysDir,
     };
 
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf8");
@@ -295,13 +313,15 @@ try {
       content = fs.readFileSync(configPath, "utf8");
     }
 
-    const configBlock = `
+    // Use the resolved absolute keys directory; this is what we just generated
+// keys into, so the runtime can read them back without any ~ expansion.
+const configBlock = `
 platforms:
   agent_comm:
     enabled: true
     platform_url: "http://127.0.0.1:45042"
     urn: "${initRes.urn}"
-    keys_path: "~/.hermes/keys/agent-comm"
+    keys_path: "${keysDir}"
 `;
 
     // Simple robust yaml patch
@@ -309,7 +329,7 @@ platforms:
       if (content.includes("agent_comm:")) {
         console.log("Configuration for agent_comm already exists in config.yaml. Skipping YAML write.");
       } else {
-        content = content.replace("platforms:", "platforms:\n  agent_comm:\n    enabled: true\n    platform_url: \"http://127.0.0.1:45042\"\n    urn: \"" + initRes.urn + "\"\n    keys_path: \"~/.hermes/keys/agent-comm\"");
+        content = content.replace("platforms:", "platforms:\n  agent_comm:\n    enabled: true\n    platform_url: \"http://127.0.0.1:45042\"\n    urn: \"" + initRes.urn + "\"\n    keys_path: \"" + keysDir + "\"");
         fs.writeFileSync(configPath, content, "utf8");
         console.log(`Successfully patched ${configPath}`);
       }
@@ -329,9 +349,9 @@ console.log("\n=== 💡 HOW TO START THE LOCAL P2P DAEMON ===");
 console.log("To enable P2P secure communications, please start the background daemon:");
 if (process.platform === "win32") {
   const wslKeysDir = execSync(`wsl wslpath '${keysDir.replace(/\\/g, "/")}'`).toString().trim();
-  console.log(`  wsl ~/.agent-comm/bin/agent-comm-helper daemon ${wslKeysDir} http://8.130.40.38`);
+  console.log(`  wsl ~/.agent-comm/bin/agent-comm-helper daemon ${wslKeysDir} ${DEFAULT_PLATFORM_URL}`);
 } else {
-  console.log(`  ~/.agent-comm/bin/agent-comm-helper daemon ${keysDir} http://8.130.40.38`);
+  console.log(`  ~/.agent-comm/bin/agent-comm-helper daemon ${keysDir} ${DEFAULT_PLATFORM_URL}`);
 }
 console.log("============================================\n");
 }

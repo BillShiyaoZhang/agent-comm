@@ -56,7 +56,7 @@ func (a *Agent) StartListening(ctx context.Context, handler func(urn string, msg
 			a.Session.SetPeerX25519PK(senderPeerID, contact.X25519PK)
 		} else {
 			// Fallback: use PeerID as URN if not in contacts (though Double Ratchet requires contacts)
-			senderURN = "urn:hermes:peer:" + senderPeerID.String()
+			senderURN = "urn:agent-comm:peer:" + senderPeerID.String()
 		}
 
 		a.drPeersMu.Lock()

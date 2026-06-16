@@ -76,8 +76,8 @@ type TrustClaim struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	IssuerUrn       string     `protobuf:"bytes,1,opt,name=issuer_urn,json=issuerUrn,proto3" json:"issuer_urn,omitempty"`                     // Who made this claim (e.g., "urn:hermes:agent:Charlie")
-	SubjectUrn      string     `protobuf:"bytes,2,opt,name=subject_urn,json=subjectUrn,proto3" json:"subject_urn,omitempty"`                  // Who is being claimed about (e.g., "urn:hermes:agent:Alice")
+	IssuerUrn       string     `protobuf:"bytes,1,opt,name=issuer_urn,json=issuerUrn,proto3" json:"issuer_urn,omitempty"`                     // Who made this claim (e.g., "urn:agent-comm:agent:Charlie")
+	SubjectUrn      string     `protobuf:"bytes,2,opt,name=subject_urn,json=subjectUrn,proto3" json:"subject_urn,omitempty"`                  // Who is being claimed about (e.g., "urn:agent-comm:agent:Alice")
 	SubjectPeerId   string     `protobuf:"bytes,3,opt,name=subject_peer_id,json=subjectPeerId,proto3" json:"subject_peer_id,omitempty"`       // Subject's libp2p PeerID (e.g., "12D3KooW...")
 	SubjectX25519Pk []byte     `protobuf:"bytes,4,opt,name=subject_x25519_pk,json=subjectX25519Pk,proto3" json:"subject_x25519_pk,omitempty"` // Subject's X25519 static public key (32 bytes)
 	Level           TrustLevel `protobuf:"varint,5,opt,name=level,proto3,enum=proto.TrustLevel" json:"level,omitempty"`                       // TRUSTED, UNTRUSTED, or UNKNOWN

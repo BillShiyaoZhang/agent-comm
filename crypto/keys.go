@@ -19,10 +19,19 @@ import (
 	"runtime"
 )
 
+// DefaultURNPrefix is the URN namespace used for agent identifiers when no
+// override is supplied. The scheme is framework-agnostic: it is intentionally
+// not "urn:hermes:agent:" so that agents running on OpenClaw, Hermes or any
+// other framework can share the same identity namespace.
+const DefaultURNPrefix = "urn:agent-comm:agent"
+
 // IdentityKeyPair holds Ed25519 identity keys for an agent.
 type IdentityKeyPair struct {
 	PrivateKey ed25519.PrivateKey
 	PublicKey  ed25519.PublicKey
+	// URNPrefix is the namespace used when URN() is called. If empty, it
+	// falls back to DefaultURNPrefix.
+	URNPrefix string
 }
 
 // GenerateIdentityKeyPair generates a new Ed25519 identity key pair.
@@ -44,7 +53,11 @@ func (k *IdentityKeyPair) Fingerprint() string {
 
 // URN returns the URN identifier for this identity.
 func (k *IdentityKeyPair) URN() string {
-	return fmt.Sprintf("urn:hermes:agent:%s", k.Fingerprint())
+	prefix := k.URNPrefix
+	if prefix == "" {
+		prefix = DefaultURNPrefix
+	}
+	return fmt.Sprintf("%s:%s", prefix, k.Fingerprint())
 }
 
 // PeerID returns the libp2p-compatible peer ID derived from the Ed25519 public key.
@@ -221,6 +234,12 @@ type IdentityKeys struct {
 }
 
 // DefaultKeysDir returns the default directory for storing keys.
+//
+// The path is framework-agnostic: ~/.agent-comm/keys on Unix-like systems and
+// %APPDATA%\agent-comm\keys on Windows. Callers should pass an explicit
+// directory in production code, but this gives a sensible single-tenant
+// fallback that does not bake any specific agent framework name into the
+// filesystem layout.
 func DefaultKeysDir() string {
 	var baseDir string
 	var err error
@@ -232,7 +251,7 @@ func DefaultKeysDir() string {
 			baseDir, err = os.UserConfigDir()
 		}
 		if err == nil && baseDir != "" {
-			return filepath.Join(baseDir, "hermes-agent", "agent-comm", "contacts")
+			return filepath.Join(baseDir, "agent-comm", "keys")
 		}
 	} else {
 		// On Unix/Linux/macOS, check HOME first
@@ -247,7 +266,7 @@ func DefaultKeysDir() string {
 		baseDir = os.TempDir()
 	}
 
-	return filepath.Join(baseDir, ".hermes", "agent-comm", "contacts")
+	return filepath.Join(baseDir, ".agent-comm", "keys")
 }
 
 // EnsureKeysDir ensures the keys directory exists.
@@ -259,11 +278,39 @@ func EnsureKeysDir() (string, error) {
 	return dir, nil
 }
 
+// IdentityOptions controls how LoadOrCreateIdentity resolves filesystem paths
+// and the URN namespace used for the resulting identity.
+type IdentityOptions struct {
+	// KeysDir is the directory where PEM key files live. An empty string
+	// resolves to DefaultKeysDir(). "~" or "~/..." are expanded against the
+	// current user's home directory.
+	KeysDir string
+
+	// URNPrefix is the namespace prefix used when the IdentityKeyPair reports
+	// its URN. An empty string falls back to DefaultURNPrefix. Existing PEM
+	// files do not store the prefix; it is reapplied on every load.
+	URNPrefix string
+}
+
 // LoadOrCreateIdentity loads existing identity or creates a new one.
-// If keysDir is empty, uses DefaultKeysDir().
+// If keysDir is empty, uses DefaultKeysDir(). The URN namespace defaults to
+// DefaultURNPrefix.
 func LoadOrCreateIdentity(keysDir string) (*IdentityKeys, error) {
+	return LoadOrCreateIdentityWithOptions(IdentityOptions{KeysDir: keysDir})
+}
+
+// LoadOrCreateIdentityWithOptions is the configurable variant of
+// LoadOrCreateIdentity. It accepts an IdentityOptions struct that lets the
+// caller override the URN namespace prefix in addition to the keys directory.
+func LoadOrCreateIdentityWithOptions(opts IdentityOptions) (*IdentityKeys, error) {
+	keysDir := opts.KeysDir
 	if keysDir == "" {
 		keysDir = DefaultKeysDir()
+	}
+
+	urnPrefix := opts.URNPrefix
+	if urnPrefix == "" {
+		urnPrefix = DefaultURNPrefix
 	}
 
 	// Expand ~ or ~/ to user home directory
@@ -304,6 +351,8 @@ func LoadOrCreateIdentity(keysDir string) (*IdentityKeys, error) {
 			return nil, fmt.Errorf("failed to load X25519 public key: %w", err)
 		}
 
+		edKey.URNPrefix = urnPrefix
+
 		return &IdentityKeys{
 			Ed25519:  edKey,
 			X25519SK: x25519SK,
@@ -317,6 +366,7 @@ func LoadOrCreateIdentity(keysDir string) (*IdentityKeys, error) {
 	if err != nil {
 		return nil, err
 	}
+	edKey.URNPrefix = urnPrefix
 
 	x25519SK, x25519PK, err := GenerateX25519KeyPair()
 	if err != nil {

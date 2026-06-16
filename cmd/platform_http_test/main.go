@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
@@ -30,7 +31,7 @@ func main() {
 	defer cancel()
 
 	// 1. Generate identity keys
-	keysDir := filepathJoin(os.TempDir(), "platform_http_test_keys")
+	keysDir := filepath.Join(os.TempDir(), "platform_http_test_keys")
 	os.RemoveAll(keysDir)
 	keys, err := crypto.LoadOrCreateIdentity(keysDir)
 	if err != nil {
@@ -157,16 +158,4 @@ func main() {
 	fmt.Printf("==================================================\n")
 	fmt.Printf("🎉 ALL HTTP SIGNATURE VERIFICATION TESTS PASSED! 🎉\n")
 	fmt.Printf("==================================================\n")
-}
-
-// Simple filepath join helper to avoid path package dependency issues
-func filepathJoin(parts ...string) string {
-	res := ""
-	for i, p := range parts {
-		if i > 0 {
-			res += string(os.PathSeparator)
-		}
-		res += p
-	}
-	return res
 }

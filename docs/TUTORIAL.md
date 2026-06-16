@@ -90,7 +90,7 @@ AES-GCM 是一个 AEAD（Authenticated Encryption with Associated Data）算法�
 
 ### 2.7 URN（自证明身份）
 
-URN（Uniform Resource Name）格式：`urn:hermes:agent:<base58(SHA256(pubkey)[:16])>`
+URN（Uniform Resource Name）格式：`urn:agent-comm:agent:<base58(SHA256(pubkey)[:16])>`
 
 原理：Ed25519 公钥的 SHA256 哈希前 16 字节用 base58 编码，就是你的 URN。知道 URN 就等于知道公钥（单向函数），用对应私钥签名就能证明身份。没有 CA，没有手机号，公钥即身份。
 
@@ -148,7 +148,7 @@ URN（Uniform Resource Name）格式：`urn:hermes:agent:<base58(SHA256(pubkey)[
 - X25519 密钥对：用于 ECIES 加密
 - 两种密钥分开：身份密钥几乎不用，ECIES 密钥频繁使用，分开减少暴露风险
 
-**URN 系统**：`urn:hermes:agent:<base58>`，从 Ed25519 公钥派生，自证明。
+**URN 系统**：`urn:agent-comm:agent:<base58>`，从 Ed25519 公钥派生，自证明。
 
 **Registry 协议**（`registry/client.go`、`registry/server.go`）：
 - 注册：`URNRegistryRequest{register, urn, peer_id, addrs, x25519_pk}` → `URNRegistryResponse{ok}`

@@ -61,7 +61,7 @@ description: >
 **期望输出：**
 ```json
 {
-  "urn": "urn:hermes:agent:CkG8xG9evxYy38L14JqPhk",
+  "urn": "urn:agent-comm:agent:CkG8xG9evxYy38L14JqPhk",
   "peer_id": "12D3Koo...",
   "ed25519_pubkey": "...",
   "x25519_pubkey": "..."

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -29,8 +30,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Use os.TempDir() so this binary runs cleanly on every host regardless
+	// of /tmp permissions or Windows path conventions.
+	tmpRoot := filepath.Join(os.TempDir(), "agent_comm_test_session")
+
 	// --- Node A (Bootstrap/Server) ---
-	dirA := "/tmp/node_a_keys"
+	dirA := filepath.Join(tmpRoot, "node_a_keys")
 	os.RemoveAll(dirA)
 	keysA, err := crypto.LoadOrCreateIdentity(dirA)
 	if err != nil {
@@ -72,7 +77,7 @@ func main() {
 	})
 
 	// --- Node B (Client) ---
-	dirB := "/tmp/node_b_keys"
+	dirB := filepath.Join(tmpRoot, "node_b_keys")
 	os.RemoveAll(dirB)
 	keysB, err := crypto.LoadOrCreateIdentity(dirB)
 	if err != nil {

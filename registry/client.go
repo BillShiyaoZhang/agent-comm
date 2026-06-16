@@ -198,7 +198,7 @@ func BuildSignedMsg(urn, peerID string, x25519Pub []byte, storesUserData bool, t
 // URNFromEd25519PK derives the URN string from an Ed25519 public key.
 func URNFromEd25519PK(pubKey []byte) string {
 	h := sha256.Sum256(pubKey)
-	return fmt.Sprintf("urn:hermes:agent:%s", base58.Encode(h[:16]))
+	return fmt.Sprintf("%s:%s", crypto.DefaultURNPrefix, base58.Encode(h[:16]))
 }
 
 // VerifyResolveResult validates that the resolved registry details are authentic and untampered.

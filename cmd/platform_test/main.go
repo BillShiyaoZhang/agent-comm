@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
@@ -18,10 +19,14 @@ import (
 	"github.com/libp2p/go-libp2p/core/peerstore"
 )
 
+// These defaults match agent.DefaultPlatformDomain / agent.DefaultPlatformPeerID
+// in the agent SDK. They can be overridden at runtime by exporting
+// AGENT_PLATFORM_DOMAIN, AGENT_PLATFORM_PEER_ID and AGENT_PLATFORM_PORT
+// before running this test binary.
 const (
-	PlatformDomain = "8.130.40.38"
+	PlatformDomain = "agent-communication.online"
 	PlatformPeerID = "12D3KooWKjNBA3pgLKryRytwHpJ9dPQo9H3gvCKUekktYtXQXfib"
-	PlatformURN    = "urn:hermes:platform:ee8be13add63a020"
+	PlatformURN    = "urn:agent-comm:platform:ee8be13add63a020"
 )
 
 func main() {
@@ -33,7 +38,7 @@ func main() {
 	defer cancel()
 
 	// 1. Prepare local identity
-	keysDir := "/tmp/platform_test_keys"
+	keysDir := filepath.Join(os.TempDir(), "agent_comm_platform_test_keys")
 	os.RemoveAll(keysDir)
 	keys, err := crypto.LoadOrCreateIdentity(keysDir)
 	if err != nil {
@@ -57,9 +62,11 @@ func main() {
 	defer h.Close()
 	fmt.Printf("Local P2P host created. PeerID: %s\n\n", h.ID())
 
-	// 3. Set up address info for remote platform node (We'll prioritize UDP/QUIC then fallback to TCP)
-	tcpMaddrStr := fmt.Sprintf("/ip4/%s/tcp/45041/p2p/%s", PlatformDomain, PlatformPeerID)
-	quicMaddrStr := fmt.Sprintf("/ip4/%s/udp/45041/quic-v1/p2p/%s", PlatformDomain, PlatformPeerID)
+	// 3. Set up address info for remote platform node (We'll prioritize UDP/QUIC then fallback to TCP).
+// We use /dns4/ so libp2p can resolve the host fresh; cached IPs from
+// agent.DNSCache are exposed alongside in production deployments.
+	tcpMaddrStr := fmt.Sprintf("/dns4/%s/tcp/45041/p2p/%s", PlatformDomain, PlatformPeerID)
+	quicMaddrStr := fmt.Sprintf("/dns4/%s/udp/45041/quic-v1/p2p/%s", PlatformDomain, PlatformPeerID)
 
 	var platformAddrInfo *peer.AddrInfo
 	var connectErr error

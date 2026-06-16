@@ -296,8 +296,10 @@ func TestRegistryVerificationFailure(t *testing.T) {
 		t.Fatalf("agent A failed to connect to bootstrap: %v", err)
 	}
 
-	// 3. Generate a signature for a valid registration of Agent B
-	urnB := "urn:hermes:agent:fakebob"
+	// 3. Generate a signature for a valid registration of Agent B. The literal
+// "fakebob" suffix is overwritten below once we have a real key pair; it is
+// only kept here to give the variable a stable initial value.
+	urnB := "urn:agent-comm:agent:fakebob"
 	peerIDB := "12D3KooWN9hpHBpf7awNa7PTWeCVMHnmTkBcZ1Rx31UdNgM8mxyc"
 
 	// Let's generate a temporary Ed25519 identity for signing
