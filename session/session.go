@@ -1,4 +1,4 @@
-// Package session handles encrypted peer-to-peer message exchange over libp2p streams.
+// Package session handles authenticated encrypted peer-to-peer message exchange.
 package session
 
 import (
@@ -6,240 +6,65 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	pb "github.com/BillShiyaoZhang/agent-comm/proto"
+	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
-	"github.com/BillShiyaoZhang/agent-comm/crypto"
-	"github.com/BillShiyaoZhang/agent-comm/proto"
 	goproto "google.golang.org/protobuf/proto"
 )
 
-// ProtoID is the libp2p protocol identifier for session messages.
 const ProtoID = "/hermes/agent-comm/session/1.0.0"
-
-// ProtoAAD is the protocol-level AAD constant used by both parties for encryption.
-// Using a constant avoids PeerID↔URN↔staticPubKey↔PeerID derivation mismatches.
 const ProtoAAD = "agent-comm-v1"
 
-// Manager manages a session with a remote peer: send/receive encrypted messages.
 type Manager struct {
-	host          host.Host
-	ecies         *crypto.ECIES
-	keys          *crypto.IdentityKeys
-	peerX25519PK  map[peer.ID][]byte // cache of known peer X25519 PKs
+	host         host.Host
+	ecies        *crypto.ECIES
+	keys         *crypto.IdentityKeys
+	peerMu       sync.RWMutex
+	peerX25519PK map[peer.ID][]byte
 }
 
-// NewManager creates a new session manager.
 func NewManager(h host.Host, keys *crypto.IdentityKeys) *Manager {
-	return &Manager{host: h, ecies: crypto.NewECIES(), keys: keys}
+	return &Manager{host: h, ecies: crypto.NewECIES(), keys: keys, peerX25519PK: make(map[peer.ID][]byte)}
 }
-
-// PublicKey returns this node's X25519 public key.
 func (m *Manager) PublicKey() ([]byte, error) {
 	if len(m.keys.X25519PK) == 0 {
 		return nil, fmt.Errorf("X25519 public key not initialized")
 	}
-	return m.keys.X25519PK, nil
+	return append([]byte(nil), m.keys.X25519PK...), nil
 }
-
-// Host returns the underlying libp2p host.
-func (m *Manager) Host() host.Host { return m.host }
-
-// Ecies returns the underlying ECIES instance (for use by test programs and handlers).
+func (m *Manager) Host() host.Host      { return m.host }
 func (m *Manager) Ecies() *crypto.ECIES { return m.ecies }
-
-// PeerStaticX25519PK returns the peer's static X25519 public key (if known).
-// This is populated during session establishment when the peer's static key
-// is verified via WoT and stored in the host's peer store.
 func (m *Manager) PeerStaticX25519PK(p peer.ID) ([]byte, error) {
-	// Try peerstore first
-	pk := m.host.Peerstore().PubKey(p)
-	if pk != nil {
-		if x25519pk, ok := pk.(interface{ GetX25519PublicKey() []byte }); ok {
-			return x25519pk.GetX25519PublicKey(), nil
-		}
+	m.peerMu.RLock()
+	defer m.peerMu.RUnlock()
+	if pk, ok := m.peerX25519PK[p]; ok {
+		return append([]byte(nil), pk...), nil
 	}
-	// Check if we have it cached in a local map (set by SetPeerX25519PK)
-	if m.peerX25519PK != nil {
-		if pk, ok := m.peerX25519PK[p]; ok {
-			return pk, nil
-		}
-	}
-	_ = m.host.Peerstore().PeerInfo(p) // ensure peer is known
-	return nil, fmt.Errorf("peer static X25519 PK not found for %s (must be passed during session setup)", p)
+	return nil, fmt.Errorf("peer static X25519 PK not found for %s", p)
 }
-
-// SetPeerX25519PK stores a peer's X25519 public key for later retrieval.
 func (m *Manager) SetPeerX25519PK(p peer.ID, pk []byte) {
-	if m.peerX25519PK == nil {
-		m.peerX25519PK = make(map[peer.ID][]byte)
-	}
-	m.peerX25519PK[p] = pk
+	m.peerMu.Lock()
+	defer m.peerMu.Unlock()
+	m.peerX25519PK[p] = append([]byte(nil), pk...)
 }
 
-// SendMessage opens a stream to target, encrypts and sends a message, waits for encrypted reply.
-// recipientPubKey is the recipient's X25519 static public key (32 bytes).
-func (m *Manager) SendMessage(ctx context.Context, target peer.AddrInfo, recipientPubKey []byte, plaintext string) (string, error) {
-	stream, err := m.host.NewStream(ctx, target.ID, protocol.ID(ProtoID))
-	if err != nil {
-		return "", fmt.Errorf("open stream: %w", err)
+// BuildEnvelopeForRecipient encrypts and signs a text message with a caller-owned
+// stable ID. Persist the returned envelope before the first delivery attempt.
+func (m *Manager) BuildEnvelopeForRecipient(recipientURN string, recipientPubKey []byte, plaintext, messageID string) (*pb.EncryptedEnvelope, error) {
+	if recipientURN == "" || messageID == "" {
+		return nil, fmt.Errorf("recipient URN and message ID are required")
 	}
-	defer stream.Close()
-
-	msg := &proto.ChatMessage{
-		Body: &proto.ChatMessage_Text{
-			Text: &proto.TextMessage{
-				Text:      plaintext,
-				Timestamp: time.Now().UnixMilli(),
-			},
-		},
-	}
+	msg := &pb.ChatMessage{Body: &pb.ChatMessage_Text{Text: &pb.TextMessage{Text: plaintext, Timestamp: time.Now().UnixMilli()}}}
 	payload, err := goproto.Marshal(msg)
 	if err != nil {
-		return "", fmt.Errorf("marshal message: %w", err)
+		return nil, fmt.Errorf("marshal message: %w", err)
 	}
-
-	// ECIES encrypt: ECDH(sender_static_SK, recipient_static_PK) → shared secret → HKDF → AES-GCM
-	// AAD = ProtoAAD (protocol-level constant, same for both parties)
-	sharedSecret, err := m.ecies.ComputeSharedSecret(m.keys.X25519SK, recipientPubKey)
-	if err != nil {
-		return "", fmt.Errorf("ECDH: %w", err)
-	}
-	aad := sha256.Sum256([]byte(ProtoAAD))
-	ephemeral, nonce, ciphertext, tag, err := m.ecies.EncryptWithSharedSecret(sharedSecret, payload, aad[:16])
-	if err != nil {
-		return "", fmt.Errorf("encrypt: %w", err)
-	}
-
-	env := &proto.EncryptedEnvelope{
-		SenderUrn:          m.keys.Ed25519.URN(),
-		SenderStaticPubkey: m.keys.X25519PK,
-		EphemeralPubkey:    ephemeral,
-		Nonce:              nonce,
-		Ciphertext:         ciphertext,
-		Tag:                tag,
-		MessageId:          fmt.Sprintf("msg-%d", time.Now().UnixNano()),
-	}
-	envBytes, err := goproto.Marshal(env)
-	if err != nil {
-		return "", fmt.Errorf("marshal envelope: %w", err)
-	}
-
-	if err := writeUint32BE(stream, uint32(len(envBytes))); err != nil {
-		return "", fmt.Errorf("send envelope header: %w", err)
-	}
-	if _, err := stream.Write(envBytes); err != nil {
-		return "", fmt.Errorf("send envelope: %w", err)
-	}
-	if err := stream.CloseWrite(); err != nil {
-		return "", fmt.Errorf("signal write done: %w", err)
-	}
-
-	// Read response
-	respSize, err := readUint32BE(stream)
-	if err != nil {
-		return "", fmt.Errorf("read response size: %w", err)
-	}
-	respBytes := make([]byte, respSize)
-	if _, err := io.ReadFull(stream, respBytes); err != nil {
-		return "", fmt.Errorf("read response: %w", err)
-	}
-
-	var respEnv proto.EncryptedEnvelope
-	if err := goproto.Unmarshal(respBytes, &respEnv); err != nil {
-		return "", fmt.Errorf("unmarshal response envelope: %w", err)
-	}
-
-	// Decrypt response
-	sharedSecretResp, err := m.ecies.ComputeSharedSecret(m.keys.X25519SK, respEnv.SenderStaticPubkey)
-	if err != nil {
-		return "", fmt.Errorf("ECDH reply: %w", err)
-	}
-	aadResp := sha256.Sum256([]byte(ProtoAAD))
-	plaintextResp, err := m.ecies.DecryptWithSharedSecret(
-		sharedSecretResp, respEnv.EphemeralPubkey, respEnv.Nonce, respEnv.Ciphertext, respEnv.Tag, aadResp[:16])
-	if err != nil {
-		return "", fmt.Errorf("decrypt response: %w", err)
-	}
-
-	var respMsg proto.ChatMessage
-	if err := goproto.Unmarshal(plaintextResp, &respMsg); err != nil {
-		return "", fmt.Errorf("unmarshal chat message: %w", err)
-	}
-
-	if txt := respMsg.GetText(); txt != nil {
-		return txt.Text, nil
-	}
-	return "", nil
-}
-
-// SendReply encrypts and sends a reply message over an existing stream.
-func (m *Manager) SendReply(stream io.Writer, recipientStaticPubKey []byte, recipientURN, plaintext string) error {
-	msg := &proto.ChatMessage{
-		Body: &proto.ChatMessage_Text{
-			Text: &proto.TextMessage{
-				Text:      plaintext,
-				Timestamp: time.Now().UnixMilli(),
-			},
-		},
-	}
-	payload, err := goproto.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-
-	sharedSecret, err := m.ecies.ComputeSharedSecret(m.keys.X25519SK, recipientStaticPubKey)
-	if err != nil {
-		return fmt.Errorf("ECDH: %w", err)
-	}
-
-	aad := sha256.Sum256([]byte(ProtoAAD))
-	ephemeral, nonce, ciphertext, tag, err := m.ecies.EncryptWithSharedSecret(sharedSecret, payload, aad[:16])
-	if err != nil {
-		return fmt.Errorf("encrypt reply: %w", err)
-	}
-
-	replyEnv := &proto.EncryptedEnvelope{
-		SenderUrn:          m.keys.Ed25519.URN(),
-		SenderStaticPubkey: m.keys.X25519PK,
-		EphemeralPubkey:    ephemeral,
-		Nonce:              nonce,
-		Ciphertext:         ciphertext,
-		Tag:                tag,
-		MessageId:          fmt.Sprintf("reply-%d", time.Now().UnixNano()),
-	}
-	envBytes, err := goproto.Marshal(replyEnv)
-	if err != nil {
-		return fmt.Errorf("marshal reply: %w", err)
-	}
-
-	if err := writeUint32BE(stream, uint32(len(envBytes))); err != nil {
-		return fmt.Errorf("send size: %w", err)
-	}
-	if _, err := stream.Write(envBytes); err != nil {
-		return fmt.Errorf("send reply: %w", err)
-	}
-	return nil
-}
-
-// BuildEnvelope builds an encrypted envelope for a given plaintext and recipient pubkey.
-// This is useful when the caller wants the raw envelope for MQ storage.
-func (m *Manager) BuildEnvelope(recipientPubKey []byte, plaintext string) (*proto.EncryptedEnvelope, error) {
-	msg := &proto.ChatMessage{
-		Body: &proto.ChatMessage_Text{
-			Text: &proto.TextMessage{
-				Text:      plaintext,
-				Timestamp: time.Now().UnixMilli(),
-			},
-		},
-	}
-	payload, err := goproto.Marshal(msg)
-	if err != nil {
-		return nil, fmt.Errorf("marshal: %w", err)
-	}
-
 	sharedSecret, err := m.ecies.ComputeSharedSecret(m.keys.X25519SK, recipientPubKey)
 	if err != nil {
 		return nil, fmt.Errorf("ECDH: %w", err)
@@ -249,20 +74,31 @@ func (m *Manager) BuildEnvelope(recipientPubKey []byte, plaintext string) (*prot
 	if err != nil {
 		return nil, fmt.Errorf("encrypt: %w", err)
 	}
-
-	return &proto.EncryptedEnvelope{
-		SenderUrn:          m.keys.Ed25519.URN(),
-		SenderStaticPubkey: m.keys.X25519PK,
-		EphemeralPubkey:    ephemeral,
-		Nonce:              nonce,
-		Ciphertext:         ciphertext,
-		Tag:                tag,
-		MessageId:          fmt.Sprintf("msg-%d", time.Now().UnixNano()),
-	}, nil
+	env := &pb.EncryptedEnvelope{SenderUrn: m.keys.Ed25519.URN(), SenderStaticPubkey: append([]byte(nil), m.keys.X25519PK...), EphemeralPubkey: ephemeral, Nonce: nonce, Ciphertext: ciphertext, Tag: tag, MessageId: messageID, RecipientUrn: recipientURN}
+	if err := crypto.SignEnvelope(env, m.keys.Ed25519); err != nil {
+		return nil, err
+	}
+	return env, nil
 }
 
-// DecryptEnvelope decrypts an EncryptedEnvelope and returns the plaintext payload.
-func (m *Manager) DecryptEnvelope(env *proto.EncryptedEnvelope) ([]byte, error) {
+// BuildEnvelope is retained for source compatibility. A destination URN is now
+// required; callers should migrate to BuildEnvelopeForRecipient for stable IDs.
+func (m *Manager) BuildEnvelope(recipientPubKey []byte, plaintext string, recipientURN ...string) (*pb.EncryptedEnvelope, error) {
+	if len(recipientURN) != 1 {
+		return nil, fmt.Errorf("authenticated envelopes require recipient URN; use BuildEnvelopeForRecipient")
+	}
+	return m.BuildEnvelopeForRecipient(recipientURN[0], recipientPubKey, plaintext, uuid.NewString())
+}
+
+func VerifyEnvelope(env *pb.EncryptedEnvelope, expectedRecipientURN string) error {
+	return crypto.VerifyEnvelope(env, expectedRecipientURN)
+}
+
+// DecryptEnvelope authenticates all routing and encryption fields before ECDH.
+func (m *Manager) DecryptEnvelope(env *pb.EncryptedEnvelope) ([]byte, error) {
+	if err := crypto.VerifyEnvelope(env, m.keys.Ed25519.URN()); err != nil {
+		return nil, err
+	}
 	sharedSecret, err := m.ecies.ComputeSharedSecret(m.keys.X25519SK, env.SenderStaticPubkey)
 	if err != nil {
 		return nil, fmt.Errorf("ECDH: %w", err)
@@ -271,12 +107,119 @@ func (m *Manager) DecryptEnvelope(env *proto.EncryptedEnvelope) ([]byte, error) 
 	return m.ecies.DecryptWithSharedSecret(sharedSecret, env.EphemeralPubkey, env.Nonce, env.Ciphertext, env.Tag, aad[:16])
 }
 
+// VerifyPeerURN binds a transport's authenticated Ed25519 peer to a claimed URN.
+func VerifyPeerURN(remote peer.ID, urn string) error {
+	publicKey, err := remote.ExtractPublicKey()
+	if err != nil {
+		return fmt.Errorf("extract peer identity: %w", err)
+	}
+	raw, err := publicKey.Raw()
+	if err != nil {
+		return err
+	}
+	if !crypto.URNMatchesPublicKey(urn, raw) {
+		return fmt.Errorf("peer identity does not match sender URN")
+	}
+	return nil
+}
+
+// SendMessage sends an authenticated request and waits for a signed reply. For
+// durable delivery use Agent.PrepareMessage and Agent.DeliverEnvelope instead.
+func (m *Manager) SendMessage(ctx context.Context, target peer.AddrInfo, recipientPubKey []byte, plaintext string) (string, error) {
+	publicKey, err := target.ID.ExtractPublicKey()
+	if err != nil {
+		return "", err
+	}
+	raw, err := publicKey.Raw()
+	if err != nil {
+		return "", err
+	}
+	recipientURN := (&crypto.IdentityKeyPair{PublicKey: raw}).URN()
+	env, err := m.BuildEnvelopeForRecipient(recipientURN, recipientPubKey, plaintext, uuid.NewString())
+	if err != nil {
+		return "", err
+	}
+	stream, err := m.host.NewStream(ctx, target.ID, protocol.ID(ProtoID))
+	if err != nil {
+		return "", fmt.Errorf("open stream: %w", err)
+	}
+	defer stream.Close()
+	deadline := time.Now().Add(30 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = stream.SetDeadline(deadline)
+	if err := writeEnvelope(stream, env); err != nil {
+		return "", err
+	}
+	if err := stream.CloseWrite(); err != nil {
+		return "", err
+	}
+	resp, err := ReadEnvelope(stream)
+	if err != nil {
+		return "", err
+	}
+	if err := VerifyPeerURN(target.ID, resp.SenderUrn); err != nil {
+		return "", err
+	}
+	payload, err := m.DecryptEnvelope(resp)
+	if err != nil {
+		return "", err
+	}
+	var msg pb.ChatMessage
+	if err := goproto.Unmarshal(payload, &msg); err != nil {
+		return "", err
+	}
+	if txt := msg.GetText(); txt != nil {
+		return txt.Text, nil
+	}
+	return "", nil
+}
+
+func (m *Manager) SendReply(stream io.Writer, recipientStaticPubKey []byte, recipientURN, plaintext string) error {
+	env, err := m.BuildEnvelopeForRecipient(recipientURN, recipientStaticPubKey, plaintext, uuid.NewString())
+	if err != nil {
+		return err
+	}
+	return writeEnvelope(stream, env)
+}
+
+func writeEnvelope(w io.Writer, env *pb.EncryptedEnvelope) error {
+	data, err := goproto.Marshal(env)
+	if err != nil {
+		return err
+	}
+	if err := writeUint32BE(w, uint32(len(data))); err != nil {
+		return err
+	}
+	_, err = w.Write(data)
+	return err
+}
+
+// ReadEnvelope reads a bounded, length-prefixed envelope using complete reads.
+func ReadEnvelope(r io.Reader) (*pb.EncryptedEnvelope, error) {
+	size, err := readUint32BE(r)
+	if err != nil {
+		return nil, err
+	}
+	if size == 0 || size > crypto.MaxEnvelopeSize {
+		return nil, fmt.Errorf("invalid envelope frame size: %d", size)
+	}
+	data := make([]byte, size)
+	if _, err := io.ReadFull(r, data); err != nil {
+		return nil, err
+	}
+	env := new(pb.EncryptedEnvelope)
+	if err := goproto.Unmarshal(data, env); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
 func writeUint32BE(w io.Writer, v uint32) error {
 	buf := [4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}
 	_, err := w.Write(buf[:])
 	return err
 }
-
 func readUint32BE(r io.Reader) (uint32, error) {
 	var buf [4]byte
 	if _, err := io.ReadFull(r, buf[:]); err != nil {

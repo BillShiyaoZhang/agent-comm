@@ -14,6 +14,9 @@ message EncryptedEnvelope {
   bytes ciphertext = 5;               // Encrypted payload
   bytes tag = 6;                      // GCM auth tag (16 bytes)
   string message_id = 7;              // Unique message ID for deduplication
+  string recipient_urn = 8;           // Exact destination, covered by signature
+  bytes sender_ed25519_pubkey = 9;    // Self-certifying sender identity (32 bytes)
+  bytes signature = 10;              // Ed25519 signature of domain + deterministic envelope with signature cleared
 }
 
 message TextMessage {

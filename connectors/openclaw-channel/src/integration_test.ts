@@ -1,249 +1,157 @@
+import { test, TestContext } from "node:test";
+import { strict as assert } from "node:assert";
+import { EventEmitter } from "node:events";
+import * as http from "node:http";
+import { AddressInfo } from "node:net";
 import { AgentCommChannel } from "./channel";
-import { EventEmitter } from "events";
-import * as path from "path";
-import * as http from "http";
-import * as crypto from "crypto";
-import { execFileSync } from "child_process";
 
-const keysDir = path.resolve(__dirname, "../../../agent-comm-platform/agent-comm/test_keys");
-const helperPath = path.resolve(__dirname, "../../../agent-comm-platform/agent-comm/cmd/helper/agent-comm-helper");
-process.env.AGENT_COMM_HELPER_PATH = helperPath;
-
-async function runIntegrationTest() {
-  console.log("Starting E2E integration test with mock platform...");
-
-
-  let sseResponse: any = null;
-  let receivedStore: any = null;
-  let storeSignatureValid = false;
-  let decryptedStoreText = "";
-
-  // 1. Start Mock HTTP Server
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url || "", `http://${req.headers.host}`);
-
-    if (url.pathname === "/api/v1/mq/subscribe") {
-      // Handle SSE subscription
-      console.log("Mock Server: Received SSE subscription request");
-      
-      // Verify signature headers
-      const urn = req.headers["x-urn"];
-      const ts = req.headers["x-timestamp"];
-      const pubkey = req.headers["x-pubkey"];
-      const sig = req.headers["x-signature"];
-      if (!urn || !ts || !pubkey || !sig) {
-        res.writeHead(400);
-        res.end("Missing auth headers");
-        return;
-      }
-
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive"
-      });
-      res.write(": ok\n\n");
-      sseResponse = res;
-
-    } else if (url.pathname === "/api/v1/registry/resolve") {
-      // Mock Registry Resolve
-      console.log("Mock Server: Registry resolving URN:", url.searchParams.get("urn"));
-      // Return hardcoded recipient public key (matches our test X25519 PK)
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        x25519_pubkey: Buffer.from("c474fe12ad8c71b3f76d4bb2c9994ee30daffff2f9b19d87095b0f983dd8df5a", "hex").toString("base64")
-      }));
-
-    } else if (url.pathname === "/api/v1/mq/store") {
-      // Handle Message Store
-      console.log("Mock Server: Received store message POST request");
-      let body = "";
-      req.on("data", chunk => { body += chunk; });
-      req.on("end", () => {
-        try {
-          receivedStore = JSON.parse(body);
-          
-          // Verify Ed25519 signature
-          const auth = req.headers["authorization"] || "";
-          const parts = auth.split(" ");
-          const token = parts[1] || parts[0];
-          const tokenParts = token.split(":");
-          const sigHex = tokenParts[0];
-          const pubkeyHex = tokenParts[1];
-
-          const ed25519SpkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
-          const spki = Buffer.concat([ed25519SpkiPrefix, Buffer.from(pubkeyHex, "hex")]);
-          const edPubKeyObj = crypto.createPublicKey({
-            key: spki,
-            format: "der",
-            type: "spki"
-          });
-          storeSignatureValid = crypto.verify(null, Buffer.from(body, "utf8"), edPubKeyObj, Buffer.from(sigHex, "hex"));
-
-          const envelopeB64 = receivedStore.payload_proto;
-          const envelopeBuf = Buffer.from(envelopeB64, "base64");
-          
-          // Decode proto envelope manually
-          const decodeVarint = (buf: Buffer, offset: { v: number }) => {
-            let res = BigInt(0), shift = BigInt(0);
-            while (offset.v < buf.length) {
-              const byte = buf[offset.v++];
-              res |= BigInt(byte & 0x7f) << shift;
-              if ((byte & 0x80) === 0) return res;
-              shift += BigInt(7);
-            }
-            throw new Error("EOF");
-          };
-
-          const env: any = {};
-          let offset = { v: 0 };
-          while (offset.v < envelopeBuf.length) {
-            const tag = decodeVarint(envelopeBuf, offset);
-            const fieldNum = Number(tag >> BigInt(3));
-            const wireType = Number(tag & BigInt(7));
-            if (wireType === 2) {
-              const len = Number(decodeVarint(envelopeBuf, offset));
-              const val = envelopeBuf.subarray(offset.v, offset.v + len);
-              offset.v += len;
-              if (fieldNum === 1) env.senderUrn = val.toString("utf8");
-              else if (fieldNum === 2) env.senderStaticPubkey = val;
-              else if (fieldNum === 3) env.ephemeralPubkey = val;
-              else if (fieldNum === 4) env.nonce = val;
-              else if (fieldNum === 5) env.ciphertext = val;
-              else if (fieldNum === 6) env.tag = val;
-            }
-          }
-
-          // Call helper to decrypt
-          const decryptOutput = execFileSync(helperPath, [
-            "decrypt-envelope",
-            keysDir,
-            env.senderStaticPubkey.toString("hex"),
-            env.ephemeralPubkey.toString("hex"),
-            env.nonce.toString("hex"),
-            env.ciphertext.toString("hex"),
-            env.tag.toString("hex")
-          ]).toString().trim();
-          
-          const decryptRes = JSON.parse(decryptOutput);
-          decryptedStoreText = decryptRes.plaintext;
-
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ ok: true, message_id: "msg-stored-ok-123" }));
-        } catch (e: any) {
-          console.error("Mock Server store parsing error:", e.message);
-          res.writeHead(500);
-          res.end(e.message);
-        }
-      });
-    } else {
-      res.writeHead(404);
-      res.end();
-    }
-  });
-
-  server.listen(9090);
-  console.log("Mock server listening on port 9090");
-
-  // 2. Instantiate and start Channel
-  const gateway = new EventEmitter();
-  let receivedIncomingMessage: any = null;
-
-  gateway.on("message", (msg) => {
-    console.log("Gateway callback: Received incoming message:", msg.content);
-    receivedIncomingMessage = msg;
-  });
-
-  const channel = new AgentCommChannel(gateway, {
-    platform_url: "http://localhost:9090/api/v1/mq",
-    urn: "urn:hermes:agent:VVDkKJJAExLmCgqhLW26AM",
-    keys_dir: keysDir
-  });
-
-  await channel.start();
-  
-  // Wait for SSE connection to establish
-  await new Promise(r => setTimeout(r, 1000));
-
-  // 3. Simulate Incoming Message (Platform -> Agent)
-  console.log("\nSimulating incoming message from platform...");
-  if (!sseResponse) {
-    throw new Error("SSE connection was not established!");
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+async function until(condition: () => boolean) {
+  const deadline = Date.now() + 5000;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for helper event");
+    await wait(10);
   }
-
-  // Encrypt "hello from server" using helper
-  const recipientPubkeyHex = "c474fe12ad8c71b3f76d4bb2c9994ee30daffff2f9b19d87095b0f983dd8df5a";
-  const plaintextHex = Buffer.from("hello from server", "utf8").toString("hex");
-  const encOutput = execFileSync(helperPath, [
-    "encrypt-envelope",
-    keysDir,
-    recipientPubkeyHex,
-    plaintextHex
-  ]).toString().trim();
-  const encRes = JSON.parse(encOutput);
-
-  // Encode to protobuf envelope bytes
-  const encodeVarint = (v: number) => {
-    const bytes = [];
-    let val = v;
-    while (val >= 128) {
-      bytes.push((val & 0x7f) | 0x80);
-      val >>= 7;
-    }
-    bytes.push(val);
-    return Buffer.from(bytes);
-  };
-  const encodeDelimited = (f: number, d: Buffer) => {
-    return Buffer.concat([encodeVarint((f << 3) | 2), encodeVarint(d.length), d]);
-  };
-
-  const envBytes = Buffer.concat([
-    encodeDelimited(1, Buffer.from(encRes.sender_urn, "utf8")),
-    encodeDelimited(2, Buffer.from(encRes.sender_static_pubkey, "hex")),
-    encodeDelimited(3, Buffer.from(encRes.ephemeral_pubkey, "hex")),
-    encodeDelimited(4, Buffer.from(encRes.nonce, "hex")),
-    encodeDelimited(5, Buffer.from(encRes.ciphertext, "hex")),
-    encodeDelimited(6, Buffer.from(encRes.tag, "hex")),
-    encodeDelimited(7, Buffer.from(encRes.message_id, "utf8"))
-  ]);
-
-  // Send SSE event
-  const sseData = JSON.stringify({
-    message_id: "msg-sse-111",
-    payload_proto: envBytes.toString("base64")
-  });
-  sseResponse.write(`data: ${sseData}\n\n`);
-
-  // Wait for processing
-  await new Promise(r => setTimeout(r, 1000));
-
-  if (!receivedIncomingMessage || receivedIncomingMessage.content !== "hello from server") {
-    throw new Error("Failed to receive or decrypt incoming SSE message!");
-  }
-  console.log("Success: Incoming message verified successfully.");
-
-  // 4. Simulate Outgoing Message (Agent -> Platform)
-  console.log("\nSimulating outgoing message from agent...");
-  await channel.sendMessage("urn:hermes:agent:VVDkKJJAExLmCgqhLW26AM", "hello back");
-
-  if (!receivedStore) {
-    throw new Error("Failed to receive store POST on server!");
-  }
-  if (!storeSignatureValid) {
-    throw new Error("HTTP POST signature verification failed!");
-  }
-  if (decryptedStoreText !== "hello back") {
-    throw new Error(`Plaintext mismatch: expected 'hello back', got '${decryptedStoreText}'`);
-  }
-  console.log("Success: Outgoing message signature and plaintext verified successfully.");
-
-  console.log("\n=== ALL E2E INTEGRATION TESTS PASSED SUCCESSFULLY! ===");
-  channel.stop();
-  server.close();
-  process.exit(0);
 }
 
-runIntegrationTest().catch(err => {
-  console.error("E2E Integration Test FAILED:", err);
-  process.exit(1);
+async function helper(t: TestContext) {
+  const inbox = new Map<string, any>();
+  const subscribers = new Set<http.ServerResponse>();
+  const stored: any[] = [], acknowledgements: string[] = [], channels: AgentCommChannel[] = [];
+  let storeReply: any = null;
+  let rejectAck = false;
+  function write(res: http.ServerResponse, message: any) {
+    res.write(`id: ${message.message_id}\ndata: ${JSON.stringify(message)}\n\n`);
+  }
+  const server = http.createServer((req, res) => {
+    if (req.url === "/api/v1/mq/subscribe") {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write('data: {"event":"connected"}\n\n');
+      subscribers.add(res);
+      for (const message of inbox.values()) write(res, message);
+      res.on("close", () => subscribers.delete(res));
+      return;
+    }
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      const parsed = JSON.parse(body);
+      res.setHeader("Content-Type", "application/json");
+      if (req.url === "/api/v1/mq/store") {
+        stored.push(parsed);
+        res.writeHead(202);
+        res.end(JSON.stringify(storeReply || { success: true, message_id: parsed.message_id, status: "accepted" }));
+      } else if (req.url === "/api/v1/mq/ack") {
+        if (rejectAck) {
+          res.end(JSON.stringify({ success: false }));
+          return;
+        }
+        for (const id of parsed.message_ids) {
+          acknowledgements.push(id);
+          inbox.delete(id);
+        }
+        res.end(JSON.stringify({ success: true }));
+      } else { res.writeHead(404); res.end("{}"); }
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const timer = setInterval(() => {
+    for (const res of subscribers) {
+      res.write(": heartbeat\n\n");
+      for (const message of inbox.values()) write(res, message);
+    }
+  }, 50);
+  t.after(async () => {
+    clearInterval(timer);
+    for (const channel of channels) channel.stop();
+    for (const response of subscribers) response.destroy();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  });
+  return {
+    stored, acknowledgements, inbox, subscribers,
+    setStoreReply: (reply: any) => { storeReply = reply; },
+    setRejectAck: (reject: boolean) => { rejectAck = reject; },
+    channel(gateway = new EventEmitter()) {
+      const channel = new AgentCommChannel(gateway, { platform_url: url, urn: "local", keys_dir: "unused" });
+      channels.push(channel);
+      return channel;
+    },
+    publish(message: any) {
+      inbox.set(message.message_id, message);
+      for (const response of subscribers) write(response, message);
+    },
+  };
+}
+
+test("202 send verifies success/id and retains caller retry key/metadata", async (t) => {
+  const h = await helper(t), channel = h.channel();
+  const metadata = { message_id: "retry-key", conversation_id: "conv", task_id: "task", in_reply_to: "parent", hop_limit: 2 };
+  const first = await channel.sendMessage("peer", "hello", metadata);
+  assert.equal(first.message_id, "retry-key");
+  assert.equal(first.status, "accepted");
+  await channel.sendMessage("peer", "hello", metadata);
+  assert.deepEqual(h.stored[0], h.stored[1]);
+  assert.equal(h.stored[0].conversation_id, "conv");
+  h.setStoreReply({ success: false, message_id: "retry-key", status: "accepted" });
+  await assert.rejects(channel.sendMessage("peer", "hello", metadata), /did not accept/);
+  h.setStoreReply({ success: true, status: "accepted" });
+  await assert.rejects(channel.sendMessage("peer", "hello", metadata), /did not accept/);
+});
+
+test("SSE repeat emits once and ACK waits for explicit completion callback", async (t) => {
+  const h = await helper(t), gateway = new EventEmitter(), events: any[] = [];
+  gateway.on("message", message => events.push(message));
+  const channel = h.channel(gateway);
+  await channel.start();
+  h.publish({ message_id: "wire-1", sender_urn: "peer", text: "你好", conversation_id: "conv", task_id: "task" });
+  await until(() => events.length === 1);
+  await wait(150);
+  assert.equal(events.length, 1);
+  assert.deepEqual(h.acknowledgements, []);
+  assert.equal(events[0].message_id, "wire-1");
+  assert.equal(events[0].metadata.task_id, "task");
+  assert.equal(events[0].is_bot, true);
+  assert.equal(events[0].allow_gateway_control, false);
+  h.setRejectAck(true);
+  await assert.rejects(events[0].acknowledge(), /rejected ACK/);
+  assert.ok(h.inbox.has("wire-1"));
+  h.setRejectAck(false);
+  await events[0].acknowledge();
+  assert.deepEqual(h.acknowledgements, ["wire-1"]);
+});
+
+test("no listeners retain pending; a new consumer replays unacknowledged messages", async (t) => {
+  const h = await helper(t), gateway = new EventEmitter(), events: any[] = [];
+  const first = h.channel(gateway);
+  await first.start();
+  h.publish({ message_id: "wire-1", sender_urn: "peer", text: "hello" });
+  await wait(100);
+  assert.deepEqual(h.acknowledgements, []);
+  gateway.on("message", message => events.push(message));
+  await until(() => events.length === 1);
+  first.stop();
+  const second = h.channel(gateway);
+  await second.start();
+  await until(() => events.length === 2);
+  assert.deepEqual(h.acknowledgements, []);
+  await events[1].acknowledge();
+});
+
+test("dropped SSE reconnects without a second emit, stop closes subscribers", async (t) => {
+  const h = await helper(t), gateway = new EventEmitter(), events: any[] = [];
+  gateway.on("message", message => events.push(message));
+  const channel = h.channel(gateway);
+  await channel.start();
+  h.publish({ message_id: "wire-1", sender_urn: "peer", text: "hello" });
+  await until(() => events.length === 1);
+  for (const response of h.subscribers) response.end();
+  await until(() => h.subscribers.size === 0);
+  await until(() => h.subscribers.size === 1);
+  await wait(100);
+  assert.equal(events.length, 1);
+  channel.stop();
+  await until(() => h.subscribers.size === 0);
 });

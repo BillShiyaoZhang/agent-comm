@@ -4,19 +4,25 @@
 package mq
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
 	"io"
 	"log"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/BillShiyaoZhang/agent-comm/proto"
 	goproto "google.golang.org/protobuf/proto"
 	_ "modernc.org/sqlite"
 )
+
+const MaxFrameSize = 16 << 20 // bound allocations for untrusted wire frames
 
 const ProtoID = "/hermes/agent-comm/mq/1.0.0"
 
@@ -24,12 +30,14 @@ const ProtoID = "/hermes/agent-comm/mq/1.0.0"
 type Store interface {
 	StoreEnvelope(ctx context.Context, recipientURN string, env *proto.EncryptedEnvelope, expiryUnix int64) (string, error)
 	Retrieve(ctx context.Context, recipientURN string) ([]*proto.EncryptedEnvelope, error)
-	Ack(ctx context.Context, messageIDs []string) (int, error)
+	Ack(ctx context.Context, recipientURN string, messageIDs []string) (int, error)
 }
 
 // SQLiteStore is an SQLite-backed implementation of Store.
 type SQLiteStore struct {
-	db *sql.DB
+	db        *sql.DB
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // NewSQLiteStore opens (or creates) the MQ database.
@@ -45,7 +53,9 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 
-	s := &SQLiteStore{db: db}
+	_, _ = db.Exec("ALTER TABLE messages ADD COLUMN read_at INTEGER NOT NULL DEFAULT 0")
+	db.SetMaxOpenConns(1)
+	s := &SQLiteStore{db: db, done: make(chan struct{})}
 
 	// Start background expiry cleanup
 	go s.cleanupLoop()
@@ -55,24 +65,18 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 
 // Close closes the database connection.
 func (s *SQLiteStore) Close() error {
+	s.closeOnce.Do(func() { close(s.done) })
 	return s.db.Close()
 }
 
 func (s *SQLiteStore) StoreEnvelope(ctx context.Context, recipientURN string, env *proto.EncryptedEnvelope, expiryUnix int64) (string, error) {
-	if recipientURN == "" {
-		return "", fmt.Errorf("recipient_urn is required")
+	if err := crypto.VerifyEnvelope(env, recipientURN); err != nil {
+		return "", err
 	}
-	if env == nil {
-		return "", fmt.Errorf("payload is required")
+	if err := AuthorizeRecipient(ctx, env.SenderUrn); err != nil {
+		return "", err
 	}
-
-	// Use message_id from envelope if set, otherwise generate
 	msgID := env.MessageId
-	if msgID == "" {
-		// Generate a message ID
-		msgID = fmt.Sprintf("msg-%d-%d", time.Now().UnixNano(), time.Now().UnixNano()%10000)
-	}
-
 	expiry := expiryUnix
 	if expiry == 0 {
 		// Default 7-day TTL
@@ -84,24 +88,40 @@ func (s *SQLiteStore) StoreEnvelope(ctx context.Context, recipientURN string, en
 		return "", fmt.Errorf("marshal payload: %w", err)
 	}
 
-	_, err = s.db.ExecContext(ctx,
-		"INSERT INTO messages (id, recipient, payload, expiry, stored_at) VALUES (?, ?, ?, ?, ?)",
+	result, err := s.db.ExecContext(ctx,
+		"INSERT OR IGNORE INTO messages (id, recipient, payload, expiry, stored_at) VALUES (?, ?, ?, ?, ?)",
 		msgID, recipientURN, payloadBytes, expiry, time.Now().Unix(),
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert: %w", err)
 	}
-
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return "", err
+	}
+	if inserted == 0 {
+		var existingRecipient string
+		var existingPayload []byte
+		if err := s.db.QueryRowContext(ctx, "SELECT recipient, payload FROM messages WHERE id = ?", msgID).Scan(&existingRecipient, &existingPayload); err != nil {
+			return "", err
+		}
+		if existingRecipient != recipientURN || !bytes.Equal(existingPayload, payloadBytes) {
+			return "", fmt.Errorf("message ID conflict")
+		}
+	}
 	return msgID, nil
 }
 
 func (s *SQLiteStore) Retrieve(ctx context.Context, recipientURN string) ([]*proto.EncryptedEnvelope, error) {
+	if err := AuthorizeRecipient(ctx, recipientURN); err != nil {
+		return nil, err
+	}
 	if recipientURN == "" {
 		return nil, fmt.Errorf("recipient_urn is required")
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, payload FROM messages WHERE recipient = ? AND (expiry = 0 OR expiry > ?)",
+		"SELECT id, payload FROM messages WHERE recipient = ? AND read_at = 0 AND (expiry = 0 OR expiry > ?) ORDER BY stored_at, rowid",
 		recipientURN, time.Now().Unix(),
 	)
 	if err != nil {
@@ -131,18 +151,20 @@ func (s *SQLiteStore) Retrieve(ctx context.Context, recipientURN string) ([]*pro
 	return envelopes, nil
 }
 
-func (s *SQLiteStore) Ack(ctx context.Context, messageIDs []string) (int, error) {
+func (s *SQLiteStore) Ack(ctx context.Context, recipientURN string, messageIDs []string) (int, error) {
 	if len(messageIDs) == 0 {
 		return 0, fmt.Errorf("message_ids required")
 	}
 
-	// Build query: DELETE FROM messages WHERE id IN (?,?,...)
-	query := "DELETE FROM messages WHERE id IN (?" + makeString(',', len(messageIDs)-1) + ")"
-	args := make([]interface{}, len(messageIDs))
-	for i, id := range messageIDs {
-		args[i] = id
+	if err := AuthorizeRecipient(ctx, recipientURN); err != nil {
+		return 0, err
 	}
-
+	query := "UPDATE messages SET read_at = ? WHERE recipient = ? AND read_at = 0 AND id IN (?" + strings.Repeat(",?", len(messageIDs)-1) + ")"
+	args := make([]interface{}, len(messageIDs)+2)
+	args[0], args[1] = time.Now().Unix(), recipientURN
+	for i, id := range messageIDs {
+		args[i+2] = id
+	}
 	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("delete: %w", err)
@@ -156,7 +178,12 @@ func (s *SQLiteStore) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+		}
 		if _, err := s.db.Exec("DELETE FROM messages WHERE expiry > 0 AND expiry < ?", time.Now().Unix()); err != nil {
 			log.Printf("[mq] cleanup error: %v", err)
 		}
@@ -185,6 +212,7 @@ CREATE TABLE IF NOT EXISTS messages (
   recipient  TEXT NOT NULL,
   payload    BLOB NOT NULL,
   expiry     INTEGER NOT NULL,
+  read_at    INTEGER NOT NULL DEFAULT 0,
   stored_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_recipient ON messages(recipient);
@@ -205,6 +233,20 @@ func (s *Server) handleStream(stream network.Stream) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	// Bind all storage operations to the cryptographically authenticated peer.
+	publicKey := stream.Conn().RemotePublicKey()
+	if publicKey == nil {
+		_ = stream.Reset()
+		return
+	}
+	rawKey, err := publicKey.Raw()
+	if err != nil {
+		_ = stream.Reset()
+		return
+	}
+	ctx = WithAuthenticatedPublicKey(ctx, rawKey)
+	_ = stream.SetDeadline(time.Now().Add(30 * time.Second))
 
 	// Read request
 	req, err := readMQRequest(stream)
@@ -246,11 +288,17 @@ func (s *Server) handleStream(stream network.Stream) {
 }
 
 func (s *Server) handleStore(ctx context.Context, req *proto.StoreRequest) *proto.MQResponse {
-	if req.RecipientUrn == "" {
+	if req == nil || req.RecipientUrn == "" {
 		return errorResp("recipient_urn is required")
 	}
 	if req.Payload == nil {
 		return errorResp("payload is required")
+	}
+	if err := crypto.VerifyEnvelope(req.Payload, req.RecipientUrn); err != nil {
+		return errorResp(err.Error())
+	}
+	if err := AuthorizeRecipient(ctx, req.Payload.SenderUrn); err != nil {
+		return errorResp(err.Error())
 	}
 
 	msgID, err := s.store.StoreEnvelope(ctx, req.RecipientUrn, req.Payload, req.ExpiryUnix)
@@ -264,14 +312,29 @@ func (s *Server) handleStore(ctx context.Context, req *proto.StoreRequest) *prot
 }
 
 func (s *Server) handleRetrieve(ctx context.Context, req *proto.RetrieveRequest) *proto.MQResponse {
-	if req.RecipientUrn == "" {
+	if req == nil || req.RecipientUrn == "" {
 		return errorResp("recipient_urn is required")
+	}
+	if err := AuthorizeRecipient(ctx, req.RecipientUrn); err != nil {
+		return errorResp(err.Error())
 	}
 
 	envelopes, err := s.store.Retrieve(ctx, req.RecipientUrn)
 	if err != nil {
 		return errorResp(err.Error())
 	}
+	// Leave room for protobuf framing. Remaining messages stay pending for the
+	// next poll after this batch is acknowledged.
+	batchSize, count := 0, 0
+	for _, env := range envelopes {
+		size := goproto.Size(env) + 10
+		if batchSize+size > MaxFrameSize-256 {
+			break
+		}
+		batchSize += size
+		count++
+	}
+	envelopes = envelopes[:count]
 
 	return &proto.MQResponse{
 		Op: &proto.MQResponse_Retrieve{Retrieve: &proto.RetrieveResponse{Payloads: envelopes}},
@@ -279,11 +342,18 @@ func (s *Server) handleRetrieve(ctx context.Context, req *proto.RetrieveRequest)
 }
 
 func (s *Server) handleAck(ctx context.Context, req *proto.AckRequest) *proto.MQResponse {
-	if len(req.MessageIds) == 0 {
+	if req == nil || len(req.MessageIds) == 0 {
 		return errorResp("message_ids required")
 	}
 
-	deleted, err := s.store.Ack(ctx, req.MessageIds)
+	recipientURN := req.RecipientUrn
+	if recipientURN == "" {
+		recipientURN = AuthenticatedURN(ctx)
+	}
+	if err := AuthorizeRecipient(ctx, recipientURN); err != nil {
+		return errorResp(err.Error())
+	}
+	deleted, err := s.store.Ack(ctx, recipientURN, req.MessageIds)
 	if err != nil {
 		return errorResp(err.Error())
 	}
@@ -306,6 +376,9 @@ func readMQRequest(r io.Reader) (*proto.MQRequest, error) {
 		return nil, fmt.Errorf("read size: %w", err)
 	}
 	size := uint32(sizeBuf[0])<<24 | uint32(sizeBuf[1])<<16 | uint32(sizeBuf[2])<<8 | uint32(sizeBuf[3])
+	if size == 0 || size > MaxFrameSize {
+		return nil, fmt.Errorf("invalid MQ frame size: %d", size)
+	}
 	data := make([]byte, size)
 	if _, err := io.ReadFull(r, data); err != nil {
 		return nil, fmt.Errorf("read data: %w", err)
@@ -321,15 +394,4 @@ func writeUint32BE(w io.Writer, v uint32) error {
 	buf := [4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}
 	_, err := w.Write(buf[:])
 	return err
-}
-
-func makeString(c byte, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = c
-	}
-	return string(b)
 }

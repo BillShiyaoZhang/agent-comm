@@ -6,7 +6,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "test": "node dist/test.js"
+    "test": "npm run build && node --test dist/test.js dist/integration_test.js"
   },
   "keywords": [
     "openclaw",

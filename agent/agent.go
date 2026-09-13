@@ -3,44 +3,46 @@ package agent
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/BillShiyaoZhang/agent-comm/contacts"
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
-	
+
+	"github.com/BillShiyaoZhang/agent-comm/dr"
 	p2p "github.com/BillShiyaoZhang/agent-comm/libp2p"
 	"github.com/BillShiyaoZhang/agent-comm/mq"
 	"github.com/BillShiyaoZhang/agent-comm/registry"
-	"github.com/BillShiyaoZhang/agent-comm/dr"
 
+	"github.com/BillShiyaoZhang/agent-comm/dht"
 	"github.com/BillShiyaoZhang/agent-comm/session"
+	kad "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/multiformats/go-multiaddr"
-	"github.com/BillShiyaoZhang/agent-comm/dht"
-	kad "github.com/libp2p/go-libp2p-kad-dht"
 	"path/filepath"
 )
 
-// Agent is the high-level wrapper unifying the P2P networking, 
+// Agent is the high-level wrapper unifying the P2P networking,
 // identity management, and messaging protocol.
 type Agent struct {
-	Host           host.Host
-	Keys           *crypto.IdentityKeys
-	Session        *session.Manager
-	Contacts       *contacts.Store
-	
+	Host     host.Host
+	Keys     *crypto.IdentityKeys
+	Session  *session.Manager
+	Contacts *contacts.Store
+
 	MQClient       *mq.Client
+	MQHTTPClient   *mq.HTTPClient
 	Registry       *registry.Client
 	DHT            *kad.IpfsDHT
 	BootstrapNodes []peer.AddrInfo
 	DRStore        *dr.DRStore
 
-	drPeers        map[string]*dr.DRSession
-	drPeersMu      sync.RWMutex
+	drPeers   map[string]*dr.DRSession
+	drPeersMu sync.RWMutex
 }
 
 // InitIdentity initializes or loads the Agent's cryptographic identity,
@@ -77,7 +79,7 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 		return nil, fmt.Errorf("failed to mount contacts store: %w", err)
 	}
 
-	keys, err := crypto.LoadOrCreateIdentity(cfg.KeysDir)
+	keys, err := crypto.LoadOrCreateIdentityWithOptions(crypto.IdentityOptions{KeysDir: cfg.KeysDir, URNPrefix: cfg.URNPrefix})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load/create identity: %w", err)
 	}
@@ -113,6 +115,10 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 		BootstrapNodes: cfg.BootstrapNodes,
 		drPeers:        make(map[string]*dr.DRSession),
 	}
+	if cfg.PlatformHTTPURL != "" {
+		a.MQHTTPClient = mq.NewHTTPClient(strings.TrimRight(cfg.PlatformHTTPURL, "/"), keys)
+		go a.registerHTTP(ctx)
+	}
 
 	// Try to register self with bootstrap registries
 	urn := keys.Ed25519.URN()
@@ -142,11 +148,11 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 
 	// 1. Concurrent Discovery (DHT vs Registry)
 	fmt.Printf("[Agent] Starting concurrent discovery for %s...\n", recipientURN)
-	
+
 	type resolveRes struct {
-		err  error
-		res  *registry.ResolveResult
-		src  string
+		err error
+		res *registry.ResolveResult
+		src string
 	}
 	resChan := make(chan resolveRes, len(a.BootstrapNodes))
 
@@ -160,7 +166,7 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 
 	// Launch DHT lookup - DHT maps URN string to peerID (not natively supported by vanilla Kademlia out of box unless doing provider records, but assume our Registry is the main mapping).
 	// NOTE: As per Phase 2, DHT discovery typically maps URN hash -> PeerID. We rely on Registry here quickly.
-	
+
 	// Wait for fastest successful registry result
 	found := false
 	var targetAddrs []multiaddr.Multiaddr
@@ -168,7 +174,7 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 		r := <-resChan
 		if r.err == nil && r.res != nil && len(r.res.X25519PubKey) == 32 {
 			// Perform cryptographic signature verification (zero-trust security check)
-			if err := registry.VerifyResolveResult(recipientURN, r.res); err != nil {
+			if err := verifyRecipient(recipientURN, r.res); err != nil {
 				fmt.Printf("[Agent] Security alert: Registry verification failed for %s resolved from %s: %v\n", recipientURN, r.src, err)
 				continue // Skip this potentially compromised/intercepted registry result!
 			}
@@ -185,9 +191,9 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 	if !found {
 		fmt.Printf("[Agent] Remote registry discovery failed for %s. Checking local contacts database...\n", recipientURN)
 		contact, err := a.Contacts.Get(recipientURN)
-		if err == nil && len(contact.X25519PK) == 32 {
+		if err == nil && contact.Trusted && len(contact.X25519PK) == 32 && crypto.URNMatchesPublicKey(recipientURN, contact.Ed25519PK) {
 			pid, err := peer.Decode(contact.PeerID)
-			if err == nil {
+			if err == nil && session.VerifyPeerURN(pid, recipientURN) == nil {
 				targetID = pid
 				recipientPubKey = contact.X25519PK
 				targetAddrs = a.Host.Peerstore().Addrs(targetID)
@@ -209,10 +215,9 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 	// Add to Session
 	a.Session.SetPeerX25519PK(targetID, recipientPubKey)
 
-
 	// 2. Fallback: Direct TCP/QUIC -> Relay -> MQ
 	fmt.Printf("[Agent] Attempting Direct/Relay P2P stream to %s...\n", targetID)
-	
+
 	// Create or resume Double Ratchet session
 	drSession, err := a.getOrCreateDRSession(ctx, targetID, recipientPubKey, recipientURN)
 	if err != nil {
@@ -241,7 +246,7 @@ func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext 
 
 	// 3. Fallback to MQ Store (Offline Envelope blind drop)
 	// We fallback to standard envelope if DR offline envelope builder is not exposed yet.
-	env, err := a.Session.BuildEnvelope(recipientPubKey, plaintext)
+	env, err := a.Session.BuildEnvelopeForRecipient(recipientURN, recipientPubKey, plaintext, uuid.NewString())
 	if err != nil {
 		return fmt.Errorf("failed to build encrypted envelope: %w", err)
 	}
@@ -298,7 +303,6 @@ func (a *Agent) getOrCreateDRSession(ctx context.Context, targetID peer.ID, reci
 	a.drPeers[peerIDStr] = drSession
 	return drSession, nil
 }
-
 
 // OnMessage registers the listener callback for incoming Realtime streams and polling MQ.
 func (a *Agent) OnMessage(ctx context.Context, handler func(senderURN string, msg string)) {

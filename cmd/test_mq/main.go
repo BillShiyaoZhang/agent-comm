@@ -9,9 +9,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	"github.com/BillShiyaoZhang/agent-comm/dht"
 	"github.com/BillShiyaoZhang/agent-comm/libp2p"
@@ -19,6 +16,9 @@ import (
 	"github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/BillShiyaoZhang/agent-comm/registry"
 	"github.com/BillShiyaoZhang/agent-comm/session"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	goproto "google.golang.org/protobuf/proto"
 )
 
@@ -113,7 +113,7 @@ func main() {
 	}
 
 	// B builds encrypted envelope for A
-	envelope, err := senderMgr.BuildEnvelope(resolved.X25519PubKey, "Hello A! This is an offline message.")
+	envelope, err := senderMgr.BuildEnvelope(resolved.X25519PubKey, "Hello A! This is an offline message.", receiverURN)
 	if err != nil {
 		fmt.Printf("FAIL: build envelope: %v\n", err)
 		return
@@ -129,13 +129,12 @@ func main() {
 	}
 	fmt.Printf("B stored message for A via relay: msg_id=%s\n\n", msgID)
 
-	// Verify message is in relay DB
-	pending, err := senderMQ.Retrieve(ctx, peer.AddrInfo{ID: relayHost.ID(), Addrs: relayHost.Addrs()}, receiverURN)
-	if err != nil {
-		fmt.Printf("FAIL: verify retrieve: %v\n", err)
+	// The sender cannot read another identity's mailbox.
+	if _, err := senderMQ.Retrieve(ctx, peer.AddrInfo{ID: relayHost.ID(), Addrs: relayHost.Addrs()}, receiverURN); err == nil {
+		fmt.Println("FAIL: sender was allowed to retrieve receiver mailbox")
 		return
 	}
-	fmt.Printf("Relay has %d message(s) for A\n\n", len(pending))
+	fmt.Println("Relay correctly denied sender access to receiver mailbox")
 
 	// --- Now A comes online ---
 	fmt.Println("--- A comes online and pulls messages ---")

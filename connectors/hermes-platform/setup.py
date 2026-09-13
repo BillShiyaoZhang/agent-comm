@@ -1,15 +1,12 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 setup(
     name="hermes-platform-agent-comm",
-    version="1.0.0",
-    description="Unified Agent Comm platform adaptor for Hermes framework",
+    version="1.1.0",
+    description="Durable agent-comm messaging adapter for Hermes Gateway",
     packages=find_packages(),
-    python_requires=">=3.8",
-    install_requires=[],
-    entry_points={
-        "hermes_agent.plugins": [
-            "agent_comm = hermes_platform_agent_comm.plugin",
-        ]
-    }
+    package_data={"hermes_platform_agent_comm": ["plugin.yaml"]},
+    python_requires=">=3.11",
+    install_requires=["aiohttp>=3.14.3,<4"],
+    entry_points={"hermes_agent.plugins": ["agent_comm = hermes_platform_agent_comm.plugin"]},
 )

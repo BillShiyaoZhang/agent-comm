@@ -17,6 +17,7 @@ import (
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	"github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	goproto "google.golang.org/protobuf/proto"
@@ -41,6 +42,8 @@ func (c *Client) Store(ctx context.Context, relay peer.AddrInfo, recipientURN st
 		return "", fmt.Errorf("open stream to relay: %w", err)
 	}
 	defer stream.Close()
+	stopCancellation := bindMQStreamContext(ctx, stream)
+	defer stopCancellation()
 
 	expiry := int64(0)
 	if ttlDays > 0 {
@@ -51,8 +54,8 @@ func (c *Client) Store(ctx context.Context, relay peer.AddrInfo, recipientURN st
 		Op: &proto.MQRequest_Store{
 			Store: &proto.StoreRequest{
 				RecipientUrn: recipientURN,
-				Payload:     envelope,
-				ExpiryUnix:  expiry,
+				Payload:      envelope,
+				ExpiryUnix:   expiry,
 			},
 		},
 	}
@@ -87,6 +90,8 @@ func (c *Client) Retrieve(ctx context.Context, relay peer.AddrInfo, recipientURN
 		return nil, fmt.Errorf("open stream to relay: %w", err)
 	}
 	defer stream.Close()
+	stopCancellation := bindMQStreamContext(ctx, stream)
+	defer stopCancellation()
 
 	req := &proto.MQRequest{
 		Op: &proto.MQRequest_Retrieve{
@@ -117,6 +122,11 @@ func (c *Client) Retrieve(ctx context.Context, relay peer.AddrInfo, recipientURN
 
 // Ack deletes successfully processed messages from the relay.
 func (c *Client) Ack(ctx context.Context, relay peer.AddrInfo, messageIDs []string) (int, error) {
+	return c.AckForRecipient(ctx, relay, "", messageIDs)
+}
+
+// AckForRecipient acknowledges messages in an explicit identity namespace.
+func (c *Client) AckForRecipient(ctx context.Context, relay peer.AddrInfo, recipientURN string, messageIDs []string) (int, error) {
 	if len(messageIDs) == 0 {
 		return 0, nil
 	}
@@ -126,10 +136,12 @@ func (c *Client) Ack(ctx context.Context, relay peer.AddrInfo, messageIDs []stri
 		return 0, fmt.Errorf("open stream to relay: %w", err)
 	}
 	defer stream.Close()
+	stopCancellation := bindMQStreamContext(ctx, stream)
+	defer stopCancellation()
 
 	req := &proto.MQRequest{
 		Op: &proto.MQRequest_Ack{
-			Ack: &proto.AckRequest{MessageIds: messageIDs},
+			Ack: &proto.AckRequest{MessageIds: messageIDs, RecipientUrn: recipientURN},
 		},
 	}
 
@@ -153,6 +165,15 @@ func (c *Client) Ack(ctx context.Context, relay peer.AddrInfo, messageIDs []stri
 	return int(ackResp.DeletedCount), nil
 }
 
+func bindMQStreamContext(ctx context.Context, stream network.Stream) func() bool {
+	deadline := time.Now().Add(30 * time.Second)
+	if requested, ok := ctx.Deadline(); ok && requested.Before(deadline) {
+		deadline = requested
+	}
+	_ = stream.SetDeadline(deadline)
+	return context.AfterFunc(ctx, func() { _ = stream.Reset() })
+}
+
 // sendMQRequest marshals and sends a length-prefixed MQ request.
 func sendMQRequest(w io.Writer, req *proto.MQRequest) error {
 	data, err := goproto.Marshal(req)
@@ -174,6 +195,9 @@ func readMQResponse(r io.Reader) (*proto.MQResponse, error) {
 		return nil, fmt.Errorf("read size: %w", err)
 	}
 	size := uint32(sizeBuf[0])<<24 | uint32(sizeBuf[1])<<16 | uint32(sizeBuf[2])<<8 | uint32(sizeBuf[3])
+	if size == 0 || size > MaxFrameSize {
+		return nil, fmt.Errorf("invalid MQ frame size: %d", size)
+	}
 	data := make([]byte, size)
 	if _, err := io.ReadFull(r, data); err != nil {
 		return nil, fmt.Errorf("read data: %w", err)
@@ -321,7 +345,9 @@ func (c *HTTPClient) Retrieve(ctx context.Context, recipientURN string) ([]*prot
 }
 
 type ackReq struct {
-	MessageIDs []string `json:"message_ids"`
+	RecipientURN string   `json:"recipient_urn"`
+	Timestamp    int64    `json:"timestamp"`
+	MessageIDs   []string `json:"message_ids"`
 }
 
 // Ack deletes successfully processed messages from the platform MQ.
@@ -331,7 +357,9 @@ func (c *HTTPClient) Ack(ctx context.Context, messageIDs []string) (int, error) 
 	}
 
 	reqObj := ackReq{
-		MessageIDs: messageIDs,
+		RecipientURN: c.Keys.Ed25519.URN(),
+		Timestamp:    time.Now().Unix(),
+		MessageIDs:   messageIDs,
 	}
 
 	bodyBytes, err := json.Marshal(reqObj)
@@ -345,6 +373,8 @@ func (c *HTTPClient) Ack(ctx context.Context, messageIDs []string) (int, error) 
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	payloadSig := ed25519.Sign(c.Keys.Ed25519.PrivateKey, bodyBytes)
+	req.Header.Set("Authorization", "Ed25519 "+hex.EncodeToString(payloadSig)+":"+hex.EncodeToString(c.Keys.Ed25519.PublicKey))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("http request: %w", err)

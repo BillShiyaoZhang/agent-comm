@@ -1,21 +1,18 @@
 package main
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	pb "github.com/BillShiyaoZhang/agent-comm/proto"
+	"github.com/BillShiyaoZhang/agent-comm/session"
 	goproto "google.golang.org/protobuf/proto"
 )
-
-
 
 type Response map[string]interface{}
 
@@ -38,7 +35,10 @@ func main() {
 	case "decrypt-envelope":
 		runDecryptEnvelope()
 	case "daemon":
-		runDaemon()
+		if err := runDaemon(); err != nil {
+			printError(err.Error())
+			os.Exit(1)
+		}
 	default:
 		printError(fmt.Sprintf("unknown command: %s", cmd))
 		os.Exit(1)
@@ -158,144 +158,83 @@ func runSignStore() {
 }
 
 func runEncryptEnvelope() {
-	if len(os.Args) < 5 {
-		printError("Usage: agent-comm-helper encrypt-envelope <keys_dir> <recipient_pubkey_hex> <plaintext_hex>")
+	if len(os.Args) != 7 {
+		printError("authenticated envelopes require a recipient URN and stable message ID. Usage: agent-comm-helper encrypt-envelope <keys_dir> <recipient_urn> <recipient_pubkey_hex> <plaintext_hex> <message_id>")
 		os.Exit(1)
 	}
-	keysDir := os.Args[2]
-	recipientPubkeyHex := os.Args[3]
-	plaintextHex := os.Args[4]
-
-	recipientPubKey, err := hex.DecodeString(recipientPubkeyHex)
+	recipientPubKey, err := hex.DecodeString(os.Args[4])
 	if err != nil || len(recipientPubKey) != 32 {
 		printError("invalid recipient X25519 public key (must be 32 bytes hex)")
 		os.Exit(1)
 	}
-
-	plaintextBytes, err := hex.DecodeString(plaintextHex)
+	plaintext, err := hex.DecodeString(os.Args[5])
 	if err != nil {
 		printError("invalid plaintext hex")
 		os.Exit(1)
 	}
-
-	keys, err := crypto.LoadOrCreateIdentity(keysDir)
+	keys, err := crypto.LoadOrCreateIdentity(os.Args[2])
 	if err != nil {
 		printError(fmt.Sprintf("load keys failed: %v", err))
 		os.Exit(1)
 	}
-
-	msg := &pb.ChatMessage{
-		Body: &pb.ChatMessage_Text{
-			Text: &pb.TextMessage{
-				Text:      string(plaintextBytes),
-				Timestamp: time.Now().UnixMilli(),
-			},
-		},
-	}
-	payload, err := goproto.Marshal(msg)
+	envelope, err := session.NewManager(nil, keys).BuildEnvelopeForRecipient(os.Args[3], recipientPubKey, string(plaintext), os.Args[6])
 	if err != nil {
-		printError(fmt.Sprintf("protobuf marshal failed: %v", err))
+		printError(fmt.Sprintf("encrypt envelope: %v", err))
 		os.Exit(1)
 	}
-
-	ecies := crypto.NewECIES()
-	sharedSecret, err := ecies.ComputeSharedSecret(keys.X25519SK, recipientPubKey)
+	wire, err := goproto.Marshal(envelope)
 	if err != nil {
-		printError(fmt.Sprintf("ECDH shared secret computation failed: %v", err))
+		printError(fmt.Sprintf("marshal envelope: %v", err))
 		os.Exit(1)
 	}
-
-	aad := sha256.Sum256([]byte("agent-comm-v1"))
-	ephemeral, nonce, ciphertext, tag, err := ecies.EncryptWithSharedSecret(sharedSecret, payload, aad[:16])
-	if err != nil {
-		printError(fmt.Sprintf("encryption failed: %v", err))
-		os.Exit(1)
-	}
-
-	messageID := crypto.GenerateMessageID()
-
 	printResult(Response{
-		"sender_urn":           keys.Ed25519.URN(),
-		"sender_static_pubkey": hex.EncodeToString(keys.X25519PK),
-		"ephemeral_pubkey":     hex.EncodeToString(ephemeral),
-		"nonce":                hex.EncodeToString(nonce),
-		"ciphertext":           hex.EncodeToString(ciphertext),
-		"tag":                  hex.EncodeToString(tag),
-		"message_id":           messageID,
+		"sender_urn":            envelope.SenderUrn,
+		"recipient_urn":         envelope.RecipientUrn,
+		"sender_static_pubkey":  hex.EncodeToString(envelope.SenderStaticPubkey),
+		"sender_ed25519_pubkey": hex.EncodeToString(envelope.SenderEd25519Pubkey),
+		"ephemeral_pubkey":      hex.EncodeToString(envelope.EphemeralPubkey),
+		"nonce":                 hex.EncodeToString(envelope.Nonce),
+		"ciphertext":            hex.EncodeToString(envelope.Ciphertext),
+		"tag":                   hex.EncodeToString(envelope.Tag),
+		"message_id":            envelope.MessageId,
+		"signature":             hex.EncodeToString(envelope.Signature),
+		"envelope_proto_hex":    hex.EncodeToString(wire),
 	})
 }
 
 func runDecryptEnvelope() {
-	if len(os.Args) < 8 {
-		printError("Usage: agent-comm-helper decrypt-envelope <keys_dir> <sender_static_pubkey_hex> <ephemeral_pubkey_hex> <nonce_hex> <ciphertext_hex> <tag_hex>")
+	if len(os.Args) != 4 {
+		printError("unsigned field-only envelopes are no longer accepted. Usage: agent-comm-helper decrypt-envelope <keys_dir> <envelope_proto_hex>")
 		os.Exit(1)
 	}
-	keysDir := os.Args[2]
-	senderStaticPubkeyHex := os.Args[3]
-	ephemeralPubkeyHex := os.Args[4]
-	nonceHex := os.Args[5]
-	ciphertextHex := os.Args[6]
-	tagHex := os.Args[7]
-
-	senderStaticPubkey, err := hex.DecodeString(senderStaticPubkeyHex)
-	if err != nil || len(senderStaticPubkey) != 32 {
-		printError("invalid sender static pubkey")
+	wire, err := hex.DecodeString(os.Args[3])
+	if err != nil || len(wire) > crypto.MaxEnvelopeSize {
+		printError("invalid or oversized envelope protobuf hex")
 		os.Exit(1)
 	}
-	ephemeralPubkey, err := hex.DecodeString(ephemeralPubkeyHex)
-	if err != nil || len(ephemeralPubkey) != 32 {
-		printError("invalid ephemeral pubkey")
+	var envelope pb.EncryptedEnvelope
+	if err := goproto.Unmarshal(wire, &envelope); err != nil {
+		printError(fmt.Sprintf("unmarshal envelope: %v", err))
 		os.Exit(1)
 	}
-	nonce, err := hex.DecodeString(nonceHex)
-	if err != nil {
-		printError("invalid nonce")
-		os.Exit(1)
-	}
-	ciphertext, err := hex.DecodeString(ciphertextHex)
-	if err != nil {
-		printError("invalid ciphertext")
-		os.Exit(1)
-	}
-	tag, err := hex.DecodeString(tagHex)
-	if err != nil {
-		printError("invalid tag")
-		os.Exit(1)
-	}
-
-	keys, err := crypto.LoadOrCreateIdentity(keysDir)
+	keys, err := crypto.LoadOrCreateIdentity(os.Args[2])
 	if err != nil {
 		printError(fmt.Sprintf("load keys failed: %v", err))
 		os.Exit(1)
 	}
-
-	ecies := crypto.NewECIES()
-	sharedSecret, err := ecies.ComputeSharedSecret(keys.X25519SK, senderStaticPubkey)
+	payload, err := session.NewManager(nil, keys).DecryptEnvelope(&envelope)
 	if err != nil {
-		printError(fmt.Sprintf("ECDH shared secret failed: %v", err))
+		printError(fmt.Sprintf("authenticate/decrypt envelope: %v", err))
 		os.Exit(1)
 	}
-
-	aad := sha256.Sum256([]byte("agent-comm-v1"))
-	plaintextBytes, err := ecies.DecryptWithSharedSecret(
-		sharedSecret, ephemeralPubkey, nonce, ciphertext, tag, aad[:16])
-	if err != nil {
-		printError(fmt.Sprintf("ECIES decryption failed: %v", err))
+	var msg pb.ChatMessage
+	if err := goproto.Unmarshal(payload, &msg); err != nil {
+		printError(fmt.Sprintf("unmarshal message: %v", err))
 		os.Exit(1)
 	}
-
-	var chatMsg pb.ChatMessage
-	if err := goproto.Unmarshal(plaintextBytes, &chatMsg); err != nil {
-		printError(fmt.Sprintf("protobuf unmarshal failed: %v", err))
-		os.Exit(1)
-	}
-
 	text := ""
-	if txt := chatMsg.GetText(); txt != nil {
+	if txt := msg.GetText(); txt != nil {
 		text = txt.Text
 	}
-
-	printResult(Response{
-		"plaintext": text,
-	})
+	printResult(Response{"plaintext": text, "sender_urn": envelope.SenderUrn, "recipient_urn": envelope.RecipientUrn, "message_id": envelope.MessageId})
 }

@@ -136,6 +136,9 @@ func (e *ECIES) EncryptWithSharedSecret(sharedSecret, plaintext, aad []byte) (
 func (e *ECIES) DecryptWithSharedSecret(
 	sharedSecret, senderEphemeral, nonce, ciphertext, tag, aad []byte,
 ) ([]byte, error) {
+	if len(nonce) != NonceSize || len(tag) != TagSize || len(senderEphemeral) != KeySize {
+		return nil, errors.New("invalid encryption field lengths")
+	}
 	// Re-derive same encKey using the transmitted ephemeral
 	encKey, err := e.DeriveKeys(sharedSecret, senderEphemeral)
 	if err != nil {

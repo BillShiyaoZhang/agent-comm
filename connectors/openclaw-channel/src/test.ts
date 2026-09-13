@@ -1,41 +1,18 @@
+import { test } from "node:test";
+import { strict as assert } from "node:assert";
+import { EventEmitter } from "node:events";
 import { AgentCommChannel } from "./channel";
-import { EventEmitter } from "events";
-import * as path from "path";
-import * as os from "os";
 
-async function runTests() {
-  console.log("Running `@agent-comm/openclaw-channel` tests...");
-
-  const gateway = new EventEmitter();
-  gateway.on("message", (msg) => {
-    console.log("Gateway received message:", msg);
+test("local plaintext API rejects cloud URLs before starting", async () => {
+  const channel = new AgentCommChannel(new EventEmitter(), {
+    platform_url: "https://agent-communication.online", urn: "local", keys_dir: "unused",
   });
+  await assert.rejects(channel.start(), /loopback HTTP/);
+});
 
-  const testKeysDir = path.resolve(__dirname, "../../../agent-comm-platform/agent-comm/test_keys");
-  const helperPath = path.resolve(__dirname, "../../../agent-comm-platform/agent-comm/cmd/helper/agent-comm-helper");
-
-  // Set helper path env
-  process.env.AGENT_COMM_HELPER_PATH = helperPath;
-
-  const channel = new AgentCommChannel(gateway, {
-    platform_url: "http://localhost:8080/api/v1/mq",
-    urn: "urn:hermes:agent:VVDkKJJAExLmCgqhLW26AM", // matches test_keys URN
-    keys_dir: testKeysDir
+test("local ACK requires an event admitted by this channel", async () => {
+  const channel = new AgentCommChannel(new EventEmitter(), {
+    platform_url: "http://127.0.0.1:1", urn: "local", keys_dir: "unused",
   });
-
-  console.log("Invoking helper via channel for sign-store test...");
-  // Use private method/invoker directly for testing helper communication
-  try {
-    const res = await (channel as any).invokeHelper(["init", testKeysDir]);
-    console.log("Helper init command output:", res);
-    if (res.urn !== "urn:hermes:agent:VVDkKJJAExLmCgqhLW26AM") {
-      throw new Error(`URN mismatch: expected urn:hermes:agent:VVDkKJJAExLmCgqhLW26AM, got ${res.urn}`);
-    }
-    console.log("Tests PASSED successfully!");
-  } catch (err: any) {
-    console.error("Test failed:", err.message);
-    process.exit(1);
-  }
-}
-
-runTests();
+  await assert.rejects(channel.acknowledge("foreign-id"), /not admitted/);
+});

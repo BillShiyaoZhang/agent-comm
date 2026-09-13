@@ -10,9 +10,9 @@ import (
 
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	"github.com/BillShiyaoZhang/agent-comm/mq"
+	"github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/BillShiyaoZhang/agent-comm/registry"
 	"github.com/BillShiyaoZhang/agent-comm/session"
-	"github.com/BillShiyaoZhang/agent-comm/proto"
 	goproto "google.golang.org/protobuf/proto"
 
 	"github.com/libp2p/go-libp2p"
@@ -86,7 +86,7 @@ func main() {
 	// 5. Test MQ Store
 	fmt.Println("--- Step 3: Storing Envelope in HTTP MQ ---")
 	testMsg := "Hello Hermes! Testing HTTP Signature Authentication."
-	env, err := sessionMgr.BuildEnvelope(keys.X25519PK, testMsg)
+	env, err := sessionMgr.BuildEnvelope(keys.X25519PK, testMsg, keys.Ed25519.URN())
 	if err != nil {
 		fmt.Printf("❌ BuildEnvelope failed: %v\n", err)
 		os.Exit(1)

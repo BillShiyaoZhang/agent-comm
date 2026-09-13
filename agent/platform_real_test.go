@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/BillShiyaoZhang/agent-comm/contacts"
 	pb "github.com/BillShiyaoZhang/agent-comm/proto"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	goproto "google.golang.org/protobuf/proto"
 )
 
@@ -80,7 +80,7 @@ func TestRealPlatformLifecycle(t *testing.T) {
 
 	// 4. Test MQ: Send message to self via MQ blind-store
 	testMsg := "Hello from real platform test!"
-	env, err := agentA.Session.BuildEnvelope(agentA.Keys.X25519PK, testMsg)
+	env, err := agentA.Session.BuildEnvelope(agentA.Keys.X25519PK, testMsg, agentA.Keys.Ed25519.URN())
 	if err != nil {
 		t.Fatalf("failed to build envelope: %v", err)
 	}

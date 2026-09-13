@@ -1,1 +1,1 @@
-export { AgentCommChannel, ChannelConfig } from "./channel";
+export { AgentCommChannel, ChannelConfig, MessageMetadata, StoreResult } from "./channel";

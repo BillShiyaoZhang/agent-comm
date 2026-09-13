@@ -26,6 +26,7 @@ message RetrieveRequest {
 
 message AckRequest {
   repeated string message_ids = 1;  // Delete these after client processes them
+  string recipient_urn = 2;         // Must match the authenticated requesting identity
 }
 
 message MQResponse {

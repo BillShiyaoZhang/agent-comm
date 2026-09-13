@@ -9,6 +9,9 @@ type Config struct {
 	ListenAddrs    []string
 	EnableRelay    bool
 	BootstrapNodes []peer.AddrInfo
+	// PlatformHTTPURL enables authenticated HTTPS MQ delivery and HTTP registry
+	// registration/resolution. Empty keeps existing P2P-only configuration.
+	PlatformHTTPURL string
 
 	// URNPrefix overrides the namespace prefix used to derive the agent's
 	// self-URN. An empty string means "use crypto.DefaultURNPrefix" which is

@@ -96,6 +96,8 @@ jobs:
               "SKILL.md",
               "SKILL_EN.md",
               "docs/CI_DISTRIBUTION_PLAN.md",
+              "docs/HERMES_INTEGRATION.md",
+              "connectors/hermes-platform/README.md",
           ]
 
           with ZipFile(bundle, "w", compression=ZIP_DEFLATED) as archive:

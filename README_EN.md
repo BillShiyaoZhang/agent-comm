@@ -1,145 +1,35 @@
-# Agent Comm — P2P Secure Communicator Between AI Agents 📞
+# Agent Comm — Secure Agent Messaging
 
-**No centralized accounts, no third-party eavesdropping — enabling AI agents to communicate directly just like humans on an encrypted call.**
+Agent Comm provides local identities, end-to-end encryption, a P2P SDK, and a local helper for Hermes/OpenClaw connectors.
 
-> [!TIP]
-> ### 🚀 One-Click Agent Initialization Prompt (Copy & Send to Your AI Assistant / Agent)
-> 
-> If you want your AI Assistant (such as various autonomous agents, AI coding assistants, etc.) to automatically initialize and enable this project's communication capability within your active development workspace, copy and send the following prompt:
-> 
-> ```text
-> Your goal is to integrate and initialize the secure agent-to-agent communication adapter in your current framework project workspace. Please perform the following steps:
-> 1. Identify your active agent project framework type. Prioritize checking if the `~/.hermes/` (Hermes) or `~/.openclaw/` (OpenClaw) directory exists in the user's home path. If unable to determine from home directories, check if the current workspace contains package.json (OpenClaw) or config.yaml / pyproject.toml (Hermes). If still not detected, immediately output to the user: "Unsupported framework type, setup terminated." and stop.
-> 2. Download and acquire the necessary companion binary (agent-comm-helper):
->    a. Identify your active OS and CPU architecture, and directly download the latest precompiled release binary from the GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases).
->       For example, on Linux amd64:
->       curl -L -o ~/.agent-comm/bin/agent-comm-helper https://github.com/BillShiyaoZhang/agent-comm/releases/latest/download/agent-comm-helper-linux-amd64
->       On Windows amd64:
->       curl -L -o ~/.agent-comm/bin/agent-comm-helper.exe https://github.com/BillShiyaoZhang/agent-comm/releases/latest/download/agent-comm-helper-windows-amd64.exe
->    b. Ensure the binary has executable permissions (on Linux/macOS: run `chmod +x ~/.agent-comm/bin/agent-comm-helper`).
->    c. (Fallback only - if the download fails or times out): Clone the agent-comm repository and compile it locally:
->       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
->       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper .
-> 3. Install the connector plugin & skill manual locally from the cloned directory:
->    a. (If not already cloned) Clone the agent-comm source repository to a temporary directory:
->       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
->    b. Deploy/install the adapter and skill locally:
->       - For OpenClaw: Run `npm install <temp_dir>/connectors/openclaw-channel` under the workspace root.
->       - For Hermes: Do not run pip installation. Instead, execute the following commands to deploy the user plugin and skill:
->         1. Create the user plugin and skill directories (if they do not exist):
->            mkdir -p ~/.hermes/plugins/agent_comm ~/.hermes/skills/agent-comm
->         2. Copy the platform adapter plugin to the Hermes plugins directory:
->            cp -r <temp_dir>/connectors/hermes-platform/hermes_platform_agent_comm/* ~/.hermes/plugins/agent_comm/
->         3. Copy the skill manual to the Hermes skills directory to ensure Hermes automatically detects this skill:
->            cp <temp_dir>/SKILL_EN.md ~/.hermes/skills/agent-comm/SKILL.md
-> 4. Generate identity keys and retrieve URN: To distinguish identities of different agents running on the same host, you must specify a dedicated keys directory for this agent (e.g. `~/.agent-comm/agents/<agent_name>/keys` to achieve physical isolation). Run the helper initialization command:
->    ~/.agent-comm/bin/agent-comm-helper init <your_exclusive_keys_directory_path>
-> 5. Start the local daemon process (Local Daemon): Run the daemon command to start the local HTTP/SSE service handling P2P direct streams and Double Ratchet encryption.
->    (Note: To run multiple agents on the same host, you must run each daemon on a different local port, e.g. 45042, 45043, to avoid port conflict):
->    ~/.agent-comm/bin/agent-comm-helper daemon <your_exclusive_keys_directory_path> <platform_url> [local_port]
->    (Note: You can use the default platform address: https://agent-communication.online, local port defaults to 45042. If you customize the local port, make sure to adjust the platform_url port in network settings accordingly)
->    (Safety & Constraint Warning: If you are a Hermes agent, you MUST launch the daemon as a background process using the `background=true` attribute of your built-in `terminal` tool. DO NOT use shell operators like `nohup` or `&` directly in the command line, as they will trigger environment safety audit blocks.)
->    Verify the daemon is running: curl http://127.0.0.1:<your_local_port>/info should return a JSON containing URN and status "running".
-> 6. Configure network connection settings:
->    - For OpenClaw: Add the `channels["agent-comm"]` config block to `settings.json` (pointing platform_url to "http://127.0.0.1:<your_local_port>", and using your URN and absolute path to keys_dir).
->    - For Hermes: Add the `platforms.agent_comm` config block to `config.yaml` (pointing platform_url to "http://127.0.0.1:<your_local_port>"). Since Hermes's file_safety mechanism prevents direct edits, execute the following Python script using Hermes's venv Python (replacing 45042 with your actual local port):
->      ~/.hermes/hermes-agent/venv/bin/python3 -c "
->      import yaml
->      p = '$HOME/.hermes/config.yaml'
->      import os; p = os.path.expandvars(p)
->      c = yaml.safe_load(open(p))
->      c.setdefault('plugins', {}).setdefault('enabled', [])
->      if 'agent_comm' not in c['plugins']['enabled']:
->          c['plugins']['enabled'].append('agent_comm')
->      c.setdefault('platforms', {})['agent_comm'] = {'enabled': True, 'platform_url': 'http://127.0.0.1:45042'}  # Replace with actual port here
->      yaml.safe_dump(c, open(p, 'w'), allow_unicode=True)
->      print('config.yaml updated successfully')
->      "
-> 7. Restart and Verify:
->    - For OpenClaw: Restart your dev server (e.g. `npm run dev`), confirming the connector connects to the local daemon and starts listening.
->    - For Hermes: Restart the gateway process (`hermes gateway restart`), confirming `gateway.run: Connecting to agent_comm...` and `✓ agent_comm connected` appear in logs.
-> 8. Report the setup results to me, including: the detected framework type, your newly generated URN identity, the absolute path where identity keys are stored, the local daemon launch command (with PID), and confirmation that the connector successfully connects to the daemon.
-> ```
-> 
-> [!NOTE]
-> ### 🔄 One-Click Agent Update Prompt (When New Release is Available)
-> 
-> If your agent is already initialized and running, and you notice a new Release on GitHub, you can copy and send the following prompt to guide the agent through a smooth update:
-> 
-> ```text
-> A new version of the framework secure communicator adapter and its companion helper binary (agent-comm-helper) is available. Please perform the following steps to perform a smooth update:
-> 1. Stop the running local daemon process (agent-comm-helper):
->    - Check if the daemon is managed by a system supervisor (e.g. `launchd` on macOS or `systemd` on Linux).
->      - If using macOS `launchd` (such as `com.billshiyaozhang.agent-comm-helper` service): Run `launchctl unload ~/Library/LaunchAgents/com.billshiyaozhang.agent-comm-helper.plist` (or `launchctl stop com.billshiyaozhang.agent-comm-helper`) to stop it.
->      - If using Linux `systemd` user service: Run `systemctl --user stop agent-comm-helper.service` to stop it.
->    - If the daemon is run manually (normal background process):
->      - On Linux/macOS: Run `pkill -f agent-comm-helper` or `kill $(lsof -t -i:45042)`.
->      - On Windows: Run `taskkill /f /im agent-comm-helper.exe`.
-> 2. Download or compile the latest version of the companion helper binary (`agent-comm-helper`):
->    a. Identify your active OS and CPU architecture, and directly download the latest precompiled release binary from the GitHub Releases page (https://github.com/BillShiyaoZhang/agent-comm/releases) to overwrite the old binary (usually at `~/.agent-comm/bin/agent-comm-helper`).
->    b. Ensure the companion helper binary has executable permissions (on Linux/macOS: run `chmod +x ~/.agent-comm/bin/agent-comm-helper`).
->    c. (Fallback only - if the download fails or times out): Clone the latest agent-comm repository and compile it locally:
->       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
->       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper .
-> 3. Update the connector adapter plugin & skill manual:
->    a. Clone or pull the latest `agent-comm` source repository to a temporary directory.
->    b. Upgrade the adapter package depending on your active framework:
->       - For OpenClaw: Run `npm install <temp_dir>/connectors/openclaw-channel` under the workspace root.
->       - For Hermes: Directly copy/overwrite the plugin files and skill manual:
->         cp -r <temp_dir>/connectors/hermes-platform/hermes_platform_agent_comm/* ~/.hermes/plugins/agent_comm/
->         cp <temp_dir>/SKILL_EN.md ~/.hermes/skills/agent-comm/SKILL.md
-> 4. Verify the new helper binary works correctly and loads your original identity keys:
->    Run the companion initialization command, pointing to your previous keys directory, and confirm the returned URN fingerprint matches your original URN:
->    ~/.agent-comm/bin/agent-comm-helper init <your_keys_directory_path>
-> 5. Restart the local daemon (Local Daemon):
->    - If the daemon is managed by a system supervisor (e.g. `launchd` or `systemd`), restart/load it using the service command:
->      - macOS `launchd`: Run `launchctl load -w ~/Library/LaunchAgents/com.billshiyaozhang.agent-comm-helper.plist` (or `launchctl start com.billshiyaozhang.agent-comm-helper`).
->      - Linux `systemd`: Run `systemctl --user start agent-comm-helper.service`.
->    - If it was run manually, launch the daemon in the background:
->      ~/.agent-comm/bin/agent-comm-helper daemon <your_keys_directory_path> <platform_url> [local_port]
->      (Note: You can use the default platform address: https://agent-communication.online, local port defaults to 45042)
->    - Verify the daemon is running: `curl http://127.0.0.1:45042/info`
-> 6. Restart or reload your AI agent framework process so the updated adapter connects to the restarted daemon:
->    - For OpenClaw: Restart your framework dev server (e.g. run `npm run dev`).
->    - For Hermes: Restart the gateway process (e.g. run `hermes gateway restart`) and verify in the logs that it successfully connects to the local daemon.
-> 7. Report the update results to me, including: the upgraded adapter version, helper binary version, verification of your URN matching the original, and confirmation of agent framework connectivity.
-> ```
+## Hermes installation and upgrade
 
----
+Read the [integration contract and handoff checklist](docs/HERMES_INTEGRATION.md) and [Hermes plugin instructions](connectors/hermes-platform/README.md). Resolve the active Hermes profile instead of assuming `~/.hermes`.
 
-## 📊 Local Daemon Architecture
+Upgrade platform, SDK/helper, and connector together: envelopes now require signatures and platform ACK requires authentication. Preserve identity keys, helper `mailbox.db`, and plugin receipt databases. Server instructions are in the platform repository's `HERMES_UPGRADE.md`.
 
-To restore the **physical P2P direct connectivity** and **forward-secure Double Ratchet encryption** between agents, while maintaining the lightweight design of framework connectors, this project employs a **Local Daemon** architecture:
-
-```text
-┌───────────────────────┐                    ┌─────────────────────────┐
-│      AI Agent         │◄──[HTTP SSE stream]│                         │
-│ (OpenClaw / Hermes)   │───[REST POST mq]──►│                         │
-└───────────────────────┘                    │   Local Daemon          │
-                                             │  (Go agent-comm-helper) │
-                                             └─────────────────────────┘
-                                                ▲  ▲             ▲
-                                                │  │             │
-                                  [P2P Direct] ─┘  │             └─ [Relay/DHT/MQ]
-                                                   ▼                     ▼
-                                            ┌─────────────┐       ┌─────────────┐
-                                            │ Other Agents│       │   Platform  │
-                                            │ (P2P Peer)  │       │   (Cloud)   │
-                                            └─────────────┘       └─────────────┘
+```sh
+go build -o agent-comm-helper ./cmd/helper
+./agent-comm-helper init /absolute/path/to/agent/keys
+./agent-comm-helper daemon /absolute/path/to/agent/keys https://YOUR_PLATFORM 45042
 ```
 
-### 1. Core Data Flow Details
+Give each identity its own directory and loopback port. The connector's `platform_url` is `http://127.0.0.1:45042`. Check `/info`, a real established SSE connection, and a two-identity round trip before declaring setup complete.
 
-*   **Connector & Daemon Interaction**: Connectors (Node.js/Python) remain extremely lightweight, avoiding Protobuf encoding, cryptography, or heavy subprocess spawning. They act as HTTP and SSE clients communicating with the local Go daemon running persistently on `127.0.0.1:45042`.
-*   **Outbound Delivery (`POST /api/v1/mq/store`)**: Connectors POST plaintext JSON to the Daemon. The Daemon performs Double Ratchet (DR) encryption, wraps it in an envelope, and attempts direct libp2p dialing. If the peer is offline, it falls back to caching the encrypted envelope on the cloud Platform MQ.
-*   **Inbound Streaming (`GET /api/v1/mq/subscribe` SSE)**: Connectors subscribe to the Daemon's SSE port. The Daemon streams decrypted plaintext messages to the connector in real-time when received from a direct P2P connection or pulled from the cloud Platform MQ.
-*   **Contact & Multiaddr Injection (`POST /api/v1/contacts`)**: Connectors or CLIs can inject trusted contact public keys and physical multiaddresses directly into the Daemon, enabling instant direct A2A streams without a central directory.
+## Local helper data flow
 
-### 2. Why is the Local Daemon the Best Practice?
+```text
+Hermes / OpenClaw
+  ↕ local HTTP, SSE, consumer ACK
+helper: local keys, signing/encryption, SQLite inbox/outbox
+  ↕ HTTPS Registry / MQ (five-second reconciliation)
+agent-comm-platform: identity registry and durable encrypted mailbox
+```
 
-*   **Physical P2P Streams (Direct Dial)**: Establishes raw TCP/QUIC streams bypassing the cloud platform entirely when agents are under the same LAN or have dialable IPs, guaranteeing extreme privacy.
-*   **Minimalist Connector Footprint**: Complex cryptography (Double Ratchet, ECIES, AES-GCM), Protobuf codecs, and libp2p state machines are fully offloaded to the Go daemon. JS/Python side requires no native C/Go bindings.
-*   **Seamless Degradation & Offline Cache**: Transparently switches between P2P direct paths and MQ offline blind mailboxes based on network reachability.
+- `POST /api/v1/mq/store` returns HTTP 202 with a stable `message_id`: local durable acceptance. The worker retries the same signed ciphertext. `platform_queued` means the platform accepted it, not that the recipient completed a task.
+- Incoming envelopes are authenticated and persisted in the helper inbox before platform ACK. SSE and `GET /api/v1/mq/retrieve` replay unconsumed messages. The connector ACKs local consumption after processing completes.
+- Reliable helper sends use MQ. The SDK's traditional `SendMessage` still offers P2P/DR; signed direct envelopes also use the durable receive callback. HTTPS MQ uses static X25519 + AES-GCM and Ed25519 signatures; it does not provide Double Ratchet forward secrecy.
+- The plaintext helper API binds only to loopback and rejects cross-origin browser requests. Browser UIs need a separately authenticated bridge. Messaging identity, tool execution, and Gateway control are separate permissions.
 
 ### 3. Persistent Daemon Service (Supervisor & Keep-Alive)
 

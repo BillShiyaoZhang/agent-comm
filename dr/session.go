@@ -13,12 +13,12 @@ import (
 	"io"
 	"sync"
 
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	"github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/BillShiyaoZhang/agent-comm/session"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	"golang.org/x/crypto/curve25519"
 	goproto "google.golang.org/protobuf/proto"
 )
@@ -30,12 +30,12 @@ const ProtoID = "/agent/dr/1.0.0"
 // It uses session.Manager's ECIES only for the bootstrap key agreement,
 // then applies Double Ratchet for all subsequent messages.
 type DRSession struct {
-	peerURN  string
-	peerID   peer.ID
-	manager  *session.Manager
-	keys     *crypto.IdentityKeys
-	ratchet  RatchetState
-	mu       sync.RWMutex
+	peerURN string
+	peerID  peer.ID
+	manager *session.Manager
+	keys    *crypto.IdentityKeys
+	ratchet RatchetState
+	mu      sync.RWMutex
 }
 
 // NewDRSessionInitiator creates a DR session as the initiator (Alice).
@@ -83,11 +83,11 @@ func NewDRSessionResponder(ctx context.Context, mgr *session.Manager, keys *cryp
 // NewDRSessionFromState creates a DRSession using a pre-existing RatchetState.
 func NewDRSessionFromState(mgr *session.Manager, keys *crypto.IdentityKeys, peerID peer.ID, peerURN string, state RatchetState) *DRSession {
 	return &DRSession{
-		peerURN:  peerURN,
-		peerID:   peerID,
-		manager:  mgr,
-		keys:     keys,
-		ratchet:  state,
+		peerURN: peerURN,
+		peerID:  peerID,
+		manager: mgr,
+		keys:    keys,
+		ratchet: state,
 	}
 }
 
@@ -97,7 +97,6 @@ func (s *DRSession) GetRatchetState() RatchetState {
 	defer s.mu.RUnlock()
 	return s.ratchet
 }
-
 
 // Send encrypts a plaintext using the current ratchet chain and sends it over a new stream.
 func (s *DRSession) Send(ctx context.Context, plaintext []byte) error {
@@ -185,6 +184,12 @@ func (s *DRSession) SendMessage(ctx context.Context, text string) error {
 // On the first message (Bob's side), it initializes the ratchet from the header.
 // Returns the plaintext payload.
 func (s *DRSession) Receive(ctx context.Context, stream network.Stream) ([]byte, error) {
+	if stream.Conn().RemotePeer() != s.peerID {
+		return nil, fmt.Errorf("DR stream peer does not match session identity")
+	}
+	if err := session.VerifyPeerURN(stream.Conn().RemotePeer(), s.peerURN); err != nil {
+		return nil, err
+	}
 	// Read length-prefixed DR message
 	sizeBuf := make([]byte, 4)
 	if _, err := io.ReadFull(stream, sizeBuf); err != nil {

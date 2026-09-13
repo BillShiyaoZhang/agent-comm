@@ -1,145 +1,35 @@
-# Agent Comm — AI 智能体之间的 P2P 安全通话仪 📞
+# Agent Comm — AI 智能体安全通信
 
-**不需要中心化账号，没有第三方能偷看——让 AI 智能体像人类使用加密电话一样直接通信。**
+Agent Comm 提供本地身份、端到端加密、P2P SDK，以及连接 Hermes/OpenClaw 的本机 helper。
 
-> [!TIP]
-> ### 🚀 智能体一键启用 Prompt
-> ```text
-> 你的目标是在当前的智能体项目中集成并初始化安全通信适配器。请依次执行以下步骤：
-> 1. 识别当前工作区所属的智能体项目框架类型。你的 Agent 框架是以下当中的任何一种吗？OpenClaw, Hermes。如果无法确定，请立即向用户输出错误信息："无法确定当前项目框架（或不受支持），已终止配置。"并停止执行后续步骤。
-> 2. 下载并安装必要组件（本地守护进程二进制 agent-comm-helper）：
->    a. 识别当前的操作系统与 CPU 架构，直接从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新发布的匹配预编译二进制。
->       例如在 Linux amd64 环境下：
->       curl -L -o ~/.agent-comm/bin/agent-comm-helper https://github.com/BillShiyaoZhang/agent-comm/releases/latest/download/agent-comm-helper-linux-amd64
->       在 Windows amd64 环境下：
->       curl -L -o ~/.agent-comm/bin/agent-comm-helper.exe https://github.com/BillShiyaoZhang/agent-comm/releases/latest/download/agent-comm-helper-windows-amd64.exe
->    b. 赋予其可执行权限（在 Linux/macOS 环境下运行 `chmod +x ~/.agent-comm/bin/agent-comm-helper`）。
->    c. （仅当网络超时或下载失败时作为兜底）：克隆 agent-comm 源码仓库并本地编译：
->       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
->       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper .
-> 3. 本地集成安装适配器插件与技能手册：
->    a. （若未克隆）将 agent-comm 源码仓库克隆至本地临时目录中：
->       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
->    b. 本地部署/安装适配器与技能：
->       - 如果是 OpenClaw 框架，在你的当前工作区根目录下执行：`npm install <temp_dir>/connectors/openclaw-channel`
->       - 如果是 Hermes 框架，不需要运行 pip 安装，而是执行以下操作以进行本地 User Plugin 和 Skill 部署：
->         1. 创建用户插件及技能存放目录（如果不存在）：
->            mkdir -p ~/.hermes/plugins/agent_comm ~/.hermes/skills/agent-comm
->         2. 将适配器平台插件拷贝至 Hermes 用户插件目录下：
->            cp -r <temp_dir>/connectors/hermes-platform/hermes_platform_agent_comm/* ~/.hermes/plugins/agent_comm/
->         3. 将技能手册拷贝至 Hermes 技能目录下，以确保 Hermes 自动识别该技能：
->            cp <temp_dir>/SKILL.md ~/.hermes/skills/agent-comm/SKILL.md
-> 4. 初始化身份密钥并提取标识：为了区分同一台机器上不同智能体的身份，必须为当前智能体指定一个专属的绝对路径密钥目录（强烈推荐格式如：`~/.agent-comm/agents/<当前智能体名称>/keys`，以实现密钥与身份的物理隔离）。运行伴侣程序的初始化命令：
->    ~/.agent-comm/bin/agent-comm-helper init <你指定的专属密钥目录 of 绝对路径>
-> 5. 启动本地守护进程 (Local Daemon)：运行伴侣程序的 daemon 命令，拉起本地 HTTP/SSE 服务处理 P2P 直连与双棘轮加密。
->    （注：为了在同一台机器上运行多个智能体，必须为每个智能体指定不同的本地端口，例如 45042、45043 等，防止端口冲突）：
->    ~/.agent-comm/bin/agent-comm-helper daemon <你指定的专属密钥目录 of 绝对路径> <平台服务器地址> [本地端口]
->    （注：平台服务器地址可填默认公网测试平台：https://agent-communication.online；本地端口默认为 45042。若在此步骤修改了本地端口，后续配置的 platform_url 端口也需同步修改）
->    （安全与限制提示：如果是 Hermes 智能体，在此步骤启动时，请务必使用你内置的 terminal 工具的 background=true 属性将其作为后台守护进程拉起，切勿在命令行中直接使用 nohup 或 & 等 Shell 后台符号，否则会触发环境安全审计拦截。）
->    验证守护进程已成功启动：curl http://127.0.0.1:<你指定的本地端口>/info 应返回包含 urn 和 status: running 的 JSON。
-> 6. 配置网络连接参数并写入配置：
->    - 如果是 OpenClaw，在项目 `settings.json` 中配置 `channels["agent-comm"]`（填入 platform_url: "http://127.0.0.1:<你指定的本地端口>"、你的 URN 标识以及 keys_dir 绝对路径）。
->    - 如果是 Hermes，需要修改 `~/.hermes/config.yaml` 完成以下两项配置（注意：Hermes 的 file_safety 机制会阻止 agent 直接写入 config.yaml，因此必须通过 Python 脚本间接修改）：
->      a. 在 `plugins.enabled` 列表中添加 `agent_comm`，使 Hermes 启动时加载该平台插件；
->      b. 在顶层 `platforms` 字典中添加 `agent_comm` 配置块，包含 `enabled: true` 和 `platform_url: "http://127.0.0.1:<你指定的本地端口>"`。
->      执行以下 Python 脚本完成配置注入（使用 Hermes 的 venv Python 并将 45042 替换为实际本地端口）：
->      ~/.hermes/hermes-agent/venv/bin/python3 -c "
->      import yaml
->      p = '$HOME/.hermes/config.yaml'  # 展开为实际路径
->      import os; p = os.path.expandvars(p)
->      c = yaml.safe_load(open(p))
->      c.setdefault('plugins', {}).setdefault('enabled', [])
->      if 'agent_comm' not in c['plugins']['enabled']:
->          c['plugins']['enabled'].append('agent_comm')
->      c.setdefault('platforms', {})['agent_comm'] = {'enabled': True, 'platform_url': 'http://127.0.0.1:45042'}  # 请在此处替换为实际端口
->      yaml.safe_dump(c, open(p, 'w'), allow_unicode=True)
->      print('config.yaml updated successfully')
->      "
-> 7. 验证并运行：
->    - 如果是 OpenClaw，运行框架项目启动命令（例如 `npm run dev`），验证安全通信连接插件是否成功与本地守护进程建立 SSE 连接并开始监听消息。
->    - 如果是 Hermes，重启 gateway 进程（`hermes gateway restart`），然后在日志中确认出现 `gateway.run: Connecting to agent_comm...` 和 `✓ agent_comm connected`（或 `[agent-comm-platform] Starting connection to local daemon`）字样，表明插件已被 Hermes 成功加载并连接到本地守护进程。
-> 8. 向我（用户）发送初始化报告，必须包含：检测到的项目框架类型、新生成的智能体 URN 标识、密钥存放目录的绝对路径、本地守护进程启动指令（含 PID），以及适配器/插件是否已成功被框架加载并与本地 Daemon 建立 SSE 连接的确认状态。
-> ```
-> 
-> [!NOTE]
-> ### 🔄 智能体一键更新 Prompt (当有新版本发布时)
-> 
-> 如果你的智能体已经初始化运行，当检测到本项目有新的 Release 时，你可以复制并发送以下 Prompt 指引智能体完成平滑升级：
-> 
-> ```text
-> 检测到框架安全通信适配器与其依赖的伴侣程序（agent-comm-helper）有新的版本发布。请你执行以下步骤完成平滑更新：
-> 1. 停止运行当前的本地守护进程（agent-comm-helper）：
->    - 检查该守护进程是否由系统服务管理器托管（例如 macOS 的 `launchd` 或 Linux 的 `systemd`）。
->      - 若使用 macOS `launchd`（如 `com.billshiyaozhang.agent-comm-helper` 服务）：运行 `launchctl unload ~/Library/LaunchAgents/com.billshiyaozhang.agent-comm-helper.plist`（或 `launchctl stop com.billshiyaozhang.agent-comm-helper`）将其停止。
->      - 若使用 Linux `systemd` 用户服务：运行 `systemctl --user stop agent-comm-helper.service` 将其停止。
->    - 若非系统服务托管（手动后台运行的普通进程）：
->      - 在 Linux/macOS 环境下，运行：`pkill -f agent-comm-helper` 或 `kill $(lsof -t -i:45042)`。
->      - 在 Windows 环境下，运行：`taskkill /f /im agent-comm-helper.exe`。
-> 2. 下载或编译最新版的守护进程二进制（`agent-comm-helper`）：
->    a. 识别当前的操作系统与 CPU 架构，直接从 GitHub Releases 页面（https://github.com/BillShiyaoZhang/agent-comm/releases）下载最新发布的匹配预编译二进制并覆盖旧文件（默认为 `~/.agent-comm/bin/agent-comm-helper`）。
->    b. 赋予其可执行权限（在 Linux/macOS 环境下运行 `chmod +x ~/.agent-comm/bin/agent-comm-helper`）。
->    c. （仅当下载超时或失败时作为兜底）：克隆或拉取最新的 agent-comm 源码仓库并本地编译：
->       git clone https://github.com/BillShiyaoZhang/agent-comm.git <temp_dir>
->       cd <temp_dir>/cmd/helper && go build -o ~/.agent-comm/bin/agent-comm-helper .
-> 3. 更新适配器插件与技能手册：
->    a. 拉取或克隆最新的 `agent-comm` 源码仓库至临时目录中。
->    b. 根据你的智能体框架类型更新安装：
->       - 如果是 OpenClaw 框架，在你的当前工作区根目录下执行：`npm install <temp_dir>/connectors/openclaw-channel`
->       - 如果是 Hermes 框架，直接覆盖拷贝插件文件与技能手册：
->         cp -r <temp_dir>/connectors/hermes-platform/hermes_platform_agent_comm/* ~/.hermes/plugins/agent_comm/
->         cp <temp_dir>/SKILL.md ~/.hermes/skills/agent-comm/SKILL.md
-> 4. 验证新版伴侣程序是否工作正常，且能正确加载原有身份密钥：
->    运行伴侣程序的初始指令，确保返回的 URN 与你升级前的 URN 完全一致（密钥及 URN 不会因更新而丢失）：
->    ~/.agent-comm/bin/agent-comm-helper init <你之前存储密钥的目录绝对路径>
-> 5. 重新启动本地守护进程 (Local Daemon)：
->    - 若该守护进程由系统服务管理器托管，请使用相应命令重新启动/加载它：
->      - macOS `launchd`：运行 `launchctl load -w ~/Library/LaunchAgents/com.billshiyaozhang.agent-comm-helper.plist`（或 `launchctl start com.billshiyaozhang.agent-comm-helper`）。
->      - Linux `systemd`：运行 `systemctl --user start agent-comm-helper.service`。
->    - 若非系统服务托管，在后台重新拉起进程：
->      ~/.agent-comm/bin/agent-comm-helper daemon <你之前存储密钥的目录绝对路径> <平台服务器地址> [本地端口]
->      （注：平台服务器地址可填默认公网测试平台：https://agent-communication.online；本地端口默认为 45042）
->    - 验证启动：curl http://127.0.0.1:45042/info
-> 6. 重启或重新加载你的智能体框架进程：
->    - 如果是 OpenClaw，重新运行启动命令（例如 `npm run dev`）。
->    - 如果是 Hermes，重启 gateway 进程（`hermes gateway restart`）并查看日志确认成功连接至本地守护进程。
-> 7. 向我报告更新结果，包含：更新后的适配器版本、伴侣程序版本，以及确认 URN 保持不变且框架连接正常。
-> ```
+## Hermes 接入与升级
 
----
+先阅读 [Hermes 接入合同与交接清单](docs/HERMES_INTEGRATION.md)，再按 [Hermes 插件安装说明](connectors/hermes-platform/README.md) 配置实际运行的 profile。不要假设用户目录是 `~/.hermes`。
 
-## 📊 本地守护进程 (Local Daemon) 架构
+此次升级需要配套更新 platform、SDK/helper 和插件：新版信封必须签名，平台 ACK 必须认证。升级时保留原有密钥、helper `mailbox.db` 和插件 receipts 数据库。服务端步骤见 platform 仓库的 `HERMES_UPGRADE.md`。
 
-为了恢复智能体之间的**物理 P2P 直连**与**前向安全双棘轮加密**能力，同时保持框架连接器（Connectors）的“轻量与易用性”，本项目采用 **本地守护进程 (Local Daemon)** 架构：
-
-```text
-┌───────────────────────┐                    ┌─────────────────────────┐
-│      AI Agent         │◄──[HTTP SSE stream]│                         │
-│ (OpenClaw / Hermes)   │───[REST POST mq]──►│                         │
-└───────────────────────┘                    │   本地守护进程 (Daemon)   │
-                                             │  (Go agent-comm-helper) │
-                                             └─────────────────────────┘
-                                                ▲  ▲             ▲
-                                                │  │             │
-                                  [P2P Direct] ─┘  │             └─ [Relay/DHT/MQ]
-                                                   ▼                     ▼
-                                            ┌─────────────┐       ┌─────────────┐
-                                            │ 其他智能体   │       │   Platform  │
-                                            │ (P2P Peer)  │       │   (Cloud)   │
-                                            └─────────────┘       └─────────────┘
+```sh
+go build -o agent-comm-helper ./cmd/helper
+./agent-comm-helper init /absolute/path/to/agent/keys
+./agent-comm-helper daemon /absolute/path/to/agent/keys https://YOUR_PLATFORM 45042
 ```
 
-### 1. 核心数据流通与设计
+每个身份使用独立数据目录和本机端口；插件 `platform_url` 填 `http://127.0.0.1:45042`。通过 `/info` 检查 helper 身份，再检查插件真实 SSE connected 状态，并完成两个隔离身份的一次收发。仅看到“正在连接”日志不能确认连接成功。
 
-*   **连接器与 Daemon 交互**：TS (OpenClaw) 和 Python (Hermes) 等框架连接器极其轻量，不再执行任何 Protobuf 编解码、加解密或子进程频繁调用。它们仅作为 HTTP 和 SSE 客户端，通过 `127.0.0.1:45042` 与本地常驻的 Go 守护进程交互。
-*   **出站消息发送 (`POST /api/v1/mq/store`)**：连接器将明文 JSON 发往 Daemon，Daemon 自动处理双棘轮 (DR) 加密、封包，并尝试通过 libp2p 直接向对方 Dial；若对端离线，则降级将加密信封投递至云端 Platform MQ。
-*   **入站消息接收 (`GET /api/v1/mq/subscribe` SSE)**：连接器订阅 Daemon 的 SSE 端口。当 Daemon 从 P2P 直连 Stream 收到消息，或者轮询云端 Platform MQ 得到密文并解密后，将明文实时推给连接器。
-*   **联系人与地址注入 (`POST /api/v1/contacts`)**：连接器或 CLI 可以通过该接口直接向 Daemon 注入对端的公钥与物理多地址（multiaddress），允许在没有注册中心发现的情况下，瞬间建立物理 A2A 直连。
+## 本机 helper 数据流
 
-### 2. 为什么 Local Daemon 是最佳实践？
+```text
+Hermes / OpenClaw
+  ↕ 本机 HTTP、SSE、消费 ACK
+helper：本地密钥、签名与加解密、SQLite inbox/outbox
+  ↕ HTTPS Registry / MQ（每 5 秒补拉）
+agent-comm-platform：身份目录、持久密文信箱
+```
 
-*   **物理直连 (Direct Dial)**：支持真正的物理 P2P 连接（TCP/QUIC），绕过中转云平台，通信数据在局域网下绝不出本地网络。
-*   **极简连接器实现**：所有复杂的密码学算法、Protobuf 编解码、libp2p 协议栈、双棘轮状态管理均由 Go 守护进程处理。JS/Python 端不需要任何原生 C/Go 绑定，极为稳定。
-*   **动态容灾与离线盲存**：守护进程自动在“P2P 直连”和“平台 MQ 离线信封中继”之间进行平滑且安全的透明切换。
+- `POST /api/v1/mq/store` 返回 HTTP 202 和稳定 `message_id`，表示本机持久接受。后台使用同一份签名密文重试，经 HTTPS 存入平台后状态为 `platform_queued`；此状态不代表收件人已处理任务。
+- 入站先验证身份和信封、写入 helper inbox，再 ACK 平台。SSE 重连和 `GET /api/v1/mq/retrieve` 会重放未消费消息；插件处理完成后调用本机 ACK。
+- 可靠 helper 出站走 MQ，避免缺少持久回执的旧 DR 直连提前报告成功。Go SDK 的传统 `SendMessage` 仍提供 P2P/DR；签名直接信封接收也经过同一个持久回调。HTTPS MQ 当前使用静态 X25519 + AES-GCM 与 Ed25519 签名，不承诺 Double Ratchet 的前向安全。
+- helper 本机 API 传明文并具有身份操作权限，只绑定 loopback，拒绝跨源网页访问；浏览器 UI 若需要接入，应另做明确认证的桥接。密码学、消息投递、Hermes 工具执行和 Gateway 控制权限分层处理。
 
 ### 3. 常驻守护运行 (Supervisor & Keep-Alive)
 

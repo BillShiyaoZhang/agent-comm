@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -11,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +22,7 @@ import (
 
 	"github.com/BillShiyaoZhang/agent-comm/agent"
 	"github.com/BillShiyaoZhang/agent-comm/contacts"
+	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	pb "github.com/BillShiyaoZhang/agent-comm/proto"
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -26,17 +30,15 @@ import (
 	goproto "google.golang.org/protobuf/proto"
 )
 
-type ClientChan chan string
+type ClientChan chan struct{}
 
 type DaemonServer struct {
 	agent     *agent.Agent
 	clients   map[ClientChan]bool
 	clientsMu sync.Mutex
-}
-
-type StoreRequest struct {
-	RecipientURN string `json:"recipient_urn"`
-	Text         string `json:"text"`
+	mailbox   *mailbox
+	transport durableTransport
+	outgoing  chan struct{}
 }
 
 type ContactRequest struct {
@@ -46,7 +48,7 @@ type ContactRequest struct {
 	Ed25519PK   string   `json:"ed25519_pk"` // Hex encoded
 	DisplayName string   `json:"display_name"`
 	Trusted     bool     `json:"trusted"`
-	Addrs       []string `json:"addrs"`      // Optional addresses to inject into Peerstore
+	Addrs       []string `json:"addrs"` // Optional addresses to inject into Peerstore
 
 	// Mappings for agent-collaboration-web compatibility:
 	ContactURN       string `json:"contact_urn"`
@@ -56,10 +58,9 @@ type ContactRequest struct {
 	X25519PublicKey  string `json:"x25519_public_key"`
 }
 
-func runDaemon() {
+func runDaemon() error {
 	if len(os.Args) < 4 {
-		fmt.Println(`Usage: agent-comm-helper daemon <keys_dir> <platform_url> [local_port]`)
-		os.Exit(1)
+		return errors.New("usage: agent-comm-helper daemon <keys_dir> <platform_url> [local_port]")
 	}
 
 	keysDir := os.Args[2]
@@ -79,93 +80,122 @@ func runDaemon() {
 
 	// 1. Resolve Platform Bootstrap Node
 	bootstrapInfo, err := resolvePlatformBootstrap(platformURL)
+	var bootstraps []peer.AddrInfo
 	if err != nil {
-		log.Fatalf("Failed to resolve platform bootstrap node: %v", err)
+		log.Printf("Bootstrap unavailable; starting with HTTPS messaging: %v", err)
+	} else {
+		bootstraps = []peer.AddrInfo{*bootstrapInfo}
+		fmt.Printf("Platform Bootstrap PeerID: %s\n", bootstrapInfo.ID)
 	}
-	fmt.Printf("Platform Bootstrap PeerID: %s\n", bootstrapInfo.ID)
-	fmt.Printf("Platform Bootstrap Addrs : %v\n", bootstrapInfo.Addrs)
 
 	// 2. Initialize Agent
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	agentCfg := agent.Config{
-		KeysDir:        keysDir,
-		ListenAddrs:    []string{"/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic-v1"},
-		EnableRelay:    true,
-		BootstrapNodes: []peer.AddrInfo{*bootstrapInfo},
+		KeysDir:         keysDir,
+		ListenAddrs:     []string{"/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic-v1"},
+		EnableRelay:     true,
+		BootstrapNodes:  bootstraps,
+		PlatformHTTPURL: platformURL,
 	}
 
 	log.Println("Initializing P2P Agent...")
 	ag, err := agent.InitIdentity(ctx, agentCfg)
 	if err != nil {
-		log.Fatalf("Failed to initialize identity agent: %v", err)
+		return fmt.Errorf("initialize identity agent: %w", err)
 	}
 	defer ag.Close()
 
 	log.Printf("Agent initialized. URN: %s, PeerID: %s\n", ag.Keys.Ed25519.URN(), ag.Host.ID())
 
 	// 3. Set up Daemon HTTP Server
+	mail, err := openMailbox(filepath.Join(ag.Keys.KeysDir, "mailbox.db"))
+	if err != nil {
+		return fmt.Errorf("open durable mailbox: %w", err)
+	}
+	defer mail.db.Close()
 	ds := &DaemonServer{
-		agent:   ag,
-		clients: make(map[ClientChan]bool),
+		agent:     ag,
+		clients:   make(map[ClientChan]bool),
+		mailbox:   mail,
+		transport: ag,
+		outgoing:  make(chan struct{}, 1),
 	}
 
-	// Register OnMessage callback to broadcast decrypted messages to SSE subscribers
-	ag.OnMessage(ctx, func(senderURN string, rawPayload string) {
-		var chatMsg pb.ChatMessage
-		err := goproto.Unmarshal([]byte(rawPayload), &chatMsg)
-		var text string
-		if err == nil {
-			if txt := chatMsg.GetText(); txt != nil {
-				text = txt.Text
-			} else {
-				text = rawPayload
-			}
-		} else {
-			text = rawPayload
-		}
-
-		log.Printf("Received message from %s: %s\n", senderURN, text)
-		msgMap := map[string]string{
-			"sender_urn": senderURN,
-			"text":       text,
-		}
-		jsonBytes, _ := json.Marshal(msgMap)
-		ds.broadcast(string(jsonBytes))
-	})
-
-	server := &http.Server{
-		Addr:    fmt.Sprintf("127.0.0.1:%d", localPort),
-		Handler: ds,
+	server := ds.httpServer(ctx, fmt.Sprintf("127.0.0.1:%d", localPort))
+	// Reserve the API port before any mailbox worker can send or acknowledge.
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return fmt.Errorf("local HTTP API unavailable: %w", err)
 	}
+	defer listener.Close()
+	// Cloud ACK follows the durable commit, independently of connector presence.
+	incomingDone := ag.StartListeningDurable(ctx, ds.receiveMessage)
+	workerDone := make(chan struct{})
+	go func() { defer close(workerDone); ds.runOutbox(ctx) }()
 
 	// Handle graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 
+	serveDone := make(chan error, 1)
 	go func() {
-		log.Printf("Local HTTP API listening on http://127.0.0.1:%d\n", localPort)
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			log.Fatalf("HTTP server failed: %v", err)
-		}
+		log.Printf("Local HTTP API listening on http://%s\n", listener.Addr())
+		serveDone <- server.Serve(listener)
 	}()
 
-	<-sigChan
+	var serveErr error
+	select {
+	case <-sigChan:
+	case err := <-serveDone:
+		if !errors.Is(err, http.ErrServerClosed) {
+			serveErr = fmt.Errorf("HTTP server failed: %w", err)
+		}
+	}
 	log.Println("Shutting down daemon...")
 	cancel()
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
-	server.Shutdown(shutCtx)
+	if err := server.Shutdown(shutCtx); err != nil {
+		log.Printf("Closing outstanding HTTP requests: %v", err)
+		_ = server.Close()
+	}
+	<-workerDone
+	<-incomingDone
 	log.Println("Daemon stopped cleanly.")
+	return serveErr
+}
+
+func (ds *DaemonServer) httpServer(ctx context.Context, address string) *http.Server {
+	return &http.Server{
+		Addr: address, Handler: ds, ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout: 30 * time.Second,
+		BaseContext: func(net.Listener) context.Context { return ctx },
+	}
 }
 
 func (ds *DaemonServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// CORS Headers
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Headers", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	// This plaintext API is local IPC. Do not expose it to arbitrary web origins.
+	host := r.Host
+	if parsed, _, err := net.SplitHostPort(host); err == nil {
+		host = parsed
+	}
+	host = strings.Trim(host, "[]")
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		http.Error(w, "Local Host header required", http.StatusForbidden)
+		return
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		if err != nil || u.Host != r.Host || (u.Scheme != "http" && u.Scheme != "https") {
+			http.Error(w, "Cross-origin access denied", http.StatusForbidden)
+			return
+		}
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBytes+8192)
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
@@ -179,6 +209,12 @@ func (ds *DaemonServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ds.handleStore(w, r)
 	case "/api/v1/mq/subscribe":
 		ds.handleSubscribe(w, r)
+	case "/api/v1/mq/retrieve":
+		ds.handleRetrieve(w, r)
+	case "/api/v1/mq/ack":
+		ds.handleAck(w, r)
+	case "/api/v1/mq/status":
+		ds.handleStatus(w, r)
 	case "/api/v1/contacts":
 		ds.handleAddContact(w, r)
 	default:
@@ -340,31 +376,44 @@ func (ds *DaemonServer) handleStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.RecipientURN == "" || req.Text == "" {
-		http.Error(w, "Missing recipient_urn or text", http.StatusBadRequest)
+	if !recipientURNPattern.MatchString(req.RecipientURN) || len(req.RecipientURN) > 256 {
+		http.Error(w, "Invalid recipient_urn", http.StatusBadRequest)
 		return
 	}
-
-	log.Printf("Outgoing message to %s\n", req.RecipientURN)
-
-	// Send message using the Go agent
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-
-	err := ds.agent.SendMessage(ctx, req.RecipientURN, req.Text)
+	if req.MessageID == "" {
+		req.MessageID = crypto.GenerateMessageID()
+	}
+	if !messageIDPattern.MatchString(req.MessageID) {
+		http.Error(w, "Invalid message_id", http.StatusBadRequest)
+		return
+	}
+	if err := req.MessageFields.validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	status, err := ds.mailbox.accept(req)
 	if err != nil {
-		log.Printf("SendMessage error: %v\n", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		code := http.StatusInternalServerError
+		if errors.Is(err, errMessageConflict) {
+			code = http.StatusConflict
+		}
+		http.Error(w, err.Error(), code)
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]any{"success": true, "message_id": req.MessageID, "status": status})
+	select {
+	case ds.outgoing <- struct{}{}:
+	default:
+	}
 }
 
 func (ds *DaemonServer) handleSubscribe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
@@ -375,7 +424,7 @@ func (ds *DaemonServer) handleSubscribe(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ch := make(ClientChan, 10)
+	ch := make(ClientChan, 1)
 	ds.clientsMu.Lock()
 	ds.clients[ch] = true
 	ds.clientsMu.Unlock()
@@ -384,35 +433,207 @@ func (ds *DaemonServer) handleSubscribe(w http.ResponseWriter, r *http.Request) 
 		ds.clientsMu.Lock()
 		delete(ds.clients, ch)
 		ds.clientsMu.Unlock()
-		close(ch)
 	}()
 
 	// Send initial connection verification SSE event
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(15 * time.Second))
 	fmt.Fprintf(w, "data: {\"event\":\"connected\"}\n\n")
 	flusher.Flush()
+	if err := ds.replayInbox(w); err != nil {
+		return
+	}
+	flusher.Flush()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case msg := <-ch:
-			fmt.Fprintf(w, "data: %s\n\n", msg)
-			flusher.Flush()
+		case <-ch:
+		case <-ticker.C:
 		case <-r.Context().Done():
 			return
+		}
+		if err := ds.replayInbox(w); err != nil {
+			return
+		}
+		if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
+}
+
+func (ds *DaemonServer) broadcast() {
+	ds.clientsMu.Lock()
+	defer ds.clientsMu.Unlock()
+	for ch := range ds.clients {
+		select {
+		case ch <- struct{}{}:
+		default:
 		}
 	}
 }
 
-func (ds *DaemonServer) broadcast(msg string) {
-	ds.clientsMu.Lock()
-	defer ds.clientsMu.Unlock()
-	log.Printf("Broadcasting SSE event to %d active subscriber(s): %s\n", len(ds.clients), msg)
-	for ch := range ds.clients {
-		select {
-		case ch <- msg:
-		default:
-			log.Printf("Warning: Client subscriber channel full, skipping event broadcast\n")
+func (ds *DaemonServer) replayInbox(w http.ResponseWriter) error {
+	messages, err := ds.mailbox.pending()
+	if err != nil {
+		return err
+	}
+	controller := http.NewResponseController(w)
+	_ = controller.SetWriteDeadline(time.Now().Add(15 * time.Second))
+	for _, msg := range messages {
+		data, err := json.Marshal(msg)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "id: %s\ndata: %s\n\n", msg.MessageID, data); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func (ds *DaemonServer) handleRetrieve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	messages, err := ds.mailbox.pending()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"messages": messages})
+}
+
+func (ds *DaemonServer) handleAck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		MessageIDs []string `json:"message_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.MessageIDs) == 0 || len(req.MessageIDs) > 1000 {
+		http.Error(w, "Expected 1 to 1000 message_ids", http.StatusBadRequest)
+		return
+	}
+	count, err := ds.mailbox.ack(req.MessageIDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"success": true, "acked": count})
+}
+
+func (ds *DaemonServer) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	status, err := ds.mailbox.outgoingStatus(r.URL.Query().Get("message_id"))
+	if err != nil {
+		code := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			code = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), code)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
+}
+
+func (ds *DaemonServer) receiveMessage(env *pb.EncryptedEnvelope, payload []byte) error {
+	text := string(payload)
+	var chat pb.ChatMessage
+	if err := goproto.Unmarshal(payload, &chat); err == nil && chat.GetText() != nil {
+		text = chat.GetText().Text
+	}
+	fields := MessageFields{Text: text}
+	var wire wireMessage
+	if json.Unmarshal([]byte(text), &wire) == nil && wire.Version == 1 {
+		fields = wire.MessageFields
+	}
+	if err := fields.validate(); err != nil {
+		return err
+	}
+	if err := ds.mailbox.receive(InboxMessage{MessageID: env.MessageId, SenderURN: env.SenderUrn, MessageFields: fields}); err != nil {
+		return err
+	}
+	ds.broadcast()
+	return nil
+}
+
+func (ds *DaemonServer) runOutbox(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		processed, err := ds.deliverNext(ctx)
+		if err != nil {
+			log.Printf("Outbox: %v", err)
+		}
+		if processed && err == nil {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-ds.outgoing:
+		}
+	}
+}
+
+func (ds *DaemonServer) deliverNext(ctx context.Context) (bool, error) {
+	entry, err := ds.mailbox.nextOutgoing()
+	if err != nil || entry == nil {
+		return false, err
+	}
+	req := entry.request
+	if req.MessageFields.expired(time.Now()) {
+		return true, ds.mailbox.updateOutgoing(req.MessageID, "expired", "deadline elapsed", entry.attempts)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	var env pb.EncryptedEnvelope
+	if len(entry.envelope) > 0 {
+		err = goproto.Unmarshal(entry.envelope, &env)
+	} else {
+		data, marshalErr := json.Marshal(wireMessage{Version: 1, MessageFields: req.MessageFields})
+		err = marshalErr
+		if err == nil {
+			var prepared *pb.EncryptedEnvelope
+			prepared, err = ds.transport.PrepareMessage(ctx, req.RecipientURN, string(data), req.MessageID)
+			if err == nil {
+				entry.envelope, err = goproto.Marshal(prepared)
+				if err == nil {
+					entry.envelope, err = ds.mailbox.saveEnvelope(req.MessageID, entry.envelope)
+				}
+				if err == nil {
+					err = goproto.Unmarshal(entry.envelope, &env)
+				}
+			}
+		}
+	}
+	if err == nil {
+		if req.MessageFields.expired(time.Now()) {
+			return true, ds.mailbox.updateOutgoing(req.MessageID, "expired", "deadline elapsed", entry.attempts)
+		}
+		err = ds.transport.DeliverEnvelope(ctx, &env)
+	}
+	if err != nil {
+		if updateErr := ds.mailbox.updateOutgoing(req.MessageID, "accepted", err.Error(), entry.attempts+1); updateErr != nil {
+			return true, updateErr
+		}
+		return true, err
+	}
+	return true, ds.mailbox.updateOutgoing(req.MessageID, "platform_queued", "", entry.attempts+1)
 }
 
 // resolvePlatformBootstrap contacts the public Platform's HTTP API to discover
@@ -449,12 +670,14 @@ func resolvePlatformBootstrap(platformURL string) (*peer.AddrInfo, error) {
 	var peerIDStr string
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	if resp, err := client.Get(apiURL); err == nil && resp.StatusCode == 200 {
-		var data struct {
-			PeerID string `json:"peer_id"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&data); err == nil {
-			peerIDStr = data.PeerID
+	if resp, err := client.Get(apiURL); err == nil {
+		if resp.StatusCode == http.StatusOK {
+			var data struct {
+				PeerID string `json:"peer_id"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&data); err == nil {
+				peerIDStr = data.PeerID
+			}
 		}
 		resp.Body.Close()
 	}

@@ -10,9 +10,9 @@ import (
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	"github.com/BillShiyaoZhang/agent-comm/libp2p"
 	"github.com/BillShiyaoZhang/agent-comm/mq"
+	"github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/BillShiyaoZhang/agent-comm/registry"
 	"github.com/BillShiyaoZhang/agent-comm/session"
-	"github.com/BillShiyaoZhang/agent-comm/proto"
 	goproto "google.golang.org/protobuf/proto"
 
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -63,8 +63,8 @@ func main() {
 	fmt.Printf("Local P2P host created. PeerID: %s\n\n", h.ID())
 
 	// 3. Set up address info for remote platform node (We'll prioritize UDP/QUIC then fallback to TCP).
-// We use /dns4/ so libp2p can resolve the host fresh; cached IPs from
-// agent.DNSCache are exposed alongside in production deployments.
+	// We use /dns4/ so libp2p can resolve the host fresh; cached IPs from
+	// agent.DNSCache are exposed alongside in production deployments.
 	tcpMaddrStr := fmt.Sprintf("/dns4/%s/tcp/45041/p2p/%s", PlatformDomain, PlatformPeerID)
 	quicMaddrStr := fmt.Sprintf("/dns4/%s/udp/45041/quic-v1/p2p/%s", PlatformDomain, PlatformPeerID)
 
@@ -131,9 +131,9 @@ func main() {
 
 	fmt.Printf("--- Step 3: Building and Storing Message on MQ ---\n")
 	plaintextMsg := "Hello hermes platform! This is a test message stored on MQ relay."
-	
+
 	// Encrypt for our own public key (blind store so we retrieve it ourselves)
-	env, err := sessionMgr.BuildEnvelope(keys.X25519PK, plaintextMsg)
+	env, err := sessionMgr.BuildEnvelope(keys.X25519PK, plaintextMsg, myURN)
 	if err != nil {
 		fmt.Printf("❌ BuildEnvelope failed: %v\n", err)
 		os.Exit(1)
