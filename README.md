@@ -16,6 +16,22 @@ go build -o agent-comm-helper ./cmd/helper
 
 每个身份使用独立数据目录和本机端口；插件 `platform_url` 填 `http://127.0.0.1:45042`。通过 `/info` 检查 helper 身份，再检查插件真实 SSE connected 状态，并完成两个隔离身份的一次收发。仅看到“正在连接”日志不能确认连接成功。
 
+## Registry 注册兼容性
+
+Registry 的首次注册和更新都要求 URN 所有者签名：URN 必须对应 Ed25519 公钥，PeerID 必须由同一公钥派生，X25519 公钥为 32 字节，签名覆盖 `registry.BuildSignedMsg` 的全部字段。写入时间戳须在最近 5 分钟内，允许最多 1 分钟未来时钟偏差；续租需重新生成当前时间戳和签名。存量有效记录按 TTL 使用，读取时不套用写入时间窗口。
+
+旧的 libp2p `Client.Register`、`Store.Register` 和本地 `HandleRegister` 不再接受无签名注册。调用方改用 `RegisterWithSignature`；本地 bootstrap 自注册也通过同样校验。`registry.NewHTTPClient(url, keys).Register(...)` 会生成签名，传入的 PeerID 仍必须对应 `keys`。HTTP 请求认证与注册记录的所有者签名均需保留。示例：
+
+```go
+timestamp := time.Now().Unix()
+signature := ed25519.Sign(keys.Ed25519.PrivateKey, registry.BuildSignedMsg(
+    keys.Ed25519.URN(), h.ID().String(), keys.X25519PK, false, timestamp))
+err := registry.NewClient(h).RegisterWithSignature(target, keys.Ed25519.URN(),
+    h.Addrs(), nil, keys.X25519PK, keys.Ed25519.PublicKey, signature, false, timestamp)
+```
+
+这里的 `h` 必须使用 `keys.Ed25519.PrivateKey` 创建。平台升级后，旧无签名或所有权不匹配的记录不会参与解析，身份所有者用原密钥重新签名注册即可恢复；请保留原密钥。地址及 relay 地址仍是签名外的路由提示，使用解析结果前继续调用 `VerifyResolveResult` 验证收件人身份。
+
 ## 本机 helper 数据流
 
 ```text

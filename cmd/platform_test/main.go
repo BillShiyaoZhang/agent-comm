@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -107,7 +108,10 @@ func main() {
 	regClient := registry.NewClient(h)
 
 	fmt.Printf("--- Step 1: Registering URN on Platform Registry ---\n")
-	err = regClient.Register(*platformAddrInfo, myURN, h.Addrs(), keys.X25519PK)
+	timestamp := time.Now().Unix()
+	signature := ed25519.Sign(keys.Ed25519.PrivateKey, registry.BuildSignedMsg(myURN, h.ID().String(), keys.X25519PK, false, timestamp))
+	err = regClient.RegisterWithSignature(*platformAddrInfo, myURN, h.Addrs(), nil,
+		keys.X25519PK, keys.Ed25519.PublicKey, signature, false, timestamp)
 	if err != nil {
 		fmt.Printf("❌ Registration failed: %v\n", err)
 		os.Exit(1)

@@ -14,12 +14,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mr-tron/base58"
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	agentpb "github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/mr-tron/base58"
 	"github.com/multiformats/go-multiaddr"
 	goproto "google.golang.org/protobuf/proto"
 )
@@ -115,9 +115,10 @@ func (c *Client) Resolve(target peer.AddrInfo, urn string) (ResolveResult, error
 	}, nil
 }
 
-// Register tells the registry server about this node's URN -> PeerID/addrs mapping.
+// Register rejects unsigned registration.
+// Deprecated: use RegisterWithSignature.
 func (c *Client) Register(target peer.AddrInfo, urn string, addrs []multiaddr.Multiaddr, x25519PubKey []byte) error {
-	return c.RegisterWithSignature(target, urn, addrs, nil, x25519PubKey, nil, nil, false, 0)
+	return ErrUnsignedRegistration
 }
 
 // RegisterWithSignature registers with signature validation details.
@@ -203,37 +204,10 @@ func URNFromEd25519PK(pubKey []byte) string {
 
 // VerifyResolveResult validates that the resolved registry details are authentic and untampered.
 func VerifyResolveResult(urn string, res *ResolveResult) error {
-	// If the registry response has no signature data (legacy registry server), we allow it but log a warning.
-	// To enforce strict zero-trust security, uncomment the verification failure on empty signature.
-	if len(res.Signature) == 0 {
-		fmt.Printf("[Warning] Resolved URN %s has no cryptographic signature. Privacy cannot be verified.\n", urn)
-		return nil
+	if res == nil {
+		return fmt.Errorf("resolve result is required")
 	}
-
-	if len(res.Ed25519PubKey) != ed25519.PublicKeySize {
-		return fmt.Errorf("invalid ed25519 identity key size")
-	}
-
-	// 1. Verify that the identity key hashes to the URN (Self-certifying check)
-	expectedURN := URNFromEd25519PK(res.Ed25519PubKey)
-	if expectedURN != urn {
-		return fmt.Errorf("security alert: identity public key does not match target URN (expected %s, got %s)", urn, expectedURN)
-	}
-
-	// 2. Verify signature on (URN || PeerID || X25519PubKey || stores_user_data || timestamp)
-	msg := BuildSignedMsg(urn, res.ID.String(), res.X25519PubKey, res.StoresUserData, res.Timestamp)
-	if !ed25519.Verify(ed25519.PublicKey(res.Ed25519PubKey), msg, res.Signature) {
-		return fmt.Errorf("security alert: invalid registry signature from destination identity")
-	}
-
-	// 3. Verify timestamp is within valid window (5 minutes) to prevent replay
-	now := time.Now().Unix()
-	diff := now - res.Timestamp
-	if diff > 300 || diff < -60 {
-		fmt.Printf("[Warning] Security alert: URN %s registration signature is stale or timestamp is in the future (diff: %ds, local: %d, remote: %d). Proceeding anyway for clock-skew tolerance.\n", urn, diff, now, res.Timestamp)
-	}
-
-	return nil
+	return VerifyRegistration(urn, res.ID.String(), res.X25519PubKey, res.Ed25519PubKey, res.Signature, res.StoresUserData, res.Timestamp)
 }
 
 // HTTPClient resolves and registers URNs via the HTTP REST API.

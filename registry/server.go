@@ -6,12 +6,12 @@ import (
 	"io"
 	"sync"
 
+	agentpb "github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/multiformats/go-multiaddr"
-	agentpb "github.com/BillShiyaoZhang/agent-comm/proto"
 	goproto "google.golang.org/protobuf/proto"
 )
 
@@ -47,13 +47,10 @@ func NewInMemoryStore() *InMemoryStore {
 	return &InMemoryStore{账册: make(map[string]RegistryEntry)}
 }
 
-// Register adds or updates a registration entry.
+// Register rejects unsigned registration.
+// Deprecated: use RegisterWithSignature.
 func (s *InMemoryStore) Register(urn, peerID string, addrs []string, x25519PubKey []byte) (bool, string) {
-	err := s.RegisterWithSignature(urn, peerID, addrs, nil, x25519PubKey, nil, nil, false, 0)
-	if err != nil {
-		return false, err.Error()
-	}
-	return true, ""
+	return false, ErrUnsignedRegistration.Error()
 }
 
 // Resolve looks up the entry for a URN.
@@ -62,15 +59,18 @@ func (s *InMemoryStore) Resolve(urn string) (string, []string, []byte, bool) {
 	return pid, addrs, x25519PubKey, found
 }
 
-// RegisterWithSignature registers an entry with signature validation data.
+// RegisterWithSignature validates the owner's signed record before insertion or
+// update. A third party may publish an authentic owner-signed record.
 func (s *InMemoryStore) RegisterWithSignature(urn, peerID string, addrs, relayAddrs []string, x25519PK, ed25519PK, signature []byte, storesUserData bool, timestamp int64) error {
-	if urn == "" || peerID == "" {
-		return fmt.Errorf("urn and peer_id are required")
+	// Own the verified bytes so later caller mutations cannot alter the record.
+	x25519PK = append([]byte(nil), x25519PK...)
+	ed25519PK = append([]byte(nil), ed25519PK...)
+	signature = append([]byte(nil), signature...)
+	relayAddrs = append([]string(nil), relayAddrs...)
+	if err := ValidateRegistration(urn, peerID, x25519PK, ed25519PK, signature, storesUserData, timestamp); err != nil {
+		return err
 	}
-	pid, err := peer.Decode(peerID)
-	if err != nil {
-		return fmt.Errorf("invalid peer_id: %w", err)
-	}
+	pid, _ := peer.Decode(peerID) // Already validated above.
 	var maddrs []multiaddr.Multiaddr
 	for _, a := range addrs {
 		m, err := multiaddr.NewMultiaddr(a)
@@ -106,7 +106,7 @@ func (s *InMemoryStore) ResolveExtended(urn string) (string, []string, []string,
 	for i, a := range entry.Info.Addrs {
 		addrs[i] = a.String()
 	}
-	return entry.Info.ID.String(), addrs, entry.RelayAddrs, entry.X25519PubKey, entry.Ed25519PubKey, entry.Signature, entry.StoresUserData, entry.Timestamp, true
+	return entry.Info.ID.String(), addrs, append([]string(nil), entry.RelayAddrs...), append([]byte(nil), entry.X25519PubKey...), append([]byte(nil), entry.Ed25519PubKey...), append([]byte(nil), entry.Signature...), entry.StoresUserData, entry.Timestamp, true
 }
 
 // ListURNs returns all registered URNs.
@@ -120,14 +120,10 @@ func (s *InMemoryStore) ListURNs() []string {
 	return urns
 }
 
-// HandleRegister registers an entry directly with peer types.
-func (s *InMemoryStore) HandleRegister(urn string, pid peer.ID, addrs []multiaddr.Multiaddr, x25519PubKey []byte) {
-	s.mu.Lock()
-	s.账册[urn] = RegistryEntry{
-		Info:         peer.AddrInfo{ID: pid, Addrs: addrs},
-		X25519PubKey: x25519PubKey,
-	}
-	s.mu.Unlock()
+// HandleRegister rejects unsigned local registration.
+// Deprecated: use RegisterWithSignature.
+func (s *InMemoryStore) HandleRegister(urn string, pid peer.ID, addrs []multiaddr.Multiaddr, x25519PubKey []byte) error {
+	return ErrUnsignedRegistration
 }
 
 // Server handles URN registration and resolution via libp2p streams.
@@ -170,15 +166,15 @@ func (s *Server) HandleStream(stream network.Stream) {
 		peerID, addrs, relayAddrs, x25519PubKey, ed25519PubKey, signature, storesUserData, timestamp, found := s.handleResolve(op.Resolve)
 		resp.Op = &agentpb.URNRegistryResponse_Resolve{
 			Resolve: &agentpb.ResolveResponse{
-				Found:            found,
-				PeerId:           peerID,
-				Addrs:            addrs,
-				X25519Pubkey:     x25519PubKey,
-				Ed25519Pubkey:    ed25519PubKey,
-				Signature:        signature,
-				Timestamp:        timestamp,
-				StoresUserData:   storesUserData,
-				RelayAddrs:       relayAddrs,
+				Found:          found,
+				PeerId:         peerID,
+				Addrs:          addrs,
+				X25519Pubkey:   x25519PubKey,
+				Ed25519Pubkey:  ed25519PubKey,
+				Signature:      signature,
+				Timestamp:      timestamp,
+				StoresUserData: storesUserData,
+				RelayAddrs:     relayAddrs,
 			},
 		}
 	}
@@ -189,6 +185,14 @@ func (s *Server) HandleStream(stream network.Stream) {
 }
 
 func (s *Server) handleRegister(r *agentpb.RegisterRequest) (bool, string) {
+	if r == nil {
+		return false, "registration request is required"
+	}
+	// Validate here even when a custom Store is installed. Ownership comes from
+	// the signature, not RemotePeer: relaying owner-signed records is supported.
+	if err := ValidateRegistration(r.Urn, r.PeerId, r.X25519Pubkey, r.Ed25519Pubkey, r.Signature, r.StoresUserData, r.Timestamp); err != nil {
+		return false, err.Error()
+	}
 	err := s.store.RegisterWithSignature(r.Urn, r.PeerId, r.Addrs, r.RelayAddrs, r.X25519Pubkey, r.Ed25519Pubkey, r.Signature, r.StoresUserData, r.Timestamp)
 	if err != nil {
 		return false, err.Error()
@@ -208,19 +212,10 @@ func (s *Server) ListURNs() []string {
 	return nil
 }
 
-// HandleRegister registers a URN -> PeerID/addrs mapping locally.
-func (s *Server) HandleRegister(urn string, pid peer.ID, addrs []multiaddr.Multiaddr, x25519PubKey []byte) {
-	if regger, ok := s.store.(interface {
-		HandleRegister(urn string, pid peer.ID, addrs []multiaddr.Multiaddr, x25519PubKey []byte)
-	}); ok {
-		regger.HandleRegister(urn, pid, addrs, x25519PubKey)
-	} else {
-		addrsStrs := make([]string, len(addrs))
-		for i, a := range addrs {
-			addrsStrs[i] = a.String()
-		}
-		s.store.Register(urn, pid.String(), addrsStrs, x25519PubKey)
-	}
+// HandleRegister rejects unsigned local registration, including custom stores.
+// Deprecated: call the store's RegisterWithSignature with an owner-signed record.
+func (s *Server) HandleRegister(urn string, pid peer.ID, addrs []multiaddr.Multiaddr, x25519PubKey []byte) error {
+	return ErrUnsignedRegistration
 }
 
 // Register sets the stream handler on the host.

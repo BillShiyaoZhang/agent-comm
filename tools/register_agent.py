@@ -71,15 +71,12 @@ def main() -> int:
     # Build registry signed message
     # Format: urn + "|" + peerID + "|" + x25519PubkeyHex + "|" + flag + "|" + big_endian_timestamp (8 bytes)
     timestamp = int(time.time())
-    # The peer_id is normally derived from the libp2p host started by the
-    # helper daemon. The helper subprocess used here does not expose that
-    # value, so we accept it from AGENT_PLATFORM_PEER_ID (or fall back to a
-    # well-known placeholder). Override this when running against a custom
-    # platform deployment.
-    peer_id = os.environ.get(
-        "AGENT_PLATFORM_PEER_ID",
-        "12D3KooWKzoJzGnRpfd9ohJTYzGQbebi4rvRh1LWNnb4EaUBTThS",  # virtual peer ID placeholder
-    )
+    # The registered PeerID must belong to the same identity as the URN.
+    # AGENT_PLATFORM_PEER_ID identifies the remote platform, not this agent.
+    peer_id = init_res.get("peer_id")
+    if not peer_id:
+        print("[❌] Helper init did not return peer_id; update agent-comm-helper.", file=sys.stderr)
+        return 1
     flag = "0" # stores_user_data is false
 
     canonical_str = f"{urn}|{peer_id}|{x25519_pubkey_hex}|{flag}|"

@@ -5,9 +5,11 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	"github.com/BillShiyaoZhang/agent-comm/dht"
@@ -54,9 +56,20 @@ func main() {
 	defer relayDHT.Close()
 	dht.Bootstrap(ctx, relayDHT)
 
-	regServer := registry.NewServer(relayHost, registry.NewInMemoryStore())
+	regStore := registry.NewInMemoryStore()
+	regServer := registry.NewServer(relayHost, regStore)
 	regServer.Register()
-	regServer.HandleRegister(relayURN, relayHost.ID(), relayHost.Addrs(), relayKeys.X25519PK)
+	relayTimestamp := time.Now().Unix()
+	relaySignature := ed25519.Sign(relayKeys.Ed25519.PrivateKey, registry.BuildSignedMsg(relayURN, relayHost.ID().String(), relayKeys.X25519PK, true, relayTimestamp))
+	relayAddrs := make([]string, len(relayHost.Addrs()))
+	for i, addr := range relayHost.Addrs() {
+		relayAddrs[i] = addr.String()
+	}
+	if err := regStore.RegisterWithSignature(relayURN, relayHost.ID().String(), relayAddrs, nil,
+		relayKeys.X25519PK, relayKeys.Ed25519.PublicKey, relaySignature, true, relayTimestamp); err != nil {
+		fmt.Fprintf(os.Stderr, "register relay: %v\n", err)
+		return
+	}
 
 	sqliteStore, _ := mq.NewSQLiteStore(filepath.Join(tmpRoot, "relay_db"))
 	mqServer, _ := mq.NewServer(relayHost, sqliteStore)
@@ -86,7 +99,13 @@ func main() {
 	dht.Bootstrap(ctx, senderDHT2)
 
 	regClient := registry.NewClient(senderHost)
-	regClient.Register(peer.AddrInfo{ID: relayHost.ID(), Addrs: relayHost.Addrs()}, senderURN, senderHost.Addrs(), senderKeys.X25519PK)
+	senderTimestamp := time.Now().Unix()
+	senderSignature := ed25519.Sign(senderKeys.Ed25519.PrivateKey, registry.BuildSignedMsg(senderURN, senderHost.ID().String(), senderKeys.X25519PK, false, senderTimestamp))
+	if err := regClient.RegisterWithSignature(peer.AddrInfo{ID: relayHost.ID(), Addrs: relayHost.Addrs()}, senderURN, senderHost.Addrs(), nil,
+		senderKeys.X25519PK, senderKeys.Ed25519.PublicKey, senderSignature, false, senderTimestamp); err != nil {
+		fmt.Fprintf(os.Stderr, "register sender: %v\n", err)
+		return
+	}
 
 	senderMgr := session.NewManager(senderHost, senderKeys)
 	senderMQ := mq.NewClient(senderHost)
@@ -98,9 +117,19 @@ func main() {
 	receiverURN := receiverKeys.Ed25519.URN()
 	fmt.Printf("Receiver: URN=%s (offline)\n\n", receiverURN)
 
-	// Register A's URN with relay registry (so B can resolve A)
-	// In real system A would do this when online
-	regClient.Register(peer.AddrInfo{ID: relayHost.ID(), Addrs: relayHost.Addrs()}, receiverURN, nil, receiverKeys.X25519PK)
+	// Seed A's own signed registration to simulate its previous online visit.
+	receiverPeerID, err := receiverKeys.PeerID()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "derive receiver PeerID: %v\n", err)
+		return
+	}
+	receiverTimestamp := time.Now().Unix() - 1
+	receiverSignature := ed25519.Sign(receiverKeys.Ed25519.PrivateKey, registry.BuildSignedMsg(receiverURN, receiverPeerID, receiverKeys.X25519PK, false, receiverTimestamp))
+	if err := regStore.RegisterWithSignature(receiverURN, receiverPeerID, nil, nil,
+		receiverKeys.X25519PK, receiverKeys.Ed25519.PublicKey, receiverSignature, false, receiverTimestamp); err != nil {
+		fmt.Fprintf(os.Stderr, "seed receiver registration: %v\n", err)
+		return
+	}
 
 	// --- B sends message to A (A is offline) ---
 	fmt.Println("--- B sends message to A (A is offline) ---")
@@ -152,7 +181,13 @@ func main() {
 	recvHost.Connect(ctx, peer.AddrInfo{ID: relayHost.ID(), Addrs: relayHost.Addrs()})
 
 	// Register A
-	registry.NewClient(recvHost).Register(peer.AddrInfo{ID: relayHost.ID(), Addrs: relayHost.Addrs()}, receiverURN, recvHost.Addrs(), receiverKeys.X25519PK)
+	receiverTimestamp = time.Now().Unix()
+	receiverSignature = ed25519.Sign(receiverKeys.Ed25519.PrivateKey, registry.BuildSignedMsg(receiverURN, recvHost.ID().String(), receiverKeys.X25519PK, false, receiverTimestamp))
+	if err := registry.NewClient(recvHost).RegisterWithSignature(peer.AddrInfo{ID: relayHost.ID(), Addrs: relayHost.Addrs()}, receiverURN, recvHost.Addrs(), nil,
+		receiverKeys.X25519PK, receiverKeys.Ed25519.PublicKey, receiverSignature, false, receiverTimestamp); err != nil {
+		fmt.Fprintf(os.Stderr, "register receiver: %v\n", err)
+		return
+	}
 
 	recvMgr := session.NewManager(recvHost, receiverKeys)
 	recvMQ := mq.NewClient(recvHost)

@@ -2,18 +2,19 @@ package agent
 
 import (
 	"context"
+	"crypto/ed25519"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/BillShiyaoZhang/agent-comm/contacts"
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	p2phost "github.com/BillShiyaoZhang/agent-comm/libp2p"
 	"github.com/BillShiyaoZhang/agent-comm/mq"
 	pb "github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/BillShiyaoZhang/agent-comm/registry"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	goproto "google.golang.org/protobuf/proto"
 )
 
@@ -38,10 +39,21 @@ func TestAgentHybridIntegration(t *testing.T) {
 	defer platformHost.Close()
 
 	// Start Registry server
-	regServer := registry.NewServer(platformHost, registry.NewInMemoryStore())
+	platformStore := registry.NewInMemoryStore()
+	regServer := registry.NewServer(platformHost, platformStore)
 	regServer.Register()
 	platformURN := platformKeys.Ed25519.URN()
-	regServer.HandleRegister(platformURN, platformHost.ID(), platformHost.Addrs(), platformKeys.X25519PK)
+	platformTimestamp := time.Now().Unix()
+	platformSignature := ed25519.Sign(platformKeys.Ed25519.PrivateKey, registry.BuildSignedMsg(
+		platformURN, platformHost.ID().String(), platformKeys.X25519PK, false, platformTimestamp))
+	platformAddrs := make([]string, len(platformHost.Addrs()))
+	for i, addr := range platformHost.Addrs() {
+		platformAddrs[i] = addr.String()
+	}
+	if err := platformStore.RegisterWithSignature(platformURN, platformHost.ID().String(), platformAddrs, nil,
+		platformKeys.X25519PK, platformKeys.Ed25519.PublicKey, platformSignature, false, platformTimestamp); err != nil {
+		t.Fatalf("register platform identity: %v", err)
+	}
 
 	// Start MQ server
 	platformMQDb := filepath.Join(t.TempDir(), "platform_mq.db")
@@ -247,6 +259,22 @@ func TestAgentHybridIntegration(t *testing.T) {
 	}
 }
 
+// tamperingRegistryStore simulates a compromised registry's response without
+// allowing invalid registrations into the production store.
+type tamperingRegistryStore struct {
+	registry.Store
+	poisonedURN string
+	x25519PK    []byte
+}
+
+func (s *tamperingRegistryStore) ResolveExtended(urn string) (string, []string, []string, []byte, []byte, []byte, bool, int64, bool) {
+	pid, addrs, relays, x25519PK, ed25519PK, signature, storesData, timestamp, found := s.Store.ResolveExtended(urn)
+	if found && urn == s.poisonedURN {
+		x25519PK = s.x25519PK
+	}
+	return pid, addrs, relays, x25519PK, ed25519PK, signature, storesData, timestamp, found
+}
+
 func TestRegistryVerificationFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -266,8 +294,20 @@ func TestRegistryVerificationFailure(t *testing.T) {
 	}
 	defer platformHost.Close()
 
-	// Start Registry server with InMemoryStore
-	store := registry.NewInMemoryStore()
+	// Start a test-only malicious registry that tampers with one resolution.
+	bob, err := crypto.LoadOrCreateIdentity(filepath.Join(t.TempDir(), "bob_keys"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, tamperedX25519PK, err := crypto.GenerateX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &tamperingRegistryStore{
+		Store:       registry.NewInMemoryStore(),
+		poisonedURN: bob.Ed25519.URN(),
+		x25519PK:    tamperedX25519PK,
+	}
 	regServer := registry.NewServer(platformHost, store)
 	regServer.Register()
 
@@ -296,41 +336,22 @@ func TestRegistryVerificationFailure(t *testing.T) {
 		t.Fatalf("agent A failed to connect to bootstrap: %v", err)
 	}
 
-	// 3. Generate a signature for a valid registration of Agent B. The literal
-// "fakebob" suffix is overwritten below once we have a real key pair; it is
-// only kept here to give the variable a stable initial value.
-	urnB := "urn:agent-comm:agent:fakebob"
-	peerIDB := "12D3KooWN9hpHBpf7awNa7PTWeCVMHnmTkBcZ1Rx31UdNgM8mxyc"
-
-	// Let's generate a temporary Ed25519 identity for signing
-	edKeyPair, err := crypto.GenerateIdentityKeyPair()
+	// 3. Store Bob's valid ownership proof; the fixture changes only its response.
+	urnB := bob.Ed25519.URN()
+	peerIDB, err := bob.PeerID()
 	if err != nil {
-		t.Fatalf("generate identity key pair: %v", err)
+		t.Fatal(err)
 	}
-	urnB = edKeyPair.URN() // Derived from this key pair
-
-	realX25519PKB := []byte("REAL_X25519_PUBKEY_32_BYTES_000")
-	if len(realX25519PKB) < 32 {
-		realX25519PKB = append(realX25519PKB, make([]byte, 32-len(realX25519PKB))...)
-	}
-
 	timestamp := time.Now().Unix()
-	msg := registry.BuildSignedMsg(urnB, peerIDB, realX25519PKB, false, timestamp)
-	sig, err := edKeyPair.Sign(msg)
+	msg := registry.BuildSignedMsg(urnB, peerIDB, bob.X25519PK, false, timestamp)
+	sig, err := bob.Ed25519.Sign(msg)
 	if err != nil {
 		t.Fatalf("sign registration message: %v", err)
 	}
 
-	// 4. Inject a TAMPERED registration into the registry database (simulating MITM by swapping X25519 PK)
-	tamperedX25519PK := []byte("TAMPERED_X25519_PUBKEY_32_BYTES")
-	if len(tamperedX25519PK) < 32 {
-		tamperedX25519PK = append(tamperedX25519PK, make([]byte, 32-len(tamperedX25519PK))...)
-	}
-
-	// Inject B's registration using the tampered X25519 key but B's real signature
-	err = store.RegisterWithSignature(urnB, peerIDB, []string{"/ip4/127.0.0.1/tcp/4567"}, nil, tamperedX25519PK, edKeyPair.PublicKey, sig, false, timestamp)
+	err = store.RegisterWithSignature(urnB, peerIDB, []string{"/ip4/127.0.0.1/tcp/4567"}, nil, bob.X25519PK, bob.Ed25519.PublicKey, sig, false, timestamp)
 	if err != nil {
-		t.Fatalf("store tampered registration: %v", err)
+		t.Fatalf("store valid registration: %v", err)
 	}
 
 	// 5. Try resolving URN B from Agent A's registry client

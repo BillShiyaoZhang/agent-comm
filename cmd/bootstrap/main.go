@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"os"
 	"os/signal"
@@ -94,18 +95,29 @@ func main() {
 	fmt.Println()
 
 	// Step 4: Start URN registry server
-	regServer := registry.NewServer(h, registry.NewInMemoryStore())
+	regStore := registry.NewInMemoryStore()
+	regServer := registry.NewServer(h, regStore)
 	regServer.Register()
-	regServer.HandleRegister(urn, h.ID(), h.Addrs(), keys.X25519PK)
+	timestamp := time.Now().Unix()
+	signature := ed25519.Sign(keys.Ed25519.PrivateKey, registry.BuildSignedMsg(urn, h.ID().String(), keys.X25519PK, true, timestamp))
+	addrs := make([]string, len(h.Addrs()))
+	for i, addr := range h.Addrs() {
+		addrs[i] = addr.String()
+	}
+	if err := regStore.RegisterWithSignature(urn, h.ID().String(), addrs, nil,
+		keys.X25519PK, keys.Ed25519.PublicKey, signature, true, timestamp); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to register bootstrap identity: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Printf("Registry server started on %s\n", registry.ProtoID)
 	fmt.Printf("Registered self: %s -> %s\n", urn, h.ID())
 	fmt.Println()
 
 	// Step 5: Start MQ relay server (async message storage). We default to a
-// platform-appropriate data directory ($XDG_DATA_HOME/agent-comm on Linux,
-// %LOCALAPPDATA%\agent-comm on Windows, ~/Library/Application Support/agent-comm
-// on macOS) instead of /tmp so the data survives restarts. The path can
-// always be overridden via the MQ_DB_PATH environment variable.
+	// platform-appropriate data directory ($XDG_DATA_HOME/agent-comm on Linux,
+	// %LOCALAPPDATA%\agent-comm on Windows, ~/Library/Application Support/agent-comm
+	// on macOS) instead of /tmp so the data survives restarts. The path can
+	// always be overridden via the MQ_DB_PATH environment variable.
 	dbPath := os.Getenv("MQ_DB_PATH")
 	if dbPath == "" {
 		dbPath = defaultDataPath("relay_mq.db")
@@ -125,7 +137,7 @@ func main() {
 	fmt.Println()
 
 	// Step 6: Start WoT store and register handler. Same defaulting strategy as
-// the MQ DB above; override via WOT_DB_PATH.
+	// the MQ DB above; override via WOT_DB_PATH.
 	wotDBPath := os.Getenv("WOT_DB_PATH")
 	if wotDBPath == "" {
 		wotDBPath = defaultDataPath("relay_wot.db")

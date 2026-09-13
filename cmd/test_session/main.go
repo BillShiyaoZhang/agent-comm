@@ -2,21 +2,23 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	"github.com/BillShiyaoZhang/agent-comm/dht"
 	"github.com/BillShiyaoZhang/agent-comm/libp2p"
 	"github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/BillShiyaoZhang/agent-comm/registry"
 	"github.com/BillShiyaoZhang/agent-comm/session"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	goproto "google.golang.org/protobuf/proto"
 )
 
@@ -66,9 +68,20 @@ func main() {
 	fmt.Printf("Node A listening on: %v\n\n", hostA.Addrs())
 
 	// Registry server on A
-	regA := registry.NewServer(hostA, registry.NewInMemoryStore())
+	storeA := registry.NewInMemoryStore()
+	regA := registry.NewServer(hostA, storeA)
 	regA.Register()
-	regA.HandleRegister(keysA.Ed25519.URN(), hostA.ID(), hostA.Addrs(), keysA.X25519PK)
+	timestampA := time.Now().Unix()
+	signatureA := ed25519.Sign(keysA.Ed25519.PrivateKey, registry.BuildSignedMsg(keysA.Ed25519.URN(), hostA.ID().String(), keysA.X25519PK, false, timestampA))
+	addrsA := make([]string, len(hostA.Addrs()))
+	for i, addr := range hostA.Addrs() {
+		addrsA[i] = addr.String()
+	}
+	if err := storeA.RegisterWithSignature(keysA.Ed25519.URN(), hostA.ID().String(), addrsA, nil,
+		keysA.X25519PK, keysA.Ed25519.PublicKey, signatureA, false, timestampA); err != nil {
+		fmt.Fprintf(os.Stderr, "A: register: %v\n", err)
+		return
+	}
 
 	// Session server on A
 	mgrA := session.NewManager(hostA, keysA)
@@ -118,7 +131,10 @@ func main() {
 
 	// Register B with A's registry (B's X25519 pubkey included)
 	regClient := registry.NewClient(hostB)
-	if err := regClient.Register(addrInfoA, keysB.Ed25519.URN(), hostB.Addrs(), keysB.X25519PK); err != nil {
+	timestampB := time.Now().Unix()
+	signatureB := ed25519.Sign(keysB.Ed25519.PrivateKey, registry.BuildSignedMsg(keysB.Ed25519.URN(), hostB.ID().String(), keysB.X25519PK, false, timestampB))
+	if err := regClient.RegisterWithSignature(addrInfoA, keysB.Ed25519.URN(), hostB.Addrs(), nil,
+		keysB.X25519PK, keysB.Ed25519.PublicKey, signatureB, false, timestampB); err != nil {
 		fmt.Fprintf(os.Stderr, "B: register: %v\n", err)
 	} else {
 		fmt.Printf("Node B registered with Node A's registry (X25519 pubkey included)\n")

@@ -16,6 +16,7 @@ import (
 	goproto "google.golang.org/protobuf/proto"
 
 	"github.com/libp2p/go-libp2p"
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 )
 
 func main() {
@@ -41,8 +42,13 @@ func main() {
 	myURN := keys.Ed25519.URN()
 	fmt.Printf("Generated URN: %s\n", myURN)
 
-	// Create a dummy libp2p host just to get a Peer ID
-	h, err := libp2p.New()
+	// The registered PeerID must derive from the identity that owns the URN.
+	privateKey, err := libp2pcrypto.UnmarshalEd25519PrivateKey(keys.Ed25519.PrivateKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load libp2p identity: %v\n", err)
+		os.Exit(1)
+	}
+	h, err := libp2p.New(libp2p.Identity(privateKey))
 	if err != nil {
 		fmt.Printf("❌ Failed to create libp2p host: %v\n", err)
 		os.Exit(1)
