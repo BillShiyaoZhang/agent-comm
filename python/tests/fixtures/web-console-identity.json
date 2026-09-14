@@ -1,0 +1,5 @@
+{
+  "urn": "urn:hermes:agent:BewGwPDweP6xa1niibe5NW",
+  "ed25519_public_key_base64": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+  "source": "Existing agent-collaboration-web/tests/fixtures/protocol-go.json senderUrn/publicKey; matches the real Web deriveUrnFromEd25519PubKey and Go signed registration fixture"
+}

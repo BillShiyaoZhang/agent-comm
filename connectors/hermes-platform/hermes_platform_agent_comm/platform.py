@@ -26,6 +26,13 @@ WIRE_FIELDS = ("conversation_id", "in_reply_to", "task_id", "kind", "deadline", 
 DEFAULT_HOP_LIMIT = 8
 
 
+def canonical_remote_route(job):
+    # Both principal and paired console participate, so a reused public
+    # conversation_id never inherits another local owner's conversation.
+    encoded = json.dumps([job["owner_principal"], job["console_urn"], job["conversation_id"]], separators=(",", ":"))
+    return "remote-" + hashlib.sha256(encoded.encode()).hexdigest()
+
+
 class ReceiptStore:
     """Completion receipts and reply routes; pending plaintext remains in the helper."""
 
@@ -97,6 +104,10 @@ class AgentCommAdapter(BasePlatformAdapter):
         self._retry_after = {}
         self._completion = {}
         self._active_event = None
+        self._remote_bridge = None
+        self._remote_store = None
+        self._remote_worker = None
+        self._remote_events = {}
         self._lifecycle_lock = asyncio.Lock()
 
     @property
@@ -157,14 +168,22 @@ class AgentCommAdapter(BasePlatformAdapter):
         if self._response is not None:
             self._response.close()
             self._response = None
-        tasks = [task for task in (self._reader, self._reconciler, self._consumer) if task]
+        tasks = [task for task in (self._reader, self._reconciler, self._consumer, self._remote_worker) if task]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._reader = self._reconciler = self._consumer = None
+        self._remote_worker = None
         # A processing hook must finish/cancel before closing its durable receipt store.
         await self.cancel_background_tasks()
+        self._remote_events.clear()
+        if self._remote_bridge is not None:
+            await asyncio.to_thread(self._remote_bridge.close)
+            self._remote_bridge = None
+        if self._remote_store is not None:
+            await asyncio.to_thread(self._remote_store.close)
+            self._remote_store = None
         if self._session is not None:
             await self._session.close()
             self._session = None
@@ -297,6 +316,37 @@ class AgentCommAdapter(BasePlatformAdapter):
                     await self._ack(message_id)
                     consumed = True
                     continue
+                if message.get("kind") in {"control.request", "control.response"}:
+                    if message.get("kind") != "control.request" or self._extra.get("remote_enabled") is not True:
+                        raise RuntimeError("Control messages require their paired remote processor; never dispatching to a peer agent")
+                    await self._ensure_remote_bridge()
+                    response = await asyncio.to_thread(self._remote_bridge.handle, message)
+                    with self._remote_bridge.delivery(message, response) as response:
+                        if response is not None:
+                            accepted = await self._request_json("POST", "store", response)
+                            if accepted.get("success") is not True or accepted.get("message_id") != response["message_id"]:
+                                raise RuntimeError("Helper did not accept the durable control response")
+                    await asyncio.to_thread(self._receipts.complete, message_id, "processed")
+                    await self._ack(message_id)
+                    consumed = True
+                    continue
+                from .collaboration.hermes import collaboration_enabled, read_settings, state_path
+                if collaboration_enabled(self._extra) or self._extra.get("remote_enabled") is True:
+                    # Peers are durable input, not private-owner LLM turns. Only
+                    # the native owner can inspect these records and act on them.
+                    def persist_collaboration_input():
+                        from .collaboration.store import Store
+                        settings = {**self._extra, **read_settings()}
+                        store = Store(state_path(settings), local_urn=settings.get("urn"))
+                        try:
+                            store.ingest_message(message)
+                        finally:
+                            store.close()
+                    await asyncio.to_thread(persist_collaboration_input)
+                    await asyncio.to_thread(self._receipts.complete, message_id, "processed")
+                    await self._ack(message_id)
+                    consumed = True
+                    continue
                 future = asyncio.get_running_loop().create_future()
                 self._completion[message_id] = future
                 event = self._build_event(message)
@@ -338,6 +388,18 @@ class AgentCommAdapter(BasePlatformAdapter):
                             allow_gateway_control=False, internal=False)
 
     async def on_processing_complete(self, event, outcome):
+        remote = self._remote_events.get(event.message_id)
+        if remote is not None and remote["event"] is event:
+            error = None if outcome == ProcessingOutcome.SUCCESS else "Hermes did not complete this turn successfully"
+            await asyncio.to_thread(self._remote_bridge.finish_turn, event.message_id,
+                response=remote.get("response"), error=error, interrupted=outcome == ProcessingOutcome.CANCELLED)
+            def remote_finished(_task):
+                if not remote["future"].done():
+                    remote["future"].set_result(True)
+            # The host releases its active-session guard in finally, after this
+            # hook; do not merge a next queued RPC turn into this completed one.
+            asyncio.current_task().add_done_callback(remote_finished)
+            return
         future = self._completion.get(event.message_id)
         if future is None or future.done():
             return
@@ -356,9 +418,70 @@ class AgentCommAdapter(BasePlatformAdapter):
                 future.set_result(success)
         asyncio.current_task().add_done_callback(finished)
 
+    async def _ensure_remote_bridge(self):
+        if self._remote_bridge is not None:
+            return
+        from agent_comm_runtime.remote import RemoteBridge
+        from agent_comm_runtime.store import Store
+        from .collaboration.hermes import profile_principal, state_path
+        settings = self._extra
+        path = settings.get("remote_state_path") or get_hermes_home() / "agent-comm" / "remote.sqlite3"
+        self._remote_store = Store(state_path(settings), local_urn=settings.get("urn"))
+        self._remote_bridge = RemoteBridge(path, self._remote_store, settings.get("urn"), conversations=True,
+            bound_principal=profile_principal())
+        await asyncio.to_thread(self._remote_bridge.recover_interrupted_turns)
+        self._remote_worker = asyncio.create_task(self._run_remote_turns())
+
+    async def _run_remote_turns(self):
+        # Separate from the mailbox consumer so polling/status RPCs remain responsive.
+        while self.running:
+            job = await asyncio.to_thread(self._remote_bridge.claim_turn)
+            if job is None:
+                await asyncio.sleep(.2)
+                continue
+            turn_id = job["turn_id"]
+            try:
+                route = canonical_remote_route(job)
+                source = self.build_source(chat_id=job["console_urn"], chat_name="Paired remote console", chat_type="dm",
+                    user_id=job["console_urn"], user_name="Paired remote owner", thread_id=route,
+                    is_bot=False, message_id=turn_id)
+                event = MessageEvent(text=job["text"], message_type=MessageType.TEXT, source=source,
+                    message_id=turn_id, raw_message={"origin": "locally_paired_control_rpc"},
+                    metadata={}, allow_gateway_control=False, internal=False)
+                future = asyncio.get_running_loop().create_future()
+                self._remote_events[turn_id] = {"event": event, "future": future, "response": None}
+                await self.handle_message(event)
+                if not getattr(event, "_gateway_accepted", False):
+                    raise RuntimeError("Hermes did not accept this paired conversation; check Gateway allow_from")
+                await future
+            except asyncio.CancelledError:
+                await asyncio.to_thread(self._remote_bridge.finish_turn, turn_id,
+                    error="Hermes adapter stopped during this turn", interrupted=True)
+                raise
+            except Exception as exc:
+                await asyncio.to_thread(self._remote_bridge.finish_turn, turn_id, error=str(exc)[:500])
+            finally:
+                self._remote_events.pop(turn_id, None)
+
+    async def _send_final_text(self, event, session_key, text_content, metadata,
+                               is_ephemeral_response, ephemeral_ttl, record_delivery):
+        remote = self._remote_events.get(event.message_id)
+        if remote is not None and remote["event"] is event:
+            # Host-owned final lifecycle event, never a model-supplied reply anchor.
+            # Persist at processing-complete; send no unsolicited plaintext message.
+            remote["response"] = text_content
+            record_delivery(SendResult(success=True, message_id=event.message_id,
+                raw_response={"status": "captured_for_remote_poll"}))
+            return
+        return await super()._send_final_text(event, session_key, text_content, metadata,
+            is_ephemeral_response, ephemeral_ttl, record_delivery)
+
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[Dict[str, Any]] = None):
         try:
+            from .collaboration.hermes import collaboration_enabled
+            if collaboration_enabled(self._extra) or self._extra.get("remote_enabled") is True:
+                return SendResult(success=False, error="个人协作模式禁止直接发送；请在主人原生对话中通过 agent_comm_collaboration prepare_action / dispatch 使用明确委托。")
             if self._session is None or self._session.closed:
                 raise RuntimeError("agent-comm adapter is disconnected")
             metadata = metadata or {}

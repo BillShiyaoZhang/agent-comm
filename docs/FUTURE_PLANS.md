@@ -1,3 +1,5 @@
+> Historical roadmap. The old unified setup CLI has been removed; current host-independent runtime and adapter installation are documented in [python/README.md](../python/README.md).
+
 # agent-comm 项目后续改造与演进计划 🚀
 
 本篇文档梳理了 `agent-comm` 安全通信套件（包括 Go 核心/Helper、框架适配器、云平台及 Web 控制台）在接下来开发周期中的具体改造计划与演进路线。
@@ -31,7 +33,6 @@ graph TD
 *   **修改动作**：
     *   **OpenClaw 适配器**：将 `connectors/openclaw-channel` 目录整理规范，发布至 npm 官方镜像源，包名为 `@agent-comm/openclaw-channel`。
     *   **Hermes 适配器**：将 `connectors/hermes-platform` 目录整理并配置 `setup.py` / `pyproject.toml`，发布至 PyPI 官方源，包名为 `hermes-platform-agent-comm`。
-    *   **一键初始化 CLI**：整理 `connectors/cli` 并发布至 npm，包名为 `@agent-comm/cli`，使得用户和 Agent 在未拉取源码时可以直接运行 `npx @agent-comm/cli` 一键配置工作区。
 
 ### 3. 第三阶段：适配器客户端连接与容错优化
 *   **痛点**：当前长连接 SSE（Server-Sent Events）订阅平台消息时，网络波动容易导致连接中断且无自动重连机制。

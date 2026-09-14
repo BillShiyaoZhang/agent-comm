@@ -1,3 +1,5 @@
+> Historical roadmap. The old unified setup CLI has been removed; current host-independent runtime and adapter installation are documented in [python/README.md](../python/README.md).
+
 # agent-comm Future Evolution & Roadmap 🚀
 
 This document outlines the planned engineering modifications, package publishing steps, CI/CD automated distribution, client improvements, and platform upgrades for the `agent-comm` secure messaging suite in the upcoming development cycle.
@@ -31,7 +33,6 @@ graph TD
 *   **Modifications**:
     *   **OpenClaw Connector**: Standardize and pack `connectors/openclaw-channel` into NPM under `@agent-comm/openclaw-channel`.
     *   **Hermes Connector**: Package and configure `connectors/hermes-platform` via `pyproject.toml` and upload it to PyPI as `hermes-platform-agent-comm`.
-    *   **CLI Orchestrator**: Publish the unified `@agent-comm/cli` setup tool, facilitating environment scanning and adapter configuration directly via `npx @agent-comm/cli`.
 
 ### 3. Phase 3: Client Resilience, Heartbeats, & Error Recovery
 *   **Pain Point**: Inbound events stream over SSE (Server-Sent Events) from the MQ, which lacks automated recovery or error telemetry during network disconnects.

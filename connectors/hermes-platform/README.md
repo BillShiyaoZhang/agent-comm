@@ -1,6 +1,86 @@
 # Hermes 平台插件
 
-本插件连接本机 `agent-comm-helper`，由 helper 负责密钥、加密和云端/P2P 传输。`platform_url` 必须是本机 loopback HTTP 地址（默认 `http://127.0.0.1:45042`），不可填写云端 platform URL。
+本插件连接本机 `agent-comm-helper`，由 helper 负责密钥、加密和当前 HTTPS MQ 可靠传输。`platform_url` 必须是本机 loopback HTTP 地址（默认 `http://127.0.0.1:45042`），不可填写云端 platform URL。
+
+## 个人协作模式（1.3.0，可选）
+
+本版本通过独立 `agent-comm-runtime` 包提供本地协作内核，
+`agent_comm_collaboration` 是它的 Hermes 原生适配工具，优先用于 Hermes
+桌面/Web 的主人原生对话。联系人、不可变资料快照、事项委托、待决定问题、
+方案版本及发送记录保存到当前 profile 的 SQLite；不要求统一宿主记忆。
+
+在下方现有安装配置的 `platforms.agent_comm.extra` 中增加：
+
+```yaml
+collaboration_enabled: true
+# 可选；默认当前 HERMES_HOME/agent-comm/collaboration.sqlite3
+# collaboration_state_path: /absolute/path/to/collaboration.sqlite3
+```
+
+同时保留本机 `platform_url`、正确的本方 `urn` 和明确的 `allow_from`，不要覆盖
+其它平台或插件配置。Gateway 与桌面/Web 后端须安装同一插件版本并使用同一
+profile/协作库。若在 Hermes 工具设置中主动禁用了 `agent_comm_collaboration`
+工具组，需要按原设置流程启用它。运行中的服务需要重启以加载一致配置。
+
+这一选项默认关闭。**开启后，远端消息只持久入库，不直接启动具有私人上下文的
+Gateway LLM；普通 adapter 直接发送被阻止。** 主人原生对话通过协作工具的
+`inbox` 读取来信，使用 `prepare_action` / `dispatch` 在授权范围内继续。
+本版本不在后台唤醒桌面会话。关闭模式时保留下文描述的传统 Gateway 消息处理。
+
+首个联系人绑定和事项范围通过 Hermes 自己的 `clarify` 问题卡确认。用户在
+**该问题的文字回答框**输入“可以”或“同意”；主聊天输入框的文字在当前 Hermes
+中会跳过问题并开始新回合，不会批准旧请求。模型只能传 `approval_id`，不能
+传主人身份、`approved` 或回答正文。回调返回后重新验证连接、原生会话与回合；
+超时、关闭、条件回答、中断、子 agent 或外部平台上下文均不产生授权。
+
+有效委托内的结构化动作自动允许；范围变化询问具体差额；不完整动作先澄清；
+无效或不支持的能力拒绝。当前支持候选时段、指定资料、会议提议、接受已登记
+方案，以及每次确认确切全文的自由文本。工作日下午等限制必须编码成
+`allowed_windows` 的具体时间区间，不能只写进目的描述。候选披露按收件人在
+本事项累计；金额支付、日历写入及任意执行工具尚未接入。
+
+让 agent 先读随包提供的 `agent_comm:personal-collaboration` skill，再调用
+`state` 恢复状态。不同原生对话可恢复同一 profile 的联系人与任务；待决问题
+需要在当前原生对话重新展示。未结束的原生问题在租约释放/到期前不能重开。
+`sending` 使用同一个 `operation_id` 续发，单次最多处理四位尚未接收的收件人；
+`accepted` 仅代表本机 helper 队列接受，不是对端接受或会议创建成功。
+
+此桥已针对 Hermes `b6b53c69a6ed49cb099cf1bfe76b5e6edd718e5a` 的真实原生接口
+做隔离测试；依赖内部原生会话接口，宿主升级后需要重新验证，缺少接口会拒绝
+执行。组件只约束经由自身的路径，不能阻止具有任意 shell/文件/网络权限的
+模型绕过本地工具；开启它也不是任意文本语义或第三方资料权限的自动证明。
+
+通用内核与可扩展 Host / Memory / Interaction / Transport 合约见
+[SDK Python Runtime](../../python/README.md)。宿主桥接位于
+`hermes_platform_agent_comm/collaboration/hermes.py`，原生操作示例与完整
+scope/payload 规格见随包的 `skills/personal-collaboration/SKILL.md`。测试仍使用
+文末命令，涵盖策略、SQLite 恢复/并发/崩溃、原生 callback、helper HTTP 与
+传统 connector 兼容性；不会修改真实 profile、调用模型或向真实对端发送消息。
+
+## 宿主与记忆扩展
+
+`describe` 返回当前注册的端口和支持能力；未安装的记忆、通知、唤醒等能力明确返回
+`unsupported`。Hermes 默认使用真实桌面/Web 主人会话及原生问题卡；第三方宿主可以
+独立实现通用端口，运行 `python -m agent_comm_runtime.reference --demo` 查看参考适配器。
+
+Hermes 不默认读取整套记忆。若已有第三方 memory adapter 包，可由主人配置：
+
+```yaml
+collaboration_memory_adapter:
+  name: my-graph
+  options:
+    selected_collection: collaboration
+```
+
+它对应 `agent_comm_runtime.adapters` 下明确安装的一个 entry point；提供有限查询和
+指定快照，来源/版本随资源登记保存。未配置时工具不遍历记忆；仍可由宿主准备明确
+资料并使用 `register_resource`。完整 adapter 开发方式见 [Runtime 文档](../../python/README.md)。
+
+远程工作台采用独立 owner 配对，配置键为 `remote_enabled`（默认 false）和
+`remote_state_path`；普通联系人的 URN/allow_from 不能代替主人工作台配对。
+远程读写方法、安装命令及配对方式以 Runtime 的 remote CLI 和 agent 实际返回的
+capabilities 为准。不要同时启动 standalone remote 消费器和同一 helper 的 Hermes
+remote 消费器。
 
 ## 安装与升级
 
@@ -10,10 +90,10 @@
 2. 在 **运行 Hermes Gateway 的同一个 Python 环境**中安装此目录：
 
    ```sh
-   python -m pip install /path/to/agent-comm/connectors/hermes-platform
+   python -m pip install /path/to/agent-comm/python /path/to/agent-comm/connectors/hermes-platform
    ```
 
-   不要同时保留同名 pip entry point 和用户目录插件。也可将 `hermes_platform_agent_comm` 中的全部文件复制到实际 `HERMES_HOME/plugins/agent_comm/`，并在 Hermes 环境安装 `aiohttp>=3.14.3,<4`。该方式不需要 pip 安装本插件。
+   两个源码目录需要在同一命令安装；发行时同时提供 runtime 与 connector wheel。不要同时保留同名 pip entry point 和用户目录插件；新的独立 runtime 是必需依赖。
 
 3. 先通过 Hermes 的 `hermes_constants.get_hermes_home()` 确认实际 profile 目录；它可能不是 `~/.hermes`，例如 Windows 上可位于 `%LOCALAPPDATA%\hermes`。按当前 Hermes 的配置流程合并以下内容，保留其他平台和插件配置：
 
@@ -80,13 +160,13 @@ helper 持久 inbox 是未消费消息的来源。插件同时通过 SSE 和 `GE
 在安装了 Hermes 与本插件依赖的 Python 环境运行：
 
 ```sh
-PYTHONPATH=/path/to/hermes-agent python -m unittest discover -s connectors/hermes-platform/tests -v
+PYTHONPATH=/path/to/hermes-agent:/path/to/agent-comm/python python -m unittest discover -s connectors/hermes-platform/tests -v
 ```
 
 PowerShell：
 
 ```powershell
-$env:PYTHONPATH = 'C:/path/to/hermes-agent'
+$env:PYTHONPATH = 'C:/path/to/hermes-agent;C:/path/to/agent-comm/python'
 $env:PYTHONDONTWRITEBYTECODE = '1'
 & 'C:/path/to/hermes-agent/venv/Scripts/python.exe' -m unittest discover -s connectors/hermes-platform/tests -v
 ```

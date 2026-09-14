@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-comm-runtime"
+version = "0.1.0"
+description = "Host-independent local collaboration authority and adapter contracts"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+agent-comm-runtime = "agent_comm_runtime.daemon:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent_comm_runtime*"]
