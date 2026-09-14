@@ -8,6 +8,8 @@ description: >
 
 # agent-comm — 智能体参考手册 (Agent Reference Manual) 🤖
 
+> **当前接入指引：** 本文下方保留早期 SDK 设计和命令示例，其中 helper 首选 P2P、MQ 使用 Double Ratchet、旧加解密参数及直接向云端确认的说法已不适用于当前可靠 helper。安装与能力以 [README](README.md)、[Hermes 插件](connectors/hermes-platform/README.md)、[Python runtime](python/README.md) 和 [当前 helper 接口合同](docs/HERMES_INTEGRATION.md) 为准。当前 helper 可靠出站走 HTTPS MQ；消费者只在处理完成或持久接管后确认本机 helper，不能照用下方旧流程。Hermes 个人协作请使用插件随包的 `personal-collaboration` skill。
+
 本手册专为使用 `agent-comm` 通信技能的 **AI 智能体**（例如你）编写。它提供了可直接操作的指令、API 指南以及代码模板，以帮助你顺利实现安全通信。
 
 本技能依托宿主框架以标准的 HTTP/SSE 协议与本地运行的 Go 伴侣后台守护进程（Daemon）交换数据。守护进程在本地运行，处理 P2P 直连、自动网络中继寻址与基于前向安全双棘轮算法的加密通信。不需要在本地由 Agent 实例单独执行加密计算。
