@@ -4,11 +4,24 @@ import { createElement as h, useSyncExternalStore } from 'react'
 const PAGE = '/agent-comm-attention'
 const OPEN = new Set(['open'])
 const ACTIONABLE = new Set(['owner_decision_required', 'new_collaboration_request', 'needs_recovery', 'needs_response'])
+const ERROR_NAMES = new Set(['Error', 'TypeError', 'SecurityError', 'NotAllowedError', 'AbortError', 'InvalidStateError', 'NotSupportedError', 'QuotaExceededError'])
+const errorName = error => ERROR_NAMES.has(error?.name) ? error.name : 'UnknownError'
+const emptyDiagnostics = () => ({ webLocks: 'unknown', secureContext: null, claimState: 'idle', candidates: 0, claimed: 0,
+  inAppCall: 'idle', osCall: 'idle', osAttempts: 0, osAttemptAt: null, hidden: null, focused: null,
+  lastErrorStage: '', lastErrorName: '', lastErrorAt: null })
+const diagnosticText = d => [
+  `Web Locks: ${d.webLocks} · secureContext: ${String(d.secureContext)}`,
+  `claim: ${d.claimState} · 候选 ${d.candidates} · 本轮取得 ${d.claimed}`,
+  `站内调用: ${d.inAppCall} · OS 调用: ${d.osCall} · 尝试 ${d.osAttempts} 次`,
+  `最近 OS 尝试: ${d.osAttemptAt ? new Date(d.osAttemptAt).toLocaleTimeString() : '无'} · hidden: ${String(d.hidden)} · focused: ${String(d.focused)}`,
+  `最近错误: ${d.lastErrorStage ? `${d.lastErrorStage} / ${d.lastErrorName} · ${new Date(d.lastErrorAt).toLocaleTimeString()}` : '无'}`,
+  'OS 调用返回不代表已经显示；宿主通知偏好、前后台、启动静默和节流仍然生效。'
+].join('\n')
 
 // Exported for behavioral tests with a fake host. The controller never calls
 // prompt.submit, conversation.send, confirm, or any model/tool execution door.
 export function createAttentionController({ rest, scope, notify, persist, readPersist, claim, clock = Date.now }) {
-  let snapshot = { items: [], scope: scope(), owner: null, loading: true, error: '', available: true, updatedAt: null, syncRevision: 0 }
+  let snapshot = { items: [], scope: scope(), owner: null, loading: true, error: '', available: true, updatedAt: null, syncRevision: 0, diagnostics: emptyDiagnostics() }
   let cursor = 0
   let generation = 0
   let busy = false
@@ -40,7 +53,7 @@ export function createAttentionController({ rest, scope, notify, persist, readPe
     baseline = true
     records.clear()
     changesToNotify.clear()
-    publish({ items: [], scope: scope(), owner: null, loading: true, error: '', available: true, updatedAt: null })
+    publish({ items: [], scope: scope(), owner: null, loading: true, error: '', available: true, updatedAt: null, diagnostics: emptyDiagnostics() })
   }
   async function poll() {
     if (disposed) return
@@ -49,6 +62,13 @@ export function createAttentionController({ rest, scope, notify, persist, readPe
     busy = true
     const turn = generation
     const expectedScope = snapshot.scope
+    // Only fixed scalar fields reach diagnostics. Never copy item content,
+    // scope keys, lock names, exception messages or stacks into this view.
+    const diagnose = changes => {
+      if (!disposed && turn === generation && expectedScope === scope()) {
+        publish({ diagnostics: { ...snapshot.diagnostics, ...(typeof changes === 'function' ? changes(snapshot.diagnostics) : changes) } })
+      }
+    }
     try {
       let more = false
       for (let page = 0; page < 10; page += 1) {
@@ -92,14 +112,25 @@ export function createAttentionController({ rest, scope, notify, persist, readPe
       publish({ items: visible(), loading: more, available: true, error: '', updatedAt: clock(), syncRevision: snapshot.syncRevision + 1 })
       if (more) return // Finish the initial snapshot before producing one digest.
       const candidates = (baseline ? visible().filter(item => ACTIONABLE.has(item.kind)) : [...changesToNotify.values()]).filter(item => isOpen(item) && (ACTIONABLE.has(item.kind) || !isRead(item)))
-      const fresh = await claimAttempts(candidates, keyFor())
+      diagnose({ claimState: 'requesting', candidates: candidates.length, claimed: 0 })
+      let fresh
+      try {
+        fresh = await claimAttempts(candidates, keyFor(), diagnose)
+      } catch (error) {
+        const stage = snapshot.diagnostics.claimState === 'locked' ? 'claim_storage'
+          : snapshot.diagnostics.webLocks === 'available' ? 'web_lock' : 'claim'
+        diagnose({ claimState: 'failed', lastErrorStage: stage, lastErrorName: errorName(error), lastErrorAt: clock() })
+        return // Keep the current feed and candidates; retry the claim next poll.
+      }
       if (disposed || turn !== generation || expectedScope !== scope()) return
+      diagnose({ claimed: fresh.length, claimState: snapshot.diagnostics.claimState === 'unavailable' ? 'unavailable' : fresh.length ? 'claimed' : candidates.length ? 'already_claimed' : 'no_candidates' })
       baseline = false
       changesToNotify.clear()
       if (fresh.length) {
         // This is an attempt, not evidence that the OS displayed the notice.
         // Actual pending/resolved state remains in the runtime database.
-        notify(fresh.length, fresh[0])
+        try { await notify(fresh.length, fresh[0], diagnose) }
+        catch (error) { diagnose({ lastErrorStage: 'notification', lastErrorName: errorName(error), lastErrorAt: clock() }) }
       }
     } catch {
       if (!disposed && turn === generation && expectedScope === scope()) {
@@ -131,14 +162,23 @@ export default {
   defaultEnabled: false,
   register(ctx) {
     const scope = () => JSON.stringify([host.state.connectionId?.get() || '', host.state.profile.get()])
+    const revealCenter = () => {
+      // host.navigate writes the hash. Reopening the same route does not emit
+      // a route change, so an intervening session tile needs an explicit reveal.
+      if (typeof host.revealPane === 'function') host.revealPane('workspace')
+    }
+    const openCenter = () => { host.navigate(PAGE); revealCenter() }
     const controller = createAttentionController({
       rest: ctx.rest,
       scope,
       readPersist: key => ctx.storage.get(`attempts:${key}`, {}),
       persist: (key, value) => ctx.storage.set(`attempts:${key}`, value),
-      async claim(items, key) {
-        if (!globalThis.navigator?.locks) return []
+      async claim(items, key, diagnose) {
+        const supported = typeof globalThis.navigator?.locks?.request === 'function'
+        diagnose({ webLocks: supported ? 'available' : 'unavailable', secureContext: typeof globalThis.isSecureContext === 'boolean' ? globalThis.isSecureContext : null })
+        if (!supported) { diagnose({ claimState: 'unavailable' }); return [] }
         return navigator.locks.request(`agent-comm-attention:${key}`, () => {
+          diagnose({ claimState: 'locked' })
           const previous = ctx.storage.get(`attempts:${key}`, {})
           const fresh = items.filter(item => (previous[item.attention_id] || 0) < item.revision)
           for (const item of fresh) previous[item.attention_id] = item.revision
@@ -146,12 +186,29 @@ export default {
           return fresh
         })
       },
-      notify(count) {
+      async notify(count, _item, diagnose) {
         const title = '协作有新进展'
         const message = `有 ${count} 项协作进展。打开待办中心查看最新状态；需要决定时在原生对话中处理。`
-        host.notify({ id: 'agent-comm-attention', kind: 'info', title, message,
-          action: { label: '查看待办', onClick: () => host.navigate(PAGE) } })
-        try { ctx.os.notify({ title, body: message, activate: PAGE }) } catch { /* Center remains authoritative. */ }
+        diagnose({ inAppCall: 'calling' })
+        try {
+          host.notify({ id: 'agent-comm-attention', kind: 'info', title, message,
+            action: { label: '查看待办', onClick: openCenter } })
+          diagnose({ inAppCall: 'returned' })
+        } catch (error) {
+          diagnose({ inAppCall: 'failed', lastErrorStage: 'in_app', lastErrorName: errorName(error), lastErrorAt: Date.now() })
+          return
+        }
+        diagnose(previous => ({ osCall: 'calling', osAttempts: previous.osAttempts + 1, osAttemptAt: Date.now(),
+          hidden: typeof globalThis.document?.hidden === 'boolean' ? document.hidden : null,
+          focused: typeof globalThis.document?.hasFocus === 'function' ? document.hasFocus() : null }))
+        try {
+          // The real SDK returns void and may silently suppress a notice. Await
+          // also handles a rejecting future SDK without claiming OS delivery.
+          await ctx.os.notify({ title, body: message, activate: PAGE, onActivate: revealCenter })
+          diagnose({ osCall: 'returned_unconfirmed' })
+        } catch (error) {
+          diagnose({ osCall: 'failed', lastErrorStage: 'os_call', lastErrorName: errorName(error), lastErrorAt: Date.now() })
+        }
       }
     })
     const buttonStyle = { padding: '8px 12px', border: '1px solid var(--ui-border, #777)', borderRadius: 7, cursor: 'pointer' }
@@ -203,6 +260,8 @@ export default {
         state.error ? h('p', { role: 'alert' }, state.error) : null,
         h('button', { style: buttonStyle, onClick: () => controller.poll() }, state.loading ? '正在同步…' : '刷新'),
         state.updatedAt ? h('small', { style: { marginLeft: 12 } }, `最近同步 ${new Date(state.updatedAt).toLocaleTimeString()}`) : null,
+        h('details', { style: { marginTop: 12 } }, h('summary', null, '通知诊断（不含内容）'),
+          h('pre', { style: { whiteSpace: 'pre-wrap', fontSize: 12 } }, diagnosticText(state.diagnostics))),
         !pending.length && !state.loading ? h('p', null, state.available ? '当前没有待处理事项。' : '启用个人协作后，待办会显示在这里。') : null,
         pending.length ? h('h2', null, '待处理') : null,
         ...pending.map(card),
@@ -215,7 +274,7 @@ export default {
       const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
       const count = state.items.filter(controller.isPending).length
       const unread = state.items.filter(controller.isUnread).length
-      return h('button', { title: state.error || '打开协作待办', onClick: () => host.navigate(PAGE), style: { border: 0, background: 'transparent', cursor: 'pointer' } }, `协作 · 未读 ${unread} · 待处理 ${count}${state.error ? ' · 离线' : ''}`)
+      return h('button', { title: `${state.error || '打开协作待办'}\n${diagnosticText(state.diagnostics)}`, onClick: openCenter, style: { border: 0, background: 'transparent', cursor: 'pointer' } }, `协作 · 未读 ${unread} · 待处理 ${count}${state.error ? ' · 离线' : ''}`)
     }
     ctx.registerMany([
       { id: 'page', area: ROUTES_AREA, data: { path: PAGE }, render: () => h(Center) },

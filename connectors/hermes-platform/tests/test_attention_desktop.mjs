@@ -226,3 +226,174 @@ test('explicit recovery click refreshes current state, copies instructions and o
     } finally { for (const dispose of disposers) dispose() }
   }
 })
+
+test('explicit notification and status clicks reveal the center when its unchanged route is behind a session tile', async () => {
+  const native = [], toasts = [], contributions = [], disposers = []
+  const atom = value => ({ get: () => value, listen: () => () => {} })
+  let currentPath = '/agent-comm-attention'
+  let visiblePane = 'session-tile:other'
+  let routeChanges = 0
+  let reveals = 0
+  Object.assign(hostStub, {
+    state: { profile: atom('work'), connectionId: atom('local') },
+    notify: value => toasts.push(value),
+    navigate: path => { if (path !== currentPath) { currentPath = path; routeChanges += 1 } },
+    revealPane: id => { visiblePane = id; reveals += 1 },
+    openSession: () => assert.fail('Opening the center must not open or execute a conversation'),
+    newChat: () => assert.fail('Opening the center must not create a conversation')
+  })
+  plugin.namespace.default.register({
+    rest: async () => page([item('current')], 1),
+    storage: { get: (_key, fallback) => fallback, set: () => {} },
+    os: { notify: value => native.push(value) },
+    registerMany: rows => contributions.push(...rows), onDispose: fn => disposers.push(fn)
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  try {
+    assert.equal(native.length, 1)
+    assert.equal(reveals, 0, 'Producing a notification must never navigate or steal focus')
+    const status = contributions.find(row => row.id === 'count').render()
+    for (const click of [status.props.onClick, toasts[0].action.onClick, native[0].onActivate]) {
+      visiblePane = 'session-tile:other'
+      click()
+      assert.equal(visiblePane, 'workspace')
+    }
+    assert.equal(routeChanges, 0, 'The existing hash must not be rewritten to an artificial intermediate route')
+    assert.equal(reveals, 3)
+    delete hostStub.revealPane // An older SDK must still support ordinary navigation.
+    currentPath = '/other-session'
+    status.props.onClick()
+    assert.equal(currentPath, '/agent-comm-attention')
+  } finally {
+    delete hostStub.revealPane
+    for (const dispose of disposers) dispose()
+  }
+})
+
+function diagnosticRegistration({ records = [item('diagnostic')], locks = browserLocks, native = () => {}, toast = () => {}, save = () => {} } = {}) {
+  const oldNavigator = context.navigator
+  context.navigator = { locks }
+  const contributions = [], disposers = [], stored = new Map()
+  const atom = value => ({ get: () => value, listen: () => () => {} })
+  Object.assign(hostStub, { state: { profile: atom('private-profile'), connectionId: atom('private-connection') },
+    notify: toast, navigate: () => {}, openSession: () => assert.fail('No automatic conversation action'), newChat: () => assert.fail('No automatic conversation action') })
+  plugin.namespace.default.register({
+    rest: async () => page(records, records.length),
+    storage: { get: (key, fallback) => stored.get(key) || fallback, set: (key, value) => { save(); stored.set(key, value) } },
+    os: { notify: native }, registerMany: rows => contributions.push(...rows), onDispose: fn => disposers.push(fn)
+  })
+  return {
+    status: () => contributions.find(row => row.id === 'count').render(),
+    center: () => contributions.find(row => row.id === 'page').render(),
+    dispose: () => { for (const dispose of disposers) dispose(); context.navigator = oldNavigator }
+  }
+}
+
+test('missing Web Locks stays fail-closed and exposes diagnostics without hiding pending state', async () => {
+  let attempts = 0
+  const value = diagnosticRegistration({ locks: null, native: () => attempts++, toast: () => attempts++ })
+  await new Promise(resolve => setImmediate(resolve))
+  try {
+    assert.equal(attempts, 0)
+    assert.match(value.status().props.title, /Web Locks: unavailable/)
+    assert.match(value.status().props.title, /claim: unavailable/)
+    assert.match(value.status().children[0], /未读 1 · 待处理 1/)
+    assert.ok(!value.status().props.title.includes('private-'))
+  } finally { value.dispose() }
+})
+
+test('an empty feed still diagnoses a lock request rejection without generating a notification', async () => {
+  let requests = 0, attempts = 0
+  const value = diagnosticRegistration({ records: [], locks: { request: () => {
+    requests++
+    return Promise.reject(Object.assign(new Error('PRIVATE TOKEN AND LOCK NAME'), { name: 'SecurityError' }))
+  } }, native: () => attempts++, toast: () => attempts++ })
+  await new Promise(resolve => setImmediate(resolve))
+  try {
+    const title = value.status().props.title
+    assert.equal(requests, 1)
+    assert.equal(attempts, 0)
+    assert.match(title, /web_lock \/ SecurityError/)
+    assert.match(title, /claim: failed/)
+    assert.ok(!title.includes('PRIVATE'))
+    assert.ok(!value.status().children[0].includes('离线'), 'A successfully fetched feed must not be labeled offline for a lock error')
+  } finally { value.dispose() }
+})
+
+test('storage errors inside the acquired lock are distinguished and do not call either notification door', async () => {
+  let attempts = 0
+  const value = diagnosticRegistration({ save: () => { throw Object.assign(new Error('PRIVATE STORAGE DATA'), { name: 'QuotaExceededError' }) },
+    native: () => attempts++, toast: () => attempts++ })
+  await new Promise(resolve => setImmediate(resolve))
+  try {
+    assert.equal(attempts, 0)
+    assert.match(value.status().props.title, /claim_storage \/ QuotaExceededError/)
+    assert.match(value.status().children[0], /待处理 1/)
+    assert.ok(!value.status().props.title.includes('PRIVATE'))
+  } finally { value.dispose() }
+})
+
+test('failed claim keeps candidates for retry while source sync remains healthy', async () => {
+  let calls = 0
+  const { value, attempts } = controller(async () => calls ? page([], 1) : page([item('retry')], 1), {
+    claim: async records => { calls++; if (calls === 1) throw new Error('blocked'); return records }
+  })
+  await value.poll()
+  assert.equal(value.getSnapshot().error, '')
+  assert.equal(value.getSnapshot().diagnostics.claimState, 'failed')
+  assert.equal(attempts.length, 0)
+  await value.poll()
+  assert.equal(attempts.length, 1)
+  assert.equal(value.getSnapshot().diagnostics.claimState, 'claimed')
+})
+
+test('OS call returns remain unconfirmed and synchronous or asynchronous failures expose only an error class', async () => {
+  for (const mode of ['void', 'throw', 'reject']) {
+    let attempts = 0, toasts = 0
+    const value = diagnosticRegistration({ toast: () => toasts++, native: () => {
+      attempts++
+      if (mode === 'throw') throw Object.assign(new Error('PRIVATE PAYLOAD'), { name: 'TypeError' })
+      if (mode === 'reject') return Promise.reject(Object.assign(new Error('PRIVATE PAYLOAD'), { name: 'PRIVATE_ERROR_NAME' }))
+    } })
+    await new Promise(resolve => setImmediate(resolve))
+    try {
+      const title = value.status().props.title
+      assert.equal(attempts, 1)
+      assert.equal(toasts, 1)
+      assert.match(title, /尝试 1 次/)
+      if (mode === 'void') assert.match(title, /OS 调用: returned_unconfirmed/)
+      else assert.match(title, mode === 'throw' ? /os_call \/ TypeError/ : /os_call \/ UnknownError/)
+      assert.ok(!title.includes('PRIVATE'))
+      assert.ok(!value.status().children[0].includes('离线'))
+      assert.ok(JSON.stringify(value.center()).includes('通知诊断（不含内容）'))
+    } finally { value.dispose() }
+  }
+})
+
+test('in-app failure records its stage and preserves the existing ordering without calling OS', async () => {
+  let native = 0
+  const value = diagnosticRegistration({ toast: () => { throw new Error('PRIVATE TOAST') }, native: () => native++ })
+  await new Promise(resolve => setImmediate(resolve))
+  try {
+    assert.equal(native, 0)
+    assert.match(value.status().props.title, /in_app \/ Error/)
+    assert.match(value.status().props.title, /尝试 0 次/)
+    assert.ok(!value.status().props.title.includes('PRIVATE'))
+  } finally { value.dispose() }
+})
+
+test('late notification failure from a previous scope cannot populate the next scope diagnostics', async () => {
+  let selected = 'first', reject
+  const { value } = controller(async () => page([item('old-scope')], 1), {
+    scope: () => selected, notify: () => new Promise((_, fail) => { reject = fail })
+  })
+  const polling = value.poll()
+  await new Promise(resolve => setImmediate(resolve))
+  selected = 'second'
+  value.reset()
+  reject(new Error('PRIVATE OLD SCOPE'))
+  await polling
+  assert.equal(value.getSnapshot().diagnostics.lastErrorStage, '')
+  assert.equal(value.getSnapshot().diagnostics.osAttempts, 0)
+  assert.equal(value.getSnapshot().items.length, 0)
+})
