@@ -147,7 +147,20 @@ class RemoteBridge:
         text = message.get("text")
         if not isinstance(text, str) or len(text.encode()) > 50000:
             raise ValueError("Invalid control request size")
-        request = json.loads(text)
+        try:
+            request = json.loads(text)
+        except RecursionError as exc:
+            # A bounded byte count still permits thousands of nested arrays.
+            # Normalize decoder exhaustion to an invalid individual message.
+            raise ValueError("Control request nesting exceeds 32 containers") from exc
+        pending = [(request, 0)]
+        while pending:
+            value, depth = pending.pop()
+            if isinstance(value, (dict, list)):
+                if depth >= 32:
+                    raise ValueError("Control request nesting exceeds 32 containers")
+                children = value.values() if isinstance(value, dict) else value
+                pending.extend((child, depth + 1) for child in children)
         fields = {"protocol", "type", "request_id", "method", "params", "agent_urn", "console_urn", "deadline"}
         if not isinstance(request, dict) or set(request) != fields:
             raise ValueError("Invalid control request fields")

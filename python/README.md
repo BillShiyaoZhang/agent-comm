@@ -147,3 +147,6 @@ URN 语法由 [identity.py](agent_comm_runtime/identity.py) 统一处理，不�
 Hermes 的 `collaboration/policy.py`、`store.py`、`transport.py` 仅保留薄的兼容 import；没有第二份实现或独立状态。其 `collaboration/hermes.py` 只保留原生身份验证、InteractionPort、配置、工具 schema 与技能装配。
 
 `control.request` / `control.response` 由独立显式配对的 remote bridge 消费。普通协作 inbox 对这些类型拒绝落盘和 ACK，防止与主人远程通道抢消费。配对授予的工作台方法不会自动变成某个联系人或远端 agent 的主人权限。远程 RPC 与宿主适配器的具体可用能力应以 agent 返回的 capability descriptor 为准。
+
+远程控制请求最多 50,000 UTF-8 字节，JSON 容器嵌套最多 32 层；超限消息保持未确认，
+由当前消息的错误处理隔离，不会终止整个邮箱消费进程。

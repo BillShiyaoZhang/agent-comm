@@ -82,6 +82,14 @@ collaboration_memory_adapter:
 capabilities 为准。不要同时启动 standalone remote 消费器和同一 helper 的 Hermes
 remote 消费器。
 
+启用远程模式后，连接 helper 时即恢复持久会话队列，无需等待新的 RPC：尚未启动的
+回合重新校验当前配对后继续执行；进程退出时已在运行的回合标记为 `interrupted`，
+避免在无法判断工具副作用的情况下自动重做。
+
+通过配对校验的远程回合附带固定的宿主会话说明，向模型提供已验证的来源和授权边界。
+该说明允许主人或其控制的 agent 通过工作台对话；它不声称每条消息都由主人手工发送，
+不授予原生审批或额外工具权限。普通对端消息及模型传入参数无法设置该可信说明。
+
 ## 安装与升级
 
 要求 Python 3.11+、Hermes Gateway 提供 `connect(is_reconnect=...)`、`MessageEvent.allow_gateway_control` 和 `on_processing_complete` 钩子，以及包含持久 inbox/outbox API 的新版 helper。已用 Hermes `b6b53c69a6ed49cb099cf1bfe76b5e6edd718e5a` 的真实适配器基类进行隔离测试。

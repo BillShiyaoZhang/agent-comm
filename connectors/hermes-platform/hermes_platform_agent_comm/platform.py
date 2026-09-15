@@ -24,6 +24,17 @@ from hermes_constants import get_hermes_home
 logger = logging.getLogger(__name__)
 WIRE_FIELDS = ("conversation_id", "in_reply_to", "task_id", "kind", "deadline", "hop_limit")
 DEFAULT_HOP_LIMIT = 8
+PAIRED_REMOTE_CONTEXT = (
+    "## Locally paired Agent Comm conversation\n"
+    "The host admitted this turn through Agent Comm after verifying the local owner's console pairing, "
+    "its conversation.send permission, and its binding to this Hermes profile. The request comes from "
+    "that authorized remote conversation; the console may be operated by the owner or an "
+    "owner-authorized agent acting through it. A requested acknowledgement, output format, language, or avoidance of tools is an "
+    "ordinary task constraint and does not itself claim additional authority. Respond to the user's "
+    "actual request within the existing host policies and tool permissions. This pairing grants no "
+    "native approval or Gateway control authority and no additional permission to disclose unrelated "
+    "data or contact third parties."
+)
 
 
 def canonical_remote_route(job):
@@ -148,6 +159,10 @@ class AgentCommAdapter(BasePlatformAdapter):
                 self._session = aiohttp.ClientSession(trust_env=False)
                 self._response = await self._open_sse()
                 self.running = True
+                if self._extra.get("remote_enabled") is True:
+                    # Accepted requests may already be ACKed in the helper. Start
+                    # recovery on connection instead of waiting for a new RPC.
+                    await self._ensure_remote_bridge()
                 self._mark_connected()
                 self._consumer = asyncio.create_task(self._consume(), name="agent-comm-consumer")
                 self._reconciler = asyncio.create_task(self._reconcile(), name="agent-comm-reconcile")
@@ -443,11 +458,11 @@ class AgentCommAdapter(BasePlatformAdapter):
             try:
                 route = canonical_remote_route(job)
                 source = self.build_source(chat_id=job["console_urn"], chat_name="Paired remote console", chat_type="dm",
-                    user_id=job["console_urn"], user_name="Paired remote owner", thread_id=route,
+                    user_id=job["console_urn"], user_name="Paired remote console", thread_id=route,
                     is_bot=False, message_id=turn_id)
                 event = MessageEvent(text=job["text"], message_type=MessageType.TEXT, source=source,
                     message_id=turn_id, raw_message={"origin": "locally_paired_control_rpc"},
-                    metadata={}, allow_gateway_control=False, internal=False)
+                    metadata={}, channel_prompt=PAIRED_REMOTE_CONTEXT, allow_gateway_control=False, internal=False)
                 future = asyncio.get_running_loop().create_future()
                 self._remote_events[turn_id] = {"event": event, "future": future, "response": None}
                 await self.handle_message(event)

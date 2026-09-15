@@ -159,6 +159,19 @@ class TestRemote(unittest.TestCase):
             self.bridge.process(body, self.agent)
         self.assertEqual(self.network.events, [])
 
+    def test_excessive_json_nesting_is_rejected_without_stopping_mailbox_processing(self):
+        for depth in (40, 1200):
+            with self.subTest(depth=depth):
+                malformed = {**request(), "sender_urn": CONSOLE}
+                malformed["text"] = malformed["text"].replace('"params": {}',
+                    '"params": {"nested": ' + '[' * depth + '0' + ']' * depth + '}')
+                self.assertLess(len(malformed["text"].encode()), 50000)
+                with self.assertRaisesRegex(ValueError, "nesting"):
+                    self.bridge.process(malformed, self.agent)
+        self.assertEqual(self.network.events, [])
+        _, response = self.submit(request("after-malformed"))
+        self.assertIn("result", self.result(response))
+
     def test_expired_request_does_not_execute_and_can_be_consumed(self):
         body = request(method="conversation.send", params={"text": "do work"})
         body["sender_urn"] = CONSOLE
