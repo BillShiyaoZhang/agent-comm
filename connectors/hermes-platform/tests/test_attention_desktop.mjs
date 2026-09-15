@@ -11,7 +11,8 @@ const browserLocks = { request(key, callback) {
   return next
 } }
 const hostStub = {}
-const context = createContext({ console, setInterval, clearInterval, Date, Map, Set, JSON, navigator: { locks: browserLocks } })
+const context = createContext({ console, setInterval, clearInterval, Date, Map, Set, JSON, navigator: { locks: browserLocks },
+  document: { hidden: true, hasFocus: () => false }, isSecureContext: true })
 const sdk = new SyntheticModule(['host', 'ROUTES_AREA', 'SIDEBAR_NAV_AREA'], function () {
   this.setExport('host', hostStub)
   this.setExport('ROUTES_AREA', 'routes')
@@ -185,10 +186,10 @@ test('two actual companion registrations share one claim and notification is onl
   } finally { for (const dispose of disposers) dispose() }
 })
 
-test('explicit recovery click refreshes current state, copies instructions and opens the same profile only', async () => {
+test('the center shows full owner context without technical recovery instructions or automatic processing', async () => {
   const findButton = tree => {
     if (!tree || typeof tree !== 'object') return null
-    if (tree.type === 'button' && tree.children.includes('复制指令并打开原生对话')) return tree
+    if (tree.type === 'button' && tree.children.includes('在 Hermes 中处理')) return tree
     for (const child of tree.children || []) { const found = findButton(child); if (found) return found }
     return null
   }
@@ -200,8 +201,14 @@ test('explicit recovery click refreshes current state, copies instructions and o
       notify: () => {}, navigate: () => {},
       openSession: (...args) => calls.push(['openSession', ...args]), newChat: (...args) => calls.push(['newChat', ...args]) })
     let reads = 0
-    const record = { ...item('recover'), resume: { stored_session_id: 'native-original', instruction: '读取 approval_id 并在原生问题卡确认' } }
-    const ctx = { rest: async () => { reads += 1; return page([reads > 1 && stale ? { ...record, state: 'resolved', revision: 2 } : record], reads > 1 && stale ? 2 : 1) },
+    const record = { ...item('recover'), details: { context_summary: '讨论九月排期', question: '是否同意这一次对外承诺？',
+      task: { scope: { purpose: '讨论九月排期', participant_ids: ['张三'], capabilities: ['propose_meeting'], expires_at: '2099-09-15T00:00:00Z' }, worker: {
+        status: 'pending', policy: { allow_propose: true, allow_accept: false, max_runs: 5, max_sends: 2, interval_seconds: 30, expires_at: '2099-09-15T00:00:00Z' }, runs_used: 0, sends_used: 0 } },
+      initiator: { label: '张三的 Agent' }, risks: ['只授权一次'], can_resume: !stale },
+      resume: { session_state: 'available', stored_session_id: 'native-original', instruction: 'PRIVATE TECHNICAL INSTRUCTION' } }
+    const ctx = { rest: async path => { reads += 1; return path.includes('/detail')
+      ? { owner_key: 'owner-a', available: true, item: { ...record, details: { ...record.details, context_summary: '展开时读取的最新背景' } } }
+      : page([record], 1) },
       storage: { get: (k, fallback) => values.get(k) || fallback, set: (k, v) => values.set(k, v) },
       os: { notify: () => {}, writeClipboard: text => calls.push(['clipboard', text]) },
       registerMany: rows => registrations.push(rows), onDispose: fn => disposers.push(fn) }
@@ -211,18 +218,30 @@ test('explicit recovery click refreshes current state, copies instructions and o
       assert.equal(calls.length, 0)
       const tree = registrations[0].find(row => row.id === 'page').render()
       const button = findButton(tree)
-      assert.ok(button)
-      button.props.onClick()
+      assert.equal(Boolean(button), !stale)
+      assert.match(JSON.stringify(tree), /是否同意这一次对外承诺/)
+      assert.match(JSON.stringify(tree), /张三的 Agent/)
+      assert.match(JSON.stringify(tree), /发送次数：0 \/ 2/)
+      assert.match(JSON.stringify(tree), /等待你的授权/)
+      assert.match(JSON.stringify(tree), /2099/)
+      assert.match(JSON.stringify(tree), /提出会议方案/)
+      assert.ok(!JSON.stringify(tree).includes('未设定'))
+      assert.ok(!JSON.stringify(tree).includes('PRIVATE TECHNICAL'))
+      assert.ok(!JSON.stringify(tree).includes('复制指令'))
+      assert.equal(reads, 1)
+      assert.equal(calls.length, 0)
+      const findDetail = node => {
+        if (!node || typeof node !== 'object') return null
+        if (node.type === 'details' && node.children.some(child => child?.type === 'summary' && child.children.includes('查看完整背景与授权范围'))) return node
+        for (const child of node.children || []) { const found = findDetail(child); if (found) return found }
+        return null
+      }
+      const detail = findDetail(tree), target = { open: true }
+      detail.props.onToggle({ target, currentTarget: target })
       await new Promise(resolve => setImmediate(resolve))
       assert.equal(reads, 2)
-      if (stale) assert.equal(calls.length, 0)
-      else {
-        assert.equal(calls.length, 2)
-        assert.equal(calls[0][0], 'clipboard')
-        assert.equal(calls[1][0], 'openSession')
-        assert.equal(calls[1][1], 'native-original')
-        assert.equal(calls[1][2].profile, 'work')
-      }
+      assert.match(JSON.stringify(registrations[0].find(row => row.id === 'page').render()), /展开时读取的最新背景/)
+      assert.equal(calls.length, 0, 'Expanding details never opens or submits a model conversation')
     } finally { for (const dispose of disposers) dispose() }
   }
 })
@@ -370,14 +389,14 @@ test('OS call returns remain unconfirmed and synchronous or asynchronous failure
   }
 })
 
-test('in-app failure records its stage and preserves the existing ordering without calling OS', async () => {
+test('in-app failure does not consume the independent background OS attempt', async () => {
   let native = 0
   const value = diagnosticRegistration({ toast: () => { throw new Error('PRIVATE TOAST') }, native: () => native++ })
   await new Promise(resolve => setImmediate(resolve))
   try {
-    assert.equal(native, 0)
+    assert.equal(native, 1)
     assert.match(value.status().props.title, /in_app \/ Error/)
-    assert.match(value.status().props.title, /尝试 0 次/)
+    assert.match(value.status().props.title, /尝试 1 次/)
     assert.ok(!value.status().props.title.includes('PRIVATE'))
   } finally { value.dispose() }
 })
@@ -396,4 +415,185 @@ test('late notification failure from a previous scope cannot populate the next s
   assert.equal(value.getSnapshot().diagnostics.lastErrorStage, '')
   assert.equal(value.getSnapshot().diagnostics.osAttempts, 0)
   assert.equal(value.getSnapshot().items.length, 0)
+})
+
+test('foreground in-app delivery leaves the OS attempt available until the next background poll', async () => {
+  let foreground = true, reads = 0
+  const native = [], stored = new Map()
+  const { value, attempts } = controller(async () => ++reads === 1 ? page([item('away')], 1) : page([], 1), {
+    canNotifyOS: () => !foreground, notifyOS: (...args) => native.push(args),
+    persist: (key, data) => stored.set(key, data), readPersist: key => stored.get(key)
+  })
+  await value.poll()
+  assert.equal(attempts.length, 1)
+  assert.equal(native.length, 0)
+  assert.equal(value.getSnapshot().diagnostics.osCall, 'deferred_foreground')
+  assert.equal([...stored.keys()].some(key => key.startsWith('os:')), false)
+  foreground = false
+  await value.poll()
+  await value.poll()
+  assert.equal(attempts.length, 1)
+  assert.equal(native.length, 1)
+  assert.equal(value.isPending(item('away')), true)
+})
+
+test('reading or finishing a foreground item suppresses its deferred OS attempt', async () => {
+  for (const finish of ['read', 'resolved', 'expired']) {
+    let foreground = true, reads = 0, now = 100000, native = 0
+    const record = { ...item('finish'), expires_at: 101 }
+    const { value } = controller(async () => {
+      reads++
+      return reads === 1 ? page([record], 1) : finish === 'resolved' ? page([item('finish', 2, 'resolved')], 2) : page([], 1)
+    }, { clock: () => now, canNotifyOS: () => !foreground, notifyOS: () => native++ })
+    await value.poll()
+    if (finish === 'read') value.markRead(record)
+    if (finish === 'expired') now = 102000
+    foreground = false
+    await value.poll()
+    assert.equal(native, 0)
+  }
+})
+
+test('the actual companion checks foreground again inside the OS claim and respects SDK suppression', async () => {
+  const previousDocument = context.document
+  let foreground = true, toasts = 0, native = 0
+  context.document = { get hidden() { return !foreground }, hasFocus: () => foreground }
+  const value = diagnosticRegistration({ toast: () => toasts++, native: () => { native++ /* SDK may return void without delivery. */ } })
+  await new Promise(resolve => setImmediate(resolve))
+  try {
+    assert.equal(toasts, 1)
+    assert.equal(native, 0)
+    assert.match(value.status().props.title, /OS 调用: deferred_foreground/)
+    foreground = false
+    const refresh = value.center().children.find(child => child?.type === 'button')
+    await refresh.props.onClick()
+    assert.equal(native, 1)
+    assert.match(value.status().props.title, /returned_unconfirmed/)
+    await refresh.props.onClick()
+    assert.equal(native, 1)
+  } finally { value.dispose(); context.document = previousDocument }
+})
+
+test('restart retains a pending deferred OS opportunity and never replays old ordinary history', async () => {
+  const stored = new Map(), native = []
+  const ordinary = { ...item('historical'), kind: 'peer_message_received' }
+  const records = [ordinary, item('pending', 2)]
+  const options = { persist: (key, data) => stored.set(key, data), readPersist: key => stored.get(key), notifyOS: (...args) => native.push(args) }
+  const foreground = controller(async () => page(records, 2), { ...options, canNotifyOS: () => false })
+  await foreground.value.poll()
+  foreground.value.dispose()
+  const background = controller(async () => page(records, 2), options)
+  await background.value.poll()
+  assert.equal(background.attempts.length, 0)
+  assert.equal(native.length, 1)
+  assert.equal(native[0][0], 1)
+  assert.equal(native[0][1].attention_id, 'pending')
+})
+
+const detailResult = (record, details = {}, owner = 'owner-a') => ({ owner_key: owner, available: true,
+  item: { ...record, details: { context_summary: '当前背景', can_resume: record.state === 'open', ...details } } })
+
+test('explicit detail refresh updates same-revision worker usage without notifying or consuming the feed cursor', async () => {
+  const record = { ...item('budget'), details: { task: { worker: { runs_used: 0 } } } }, paths = []
+  const { value, attempts } = controller(async path => {
+    paths.push(path)
+    if (path.includes('/detail')) return detailResult(record, { task: { worker: { runs_used: 3, sends_used: 1, status: 'active' } } })
+    return page([record], 1)
+  })
+  await value.poll()
+  const before = attempts.length
+  await value.loadDetail(record)
+  assert.equal(paths[1], '/attention/budget/detail')
+  assert.equal(value.getSnapshot().items[0].details.task.worker.runs_used, 3)
+  assert.equal(value.getSnapshot().detailStates.budget.loading, false)
+  assert.equal(value.getSnapshot().detailStates.budget.updatedAt, 100000)
+  assert.equal(attempts.length, before)
+  await value.poll()
+  assert.equal(paths[2], '/attention?after=1&limit=100')
+  assert.equal(value.getSnapshot().items[0].details.task.worker.runs_used, 3)
+  assert.equal(attempts.length, before)
+})
+
+test('detail requests deduplicate rapid expansion and discarded profile responses never reveal old details', async () => {
+  let selected = 'a', finish
+  const record = item('scope')
+  const { value } = controller(async path => path.includes('/detail') ? new Promise(resolve => { finish = resolve }) : page([record], 1), { scope: () => selected })
+  await value.poll()
+  const request = value.loadDetail(record)
+  assert.equal(value.loadDetail(record), request)
+  await new Promise(resolve => setImmediate(resolve))
+  selected = 'b'; value.reset()
+  finish(detailResult(record, { context_summary: 'PRIVATE OLD PROFILE' }))
+  await request
+  assert.equal(value.getSnapshot().items.length, 0)
+  assert.equal(Object.keys(value.getSnapshot().detailStates).length, 0)
+  assert.ok(!JSON.stringify(value.getSnapshot()).includes('PRIVATE'))
+})
+
+test('cross-owner detail is rejected and transport errors preserve prior context with an explicit retry', async () => {
+  for (const firstFailure of ['owner', 'network']) {
+    let requests = 0
+    const record = { ...item('retry-detail'), details: { context_summary: '上次同步背景' } }
+    const { value } = controller(async path => {
+      if (!path.includes('/detail')) return page([record], 1)
+      requests++
+      if (requests === 1) {
+        if (firstFailure === 'network') throw new Error('PRIVATE ERROR BODY')
+        return detailResult(record, { context_summary: 'PRIVATE OTHER OWNER' }, 'owner-other')
+      }
+      return detailResult(record, { context_summary: '最新可确认背景' })
+    })
+    await value.poll(); await value.loadDetail(record)
+    assert.equal(value.getSnapshot().items[0].details.context_summary, '上次同步背景')
+    assert.match(value.getSnapshot().detailStates['retry-detail'].error, /上次同步/)
+    assert.ok(!JSON.stringify(value.getSnapshot()).includes('PRIVATE'))
+    await value.loadDetail(record)
+    assert.equal(value.getSnapshot().items[0].details.context_summary, '最新可确认背景')
+    assert.equal(value.getSnapshot().detailStates['retry-detail'].error, '')
+  }
+})
+
+test('latest expired detail closes pending immediately and a concurrent newer feed cannot be rolled back', async () => {
+  const record = item('expiry')
+  let latest = detailResult(item('expiry', 2, 'expired'))
+  const { value, attempts } = controller(async path => path.includes('/detail') ? latest : page([record], 1))
+  await value.poll(); await value.loadDetail(record)
+  assert.equal(value.getSnapshot().items[0].state, 'expired')
+  assert.equal(value.getSnapshot().items.filter(value.isPending).length, 0)
+  assert.equal(attempts.length, 1)
+  latest = detailResult(record, { context_summary: 'OLDER RESPONSE' })
+  await value.loadDetail(record)
+  assert.equal(value.getSnapshot().items[0].revision, 2)
+  assert.equal(value.getSnapshot().items[0].state, 'expired')
+})
+
+test('detail completion after collaboration disable cannot repopulate the center', async () => {
+  const record = item('disabled')
+  let finish, reads = 0
+  const { value } = controller(async path => {
+    if (path.includes('/detail')) return new Promise(resolve => { finish = resolve })
+    return ++reads === 1 ? page([record], 1) : page([], 1, { available: false })
+  })
+  await value.poll(); const request = value.loadDetail(record)
+  await new Promise(resolve => setImmediate(resolve))
+  await value.poll(); finish(detailResult(record))
+  await request
+  assert.equal(value.getSnapshot().available, false)
+  assert.equal(value.getSnapshot().items.length, 0)
+  assert.equal(Object.keys(value.getSnapshot().detailStates).length, 0)
+})
+
+test('a late detail response cannot replace a newer revision already received by polling', async () => {
+  const record = item('late-detail')
+  let finish, reads = 0
+  const { value } = controller(async path => {
+    if (path.includes('/detail')) return new Promise(resolve => { finish = resolve })
+    return ++reads === 1 ? page([record], 1) : page([{ ...item('late-detail', 2, 'resolved'), details: { context_summary: '已核实完成' } }], 2)
+  })
+  await value.poll(); const request = value.loadDetail(record)
+  await new Promise(resolve => setImmediate(resolve))
+  await value.poll(); finish(detailResult(record, { context_summary: '旧问题仍待回答' }))
+  await request
+  assert.equal(value.getSnapshot().items[0].state, 'resolved')
+  assert.equal(value.getSnapshot().items[0].details.context_summary, '已核实完成')
 })

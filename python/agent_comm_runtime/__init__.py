@@ -1,6 +1,6 @@
 """Portable local collaboration runtime. No host SDK is imported here."""
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 API_VERSION = "1.0"
 
 from .store import Store

@@ -21,6 +21,7 @@ from .policy import (compile_message, evaluate, render_action, render_scope,
 from .identity import validate_urn
 from .attention import AttentionMixin
 from .collaboration_v2 import CollaborationV2Mixin
+from .worker import WorkerMixin
 
 
 def canonical(value):
@@ -44,7 +45,7 @@ def instant(value):
     return parsed.timestamp()
 
 
-class Store(AttentionMixin, CollaborationV2Mixin):
+class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
     def __init__(self, path, *, clock=time.time, local_urn=None):
         self.clock = clock
         self.local_urn = local_urn
@@ -152,7 +153,7 @@ class Store(AttentionMixin, CollaborationV2Mixin):
         return {key: approval[key] for key in ("approval_id", "kind", "subject_id", "question", "expires_at", "status")}
 
     def _approval_task_id(self, approval):
-        if approval["kind"] == "task":
+        if approval["kind"] in {"task", "worker_policy"}:
             return approval["subject_id"]
         if approval["kind"] in {"operation", "collaboration_v2"}:
             kind = "v2_operation" if approval["kind"] == "collaboration_v2" else "operation"
@@ -433,6 +434,8 @@ class Store(AttentionMixin, CollaborationV2Mixin):
                 deadline = min(deadline, instant(self._get("task", op["task_id"])["scope"]["expires_at"]))
             elif approval["kind"] == "collaboration_v2":
                 deadline = min(deadline, self._v2_approval_deadline(approval))
+            elif approval["kind"] == "worker_policy":
+                deadline = min(deadline, instant(self._get("worker_policy", approval["subject_id"])["policy"]["expires_at"]))
             token = secrets.token_urlsafe(32)
             approval.update(status="presenting", owner_session=owner_session, expires_at=deadline,
                             token_hash=digest(token), lease_until=min(deadline, self.clock() + 360))
@@ -440,6 +443,8 @@ class Store(AttentionMixin, CollaborationV2Mixin):
             return {"token": token, "question": approval["question"], "expires_at": approval["expires_at"]}
 
     def _approval_current(self, approval):
+        if approval["kind"] == "worker_policy":
+            return self._worker_approval_current(approval)
         if approval["kind"] == "collaboration_v2":
             return self._v2_approval_current(approval)
         if approval["kind"] == "contact":
@@ -479,7 +484,11 @@ class Store(AttentionMixin, CollaborationV2Mixin):
                     result = {"decision": "allow", "status": "approved_once"}
                 elif no:
                     approval["status"] = "denied"
-                    if approval["kind"] == "collaboration_v2":
+                    if approval["kind"] == "worker_policy":
+                        policy = self._get("worker_policy", approval["subject_id"])
+                        policy["status"] = "revoked"
+                        self._put("worker_policy", policy["task_id"], policy)
+                    elif approval["kind"] == "collaboration_v2":
                         self._v2_deny_approval(approval)
                     elif approval["kind"] == "operation":
                         operation = self._get("operation", approval["subject_id"])
@@ -496,7 +505,9 @@ class Store(AttentionMixin, CollaborationV2Mixin):
             return {"approval_id": approval_id, **result}
 
     def _apply_approval(self, approval):
-        if approval["kind"] == "collaboration_v2":
+        if approval["kind"] == "worker_policy":
+            self._worker_apply_approval(approval)
+        elif approval["kind"] == "collaboration_v2":
             self._v2_apply_approval(approval)
         elif approval["kind"] == "contact":
             self._put("contact", approval["subject_id"], approval["payload"])
@@ -743,7 +754,7 @@ class Store(AttentionMixin, CollaborationV2Mixin):
             approvals = [self._public_approval(a) for a in self._all("approval") if self._belongs(a, owner_session)
                          and a["status"] in {"pending", "presenting", "expired"} and self._approval_current(a)
                          and (task_id is None or self._approval_task_id(a) == task_id)]
-            return {"tasks": tasks, "operations": operations, "pending_confirmations": approvals,
+            return {"tasks": [{**t, "worker": self._worker_view(t)} for t in tasks], "operations": operations, "pending_confirmations": approvals,
                     "contacts": [c for c in self._all("contact") if self._belongs(c, owner_session)],
                     "next_actions": ["confirm_specific_pending_request" if approvals else "prepare_scoped_action",
                                      "read_inbox", "inspect_delivery_status", "revoke_task"],

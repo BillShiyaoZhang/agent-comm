@@ -2,7 +2,7 @@
 
 本插件连接本机 `agent-comm-helper`，由 helper 负责密钥、加密和当前 HTTPS MQ 可靠传输。`platform_url` 必须是本机 loopback HTTP 地址（默认 `http://127.0.0.1:45042`），不可填写云端 platform URL。
 
-## 个人协作模式（1.4.0，可选）
+## 个人协作模式（1.5.0，可选）
 
 本版本通过独立 `agent-comm-runtime` 包提供本地协作内核，
 `agent_comm_collaboration` 是它的 Hermes 原生适配工具，优先用于 Hermes
@@ -237,6 +237,33 @@ helper 持久 inbox 是未消费消息的来源。插件同时通过 SSE 和 `GE
 达到 hop/deadline 限制的自动回复不会向 helper 投递；对 Hermes 返回本地成功完成、`message_id=None`、`raw_response={status: suppressed, reason: hop_limit|deadline}`，避免 Hermes 将同一已执行任务反复重做。显式新发送过期消息仍返回失败。
 
 ## 验证
+
+### 待办详情与原生处理会话
+
+可选 companion 1.1.0 的「查看并处理」在当前 profile 下刷新事项、恢复关联会话或创建新的原生处理会话，然后只提交核对上下文和展示问题的请求。点击不等于同意，不调用 `dispatch`。联系人审批、远端工作台发起的事项和无 task 的来信都有独立映射；同一 task 的后续事项共用处理会话。只有宿主明确证实会话不存在才允许建立替代映射；网络错误不会创建替代会话。
+
+所有 companion API 都经过 Hermes dashboard token 和 profile 解析，客户端不能提供 owner。`Store.attention` / Web 远端 `attention.list` 仍只返回固定安全摘要；仅本机已鉴权详情含范围、原生问题和对端原文。系统通知不使用这些详情字段。
+
+| API（相对 `/api/plugins/agent-comm-attention`） | 作用 |
+| --- | --- |
+| `GET /attention` | 增量安全事项及当前 owner 可读详情、原生会话导航信息 |
+| `GET /attention/{attention_id}/detail` | 展开时刷新当前详情与 worker 预算，不改变通知水位 |
+| `POST /attention/prepare-resume` | `{attention_id,revision}`；核对仍开放，产生幂等处理请求 |
+| `POST /attention/bind-session` | `{resume_id,stored_session_id}`；验证真实 profile 原生会话，返回持久绑定胜出者 |
+| `POST /attention/claim-submit` | `{resume_id,stored_session_id}`；只能一次占用恢复请求提交，返回 `claim_token` |
+| `POST /attention/finish-submit` | `{resume_id,claim_token,outcome}`；记录 `submitted` 或 `uncertain`，没有授权含义 |
+
+前端使用 Hermes 受支持的 `session.create`、`session.title`、`host.openSession` 和 `prompt.submit`。恢复请求提交超时或崩溃后只重开已绑定会话，不自动重发背景消息。源 revision 改变或到期时 prepare/claim 返回 409，要求先刷新。处理请求账本与原生确认 lease 分开保存；后者仍必须由当前真实 `native_context` 发起和消费。
+
+### 有限后台会议程序
+
+runtime 0.1.2 增加 `prepare_worker_policy`、`pause_worker`、`revoke_worker`。一项已生效 task 和一个双方已加入的 collaboration 可以先准备具体 policy，再由本人通过现有 `confirm` 原生问题启用。启用后 Gateway 每轮 reconcile 最多运行一个 task step；无新消息时也能推进。无需唤醒私人模型。
+
+policy 明确绑定 `collaboration_id`，并包含 `allow_propose`、`allow_accept`、`proposal`、`max_runs`（1–100）、`max_sends`（1–32）、`interval_seconds`（15–3600）、`expires_at`。提议仅能发送原生卡展示的固定第一版方案；自动接受只处理符合原 task 范围的当前结构化方案。`allow_accept=true` 的含义会写进原生确认卡，不能从先前排会授权默默推导。预算涵盖固定协议回执，且仍受已有维护许可限制。
+
+每次发送先持久保留一个运行和发送预算，再检查 policy revision、task revision、有效期与暂停/撤销状态；实际投递前再次检查。超范围会产生具体原生审批待办并暂停；未知发送结果会暂停且不自动重发。恢复或修改策略需要新的原生确认，不能仅改配置复活旧许可。程序不自动邀请或加入新协作，不发任意文本，不访问记忆、模型或外部工具，不创建日历。
+
+`state.tasks[].worker` 和 owner 详情显示策略、使用量、状态及等待原因。单独暂停 worker 不改变业务委托；撤销 task 会阻止后续业务发送。
 
 在安装了 Hermes 与本插件依赖的 Python 环境运行：
 

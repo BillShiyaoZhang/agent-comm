@@ -283,6 +283,14 @@ class AgentCommAdapter(BasePlatformAdapter):
                 raise
             except Exception as exc:
                 logger.warning("Could not reconcile agent-comm inbox: %s", exc)
+            if self.running:
+                try:
+                    from .collaboration.worker import tick_profile_worker
+                    await asyncio.to_thread(tick_profile_worker, self._extra)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.warning("Finite collaboration worker unavailable; no native model was started")
             await asyncio.sleep(float(self._extra.get("reconcile_interval", 5)))
 
     async def _incoming(self, message, event_id=None):

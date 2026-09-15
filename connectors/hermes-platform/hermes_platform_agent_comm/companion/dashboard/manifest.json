@@ -2,7 +2,7 @@
   "name": "agent-comm-attention",
   "label": "协作待办",
   "description": "持久待办和原生会话恢复；不在通知中批准动作",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "icon": "Bell",
   "tab": {"path": "/agent-comm-attention", "hidden": true},
   "entry": "index.js",

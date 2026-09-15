@@ -1,4 +1,4 @@
 name: agent-comm-attention
 label: "Agent Comm 待办"
-version: 1.0.0
-description: "Read-only collaboration attention and navigation to native Hermes decisions"
+version: 1.1.0
+description: "Collaboration attention, scoped handling sessions and native Hermes decisions"

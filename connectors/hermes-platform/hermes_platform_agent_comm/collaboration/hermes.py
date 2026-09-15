@@ -230,6 +230,8 @@ TOOL_SCHEMA = {
         "collaborations lists v2 agreements. prepare_collaboration prepares a typed v2 event with task_id, "
         "collaboration_id, operation_id, kind and payload; it uses the same confirm/dispatch pipeline. "
         "revoke_collaboration_maintenance stops fixed protocol maintenance sends for a collaboration_id. "
+        "prepare_worker_policy stages an exact finite meeting policy for a joined collaboration; confirm is required to enable it. "
+        "pause_worker/revoke_worker stop background progress for a task_id. Background code has no private model or confirmation access. "
         "export_contact returns a short friend invitation with URN, public platform URL and introduction link; "
         "contact_id defaults to self. A confirmed friend's contact_id requires its explicit platform_url. "
         "For self, omit platform_url only when public_platform_url is configured. Exporting does not send or add a contact. "
@@ -249,6 +251,13 @@ TOOL_SCHEMA = {
             **{key: _STRING for key in ("task_id", "collaboration_id", "resource_id", "title", "text", "name", "contact_id", "urn", "approval_id", "operation_id", "message_id", "query", "reference", "platform_url")},
             "kind": {"type": "string", "enum": ["invite", "join", "proposal", "change_request", "accept", "agreement", "agreement_ack", "withdraw", "cancel_request", "cancel_ack", "sync_request", "sync_response", "receipt"]},
             "payload": {"type": "object", "description": "invite={peer_id}; join={message_id}; proposal/change_request=meeting payload; receipt={event_id}; other kinds={}. Strict runtime validation applies."},
+            "policy": {"type": "object", "additionalProperties": False,
+                "required": ["collaboration_id", "allow_propose", "allow_accept", "proposal", "max_runs", "max_sends", "interval_seconds", "expires_at"],
+                "properties": {"collaboration_id": _STRING, "allow_propose": {"type": "boolean"}, "allow_accept": {"type": "boolean"},
+                    "proposal": {"type": ["object", "null"], "description": "Exact first meeting payload when allow_propose=true; otherwise null."},
+                    "max_runs": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "max_sends": {"type": "integer", "minimum": 1, "maximum": 32},
+                    "interval_seconds": {"type": "integer", "minimum": 15, "maximum": 3600}, "expires_at": _STRING}},
             "after": {"type": "integer", "minimum": 0},
             "aliases": _IDS,
             "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "attention: 1–100; memory_search: 1–20"},

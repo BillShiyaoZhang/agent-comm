@@ -36,12 +36,19 @@ class AttentionTests(unittest.TestCase):
             def state(self, owner, task_id):
                 calls.append(("state", owner, task_id))
                 return {"tasks": [{"owner_session": "native-owner|stored-session"}]}
+            def attention_detail(self, owner, attention_id):
+                calls.append(("detail", owner, attention_id))
+                return {"item": {"attention_id": "attention-1", "task_id": "meeting", "kind": "approval",
+                                "revision": 1, "state": "open", "target": {"kind": "approval", "id": "approval-1"},
+                                "details": {"context_summary": "Owner-only context", "can_resume": True}},
+                        "origin_session_id": "stored-session", "bound_session_id": None}
             def close(self):
                 calls.append(("close",))
         self.store_type = FakeStore
         for patcher in (patch.object(attention, "read_settings", return_value={"collaboration_enabled": True, "urn": "urn:agent-comm:agent:local"}),
                         patch.object(attention, "state_path", return_value=self.path),
                         patch.object(attention, "profile_principal", return_value="native-owner"),
+                        patch.object(attention, "_resolve_native_session", side_effect=lambda candidate: candidate),
                         patch.object(attention, "Store", FakeStore)):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -56,12 +63,16 @@ class AttentionTests(unittest.TestCase):
         self.assertIn('"target": {"kind": "approval", "id": "approval-1"}', item["resume"]["instruction"])
         self.assertIn(("local_urn", "urn:agent-comm:agent:local"), self.calls)
         self.assertNotIn("token", json.dumps(result))
-        self.assertEqual([c[0] for c in self.calls], ["open", "local_urn", "attention", "state", "close"])
+        self.assertEqual([c[0] for c in self.calls], ["open", "local_urn", "attention", "detail", "close"])
 
-    def test_foreign_or_remote_session_is_not_a_native_navigation_target(self):
-        for session in ("other-owner|other", "native-owner|remote:console", "native-owner|attention", "native-owner|../bad"):
-            with self.subTest(session=session), patch.object(self.store_type, "state", return_value={"tasks": [{"owner_session": session}]}):
-                self.assertIsNone(attention.read_attention()["items"][0]["resume"]["stored_session_id"])
+    def test_missing_session_is_not_a_native_navigation_target(self):
+        with patch.object(attention, "_resolve_native_session", return_value=None):
+            result = attention.read_attention()["items"][0]["resume"]
+            self.assertIsNone(result["stored_session_id"])
+            self.assertEqual(result["session_state"], "missing")
+        with patch.object(attention, "_resolve_native_session", side_effect=TimeoutError("host unavailable")):
+            with self.assertRaises(TimeoutError):
+                attention.read_attention()
 
     def test_polling_disabled_or_new_profile_does_not_create_db(self):
         with patch.object(attention, "read_settings", return_value={}):

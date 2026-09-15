@@ -419,9 +419,11 @@ class CollaborationV2Mixin:
                   "payload": op["payload"], "payload_digest": digest(op["payload"])}
         return validate_event(packet)
 
-    def dispatch_collaboration(self, operation_id, owner_session, transport):
+    def dispatch_collaboration(self, operation_id, owner_session, transport, *, worker_context=None):
         self._owner(owner_session)
         with self._transaction():
+            if worker_context is not None:
+                self._check_worker_context(worker_context)
             op = self._get("v2_operation", operation_id)
             if not self._belongs(op, owner_session):
                 raise ValueError("Operation is not available to this owner")
@@ -429,6 +431,15 @@ class CollaborationV2Mixin:
                 return self._v2_operation_view(op)
             if op["status"] not in {"ready", "sending"} or not self._v2_operation_current(op):
                 return {"decision": "deny", "reasons": ["not_authorized_or_superseded"]}
+            if worker_context is not None:
+                worker, _ = self._check_worker_context(worker_context)
+                if (op["task_id"] != worker_context.task_id or op["owner_id"] != worker_context.principal_id
+                        or op["collaboration_id"] != worker["policy"]["collaboration_id"]
+                        or op["kind"] not in {"proposal", "accept"} | MAINTENANCE or op["status"] != "ready"
+                        or (op["kind"] == "proposal" and (not worker["policy"]["allow_propose"] or op["action"]["payload"] != worker["policy"]["proposal"]))
+                        or (op["kind"] == "accept" and not worker["policy"]["allow_accept"])):
+                    raise ValueError("Worker may only send one fresh permitted structured operation")
+                self._reserve_worker_send(worker_context, operation_id)
             c = self._get("v2_collaboration", op["collaboration_id"])
             if op["status"] == "ready":
                 task = self._task(op["task_id"], owner_session)
@@ -467,6 +478,8 @@ class CollaborationV2Mixin:
                 self._put("v2_operation", operation_id, op)
         # Reserve and persist exact wire bytes before any external side effect.
         with self._transaction():
+            if worker_context is not None:
+                self._check_worker_context(worker_context)
             op = self._get("v2_operation", operation_id)
             if not self._v2_operation_current(op):
                 return {"decision": "deny", "reasons": ["revoked_expired_or_superseded"]}

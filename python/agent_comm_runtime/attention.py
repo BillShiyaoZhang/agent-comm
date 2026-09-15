@@ -5,6 +5,7 @@ revision of each item, including terminal tombstones, not model-written notices.
 """
 import hashlib
 import json
+from .attention_resume import AttentionResumeMixin
 
 
 MAX_CURSOR = 9007199254740991
@@ -14,7 +15,7 @@ def _key(*parts):
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
-class AttentionMixin:
+class AttentionMixin(AttentionResumeMixin):
     def _attention_put(self, owner, source_kind, source_id, *, kind, subject_id,
                        title, state="open", task_id=None, source_revision=1,
                        target_kind="task", summary="", expires_at=None, approval_id=None, created_at=None):
@@ -71,7 +72,14 @@ class AttentionMixin:
             op = self._get("v2_operation", approval["subject_id"])
             if op:
                 expires = op["expires_at"]
-        title = {"contact": "联系人绑定需要你确认", "task": "协作委托需要你确认",
+        elif approval_kind == "worker_policy":
+            worker = self._get("worker_policy", approval["subject_id"])
+            if worker:
+                from .store import instant
+                expires = instant(worker["policy"]["expires_at"])
+                if state == "superseded" and expires <= self.clock():
+                    state = "expired"
+        title = {"contact": "联系人绑定需要你确认", "task": "协作委托需要你确认", "worker_policy": "有限后台策略需要你确认",
                  "operation": "协作动作需要你确认", "collaboration_v2": "双边协作需要你确认"}.get(approval_kind, "有一项协作需要你确认")
         self._attention_put(owner, "approval", approval_id, kind="owner_decision_required",
                             subject_id=approval_id, task_id=task_id, title=title, state=state,
@@ -188,6 +196,9 @@ class AttentionMixin:
         for c in self._all("v2_collaboration"):
             if self._belongs(c, owner_session):
                 self._attention_collaboration(c)
+        for worker in self._all("worker_policy"):
+            if self._belongs(worker, owner_session):
+                self._worker_attention(worker)
         for kind in ("operation", "v2_operation"):
             for operation in self._all(kind):
                 if self._belongs(operation, owner_session):
