@@ -1,6 +1,6 @@
 name: agent_comm
 label: "Agent Comm"
 kind: platform
-version: 1.5.1
+version: 1.5.2
 description: "Durable agent messaging and opt-in native personal collaboration for Hermes"
 author: "Bill Shiyao Zhang"

@@ -8,6 +8,46 @@ import unittest
 
 
 class RealAttentionResumeHostTests(unittest.TestCase):
+    def test_real_session_db_rejects_generic_title_and_accepts_distinct_handling_sessions(self):
+        code = r'''
+import os
+from pathlib import Path
+from hermes_state import SessionDB
+
+db = SessionDB(db_path=Path(os.environ['HERMES_HOME']) / 'state.db')
+first, second = '20260915_174037_d3b406', '20260915_182526_a91a3f'
+generic = '协作处理 · 协作委托需要你确认'
+try:
+    db.create_session(first, source='desktop')
+    db.create_session(second, source='desktop')
+    db.set_session_title(first, generic)
+    try:
+        db.set_session_title(second, generic)
+    except ValueError as error:
+        assert 'already in use' in str(error), type(error).__name__
+    else:
+        raise AssertionError('Expected the actual Hermes unique-title conflict')
+    # The UI now obtains the host stored ID before assigning the final title;
+    # JS tests separately cover the actual title generator and 100-char bound.
+    for session_id in (first, second):
+        title = generic + ' · ' + session_id
+        assert len(title) <= SessionDB.MAX_TITLE_LENGTH
+        db.set_session_title(session_id, title)
+        db.set_session_title(session_id, title)  # explicit retry keeps the same row/title
+        assert db.get_session_title(session_id) == title
+        assert db.get_session(session_id)['source'] == 'desktop'
+        assert db.get_session(session_id)['message_count'] == 0
+    assert db.get_session_title(first) != db.get_session_title(second)
+finally:
+    db.close()
+print('actual SessionDB generic-title conflict and unique native session titles passed')
+'''
+        with tempfile.TemporaryDirectory(prefix="agent-comm-title-host-") as home:
+            env = dict(os.environ, HERMES_HOME=home, HERMES_TEST_ISOLATION="1", PYTHONDONTWRITEBYTECODE="1")
+            result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace", timeout=45)
+            self.assertEqual(result.returncode, 0, result.stderr[-4000:] + result.stdout[-2000:])
+
     def test_authenticated_native_session_recovery_and_idempotent_submission(self):
         code = r'''
 import json, os

@@ -217,6 +217,17 @@ export function createAttentionController({ rest, scope, notify, notifyOS, canNo
 
 // Processing is a separate, explicit-click path. Polling and notification
 // activation never create a chat, submit a turn, answer a question or dispatch.
+export function handlingSessionTitle(title, storedSessionId) {
+  // Hermes titles are unique per profile and capped at 100 characters. Use the
+  // actual persisted-session identity, not the generic attention title or the
+  // shared resume ID: two devices may create different drafts before bind CAS.
+  const prefix = '协作处理 · ', suffix = ` · ${storedSessionId}`
+  const available = 100 - prefix.length - suffix.length
+  if (!/^[A-Za-z0-9_.:-]+$/.test(storedSessionId) || available < 1) throw new Error('Unsupported native session identifier')
+  const label = String(title || '协作待办').replace(/[\u0000-\u001f\u007f]/g, ' ').trim() || '协作待办'
+  return prefix + label.slice(0, available) + suffix
+}
+
 export function createResumeController({ rest, host, scope, readAttention, lock, persist = () => {}, readPersist = () => null, clock = Date.now }) {
   let snapshot = { busy: false, entries: {} }, generation = 0, disposed = false
   const listeners = new Set(), flights = new Map()
@@ -236,6 +247,17 @@ export function createResumeController({ rest, host, scope, readAttention, lock,
     unsupported: '当前 Hermes 缺少安全打开处理会话所需的接口，请更新客户端。',
     failed: '暂时无法打开处理流程。待办仍保留，请检查连接后重试。'
   }
+  const failureMessages = {
+    connecting: '连接处理会话服务失败。待办仍保留，请检查 Hermes 连接后重试。',
+    preparing: '读取最新处理背景失败。待办仍保留，请刷新后重试。',
+    creating: '创建处理会话失败。待办仍保留，请检查 Hermes 连接后重试。',
+    recovering_draft: '恢复已有处理草稿失败。草稿已保留；不会自动另建会话，请检查连接后重试。',
+    titling: '保存处理会话名称失败。草稿记录已保留，重试会先尝试恢复。',
+    binding: '关联处理会话失败。现有草稿已保留，重试会继续核对关联。',
+    opening: '打开关联处理会话失败。会话已保留；本次没有重复发送处理背景，请检查连接后重试。',
+    verifying_session: '核对关联处理会话失败。未发送处理背景，请检查连接后重试。',
+    claiming: '核对背景提交状态失败。没有重复发送背景，请刷新后重试。'
+  }
   function reset() { generation++; flights.clear(); publish({ busy: false, entries: {} }) }
   function start(item) {
     if (flights.has(item.attention_id)) return flights.get(item.attention_id)
@@ -244,12 +266,12 @@ export function createResumeController({ rest, host, scope, readAttention, lock,
     const current = () => !disposed && turn === generation && expectedScope === scope() && expectedOwner === readAttention().owner
     const check = () => { if (!current()) throw failure('changed') }
     const update = (phase, extra = {}) => {
-      if (current()) publish({ entries: { ...snapshot.entries, [item.attention_id]: { ...snapshot.entries[item.attention_id], revision: item.revision, phase, message: messages[phase], ...extra } } })
+      if (current()) publish({ entries: { ...snapshot.entries, [item.attention_id]: { ...snapshot.entries[item.attention_id], revision: item.revision, phase, message: messages[phase], failureStage: null, ...extra } } })
     }
     const post = async (path, body) => { check(); const result = await rest(path, { method: 'POST', body, timeoutMs: 15000 }); check(); return result }
     publish({ busy: true }); update('checking')
     const run = Promise.resolve().then(async () => {
-      let release
+      let release, stage = 'connecting'
       try {
         if (!OPEN.has(item.state) || (item.expires_at && item.expires_at * 1000 <= clock()) || item.details?.can_resume === false) throw failure('expired')
         if (host.state.gateway?.get && host.state.gateway.get() !== 'open') throw failure('failed')
@@ -264,6 +286,7 @@ export function createResumeController({ rest, host, scope, readAttention, lock,
         const request = async (method, params) => { check(); const result = await host.requestProfile(route, method, { ...params, profile: route.targetProfile }, 20000); check(); return result }
         await lock(`agent-comm-resume:${JSON.stringify([expectedScope, item.task_id || item.attention_id])}`, async () => {
           check()
+          stage = 'preparing'
           const prepared = await post('/attention/prepare-resume', { attention_id: item.attention_id, revision: item.revision })
           if (prepared.schema !== 'agent-comm-resume/v1' || prepared.owner_key !== expectedOwner || !validId(prepared.resume_id)
             || prepared.item?.attention_id !== item.attention_id || prepared.item?.revision !== item.revision
@@ -281,6 +304,7 @@ export function createResumeController({ rest, host, scope, readAttention, lock,
             const draftKey = `resume-draft:${JSON.stringify([expectedScope, prepared.resume_id])}`
             let created = readPersist(draftKey)
             if (validId(created?.stored_session_id)) {
+              stage = 'recovering_draft'
               try { created = { ...created, ...(await request('session.resume', { session_id: created.stored_session_id, source: 'desktop', omit_messages: true })) } }
               catch (error) {
                 if (error?.code !== 4007) throw error // Real session.resume: exact stored session not found.
@@ -288,27 +312,36 @@ export function createResumeController({ rest, host, scope, readAttention, lock,
               }
             } else created = null
             if (!created) {
-              created = await request('session.create', { source: 'desktop', title: `协作处理 · ${prepared.item.title}`.slice(0, 100), close_on_disconnect: false })
+              stage = 'creating'
+              // New chats are lazy. Assign their final unique title only after
+              // the host returns the real stored ID; no generic title can race
+              // another draft into the profile's unique title namespace.
+              created = await request('session.create', { source: 'desktop', close_on_disconnect: false })
               if (!validId(created?.stored_session_id) || !validId(created?.session_id)) throw failure('changed')
               persist(draftKey, { stored_session_id: created.stored_session_id })
             }
             if (!validId(created.session_id) || !validId(created.stored_session_id)) throw failure('changed')
             // A new session is lazy. Persist its titled row before binding or
             // opening, so later clicks can recover it without duplicate drafts.
-            await request('session.title', { session_id: created.session_id, title: `协作处理 · ${prepared.item.title}`.slice(0, 100) })
+            stage = 'titling'
+            await request('session.title', { session_id: created.session_id, title: handlingSessionTitle(prepared.item.title, created.stored_session_id) })
+            stage = 'binding'
             const bound = await post('/attention/bind-session', { resume_id: prepared.resume_id, stored_session_id: created.stored_session_id })
             if (!validId(bound.stored_session_id)) throw failure('changed')
             stored = bound.stored_session_id // A concurrent window's binding wins.
             persist(draftKey, null)
           }
+          stage = 'opening'
           update('opening', { storedSessionId: stored })
           await host.openSession(stored, { route, awaitHydration: true, forceResume: true, hydrationTimeoutMs: 15000 }); check()
           if (prepared.submission_state !== 'ready') {
             update(prepared.submission_state === 'submitted' ? 'reopened' : 'uncertain', { storedSessionId: stored })
             return
           }
+          stage = 'verifying_session'
           const live = await request('session.resume', { session_id: stored, source: 'desktop', omit_messages: true })
           if (!validId(live?.session_id)) throw failure('changed')
+          stage = 'claiming'
           const claimed = await post('/attention/claim-submit', { resume_id: prepared.resume_id, stored_session_id: stored })
           if (claimed.claimed !== true) {
             update(claimed.submission_state === 'submitted' ? 'reopened' : 'uncertain', { storedSessionId: stored })
@@ -327,7 +360,8 @@ export function createResumeController({ rest, host, scope, readAttention, lock,
           update(outcome === 'submitted' ? result.status === 'queued' ? 'queued' : 'submitted' : 'uncertain', { storedSessionId: stored })
         })
       } catch (error) {
-        update(error?.resumePhase || (httpStatus(error) === 409 ? 'changed' : 'failed'))
+        const phase = error?.resumePhase || (httpStatus(error) === 409 ? 'changed' : 'failed')
+        update(phase, { failureStage: stage, ...(phase === 'failed' ? { message: failureMessages[stage] || messages.failed } : {}) })
       } finally {
         try { if (typeof release === 'function') release() } catch { /* Retention cleanup cannot trigger a duplicate submission. */ }
         if (current()) { flights.delete(item.attention_id); publish({ busy: false }) }

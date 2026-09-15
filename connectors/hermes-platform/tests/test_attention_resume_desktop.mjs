@@ -15,7 +15,7 @@ const source = await readFile(new URL('../hermes_platform_agent_comm/companion/d
 const plugin = new SourceTextModule(source, { context })
 await plugin.link(name => name === '@hermes/plugin-sdk' ? sdk : react)
 await plugin.evaluate()
-const { createResumeController } = plugin.namespace
+const { createResumeController, handlingSessionTitle } = plugin.namespace
 const record = { attention_id: 'attention-one', revision: 1, state: 'open', task_id: 'task-one', title: '讨论排期',
   expires_at: 200, details: { can_resume: true, context_summary: '与张三讨论排期', question: '是否同意当前具体方案？' } }
 const atom = get => ({ get })
@@ -23,7 +23,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 
 function harness(options = {}) {
   const calls = [], storage = new Map(), queues = new Map()
-  const state = { selected: 'scope-a', owner: 'owner-a', profile: 'work', connection: 'local', gateway: 'open',
+  const state = options.sharedState || { selected: 'scope-a', owner: 'owner-a', profile: 'work', connection: 'local', gateway: 'open',
     binding: options.binding || null, submission: 'ready', resume: 'resume-one', created: 0, releases: 0, ...options.state }
   const rest = async (path, request) => {
     calls.push([path, request.body])
@@ -95,6 +95,75 @@ test('explicit handling creates, persists and binds a native session before send
   assert.equal(submit.session_id, 'live-stored-1')
   assert.match(submit.text, /不要发送业务消息/)
   assert.equal(h.value.getSnapshot().entries[record.attention_id].details.question, record.details.question)
+  assert.equal(h.calls.find(c => c[0] === 'session.create')[1].title, undefined, 'An untitled lazy draft cannot reserve a shared generic title')
+  assert.equal(h.calls.find(c => c[0] === 'session.title')[1].title, handlingSessionTitle(record.title, 'stored-1'))
+})
+
+test('same-label handling titles retain the full native identity within the Hermes title limit', () => {
+  const first = handlingSessionTitle('协作委托需要你确认'.repeat(30), '20260915_174037_d3b406')
+  const second = handlingSessionTitle('协作委托需要你确认'.repeat(30), '20260915_174037_a91a3f')
+  assert.ok(first.length <= 100)
+  assert.notEqual(first, second)
+  assert.ok(first.endsWith('20260915_174037_d3b406'), 'Truncate the label before appending the identity')
+  assert.equal(first, handlingSessionTitle('协作委托需要你确认'.repeat(30), '20260915_174037_d3b406'))
+})
+
+test('independent windows racing the same resume use unique draft titles and the bind winner submits once', async () => {
+  const titled = new Map(), bothTitled = deferred()
+  const onRequest = async (method, params) => {
+    if (method !== 'session.title') return undefined
+    assert.ok(!titled.has(params.title), 'The real Hermes profile enforces unique titles')
+    titled.set(params.title, params.session_id)
+    if (titled.size === 2) bothTitled.resolve()
+    await bothTitled.promise
+  }
+  const first = harness({ onRequest })
+  const second = harness({ onRequest, sharedState: first.state })
+  await Promise.all([first.start(), second.start()])
+  assert.equal(titled.size, 2)
+  assert.equal(first.state.created, 2, 'Independent origins need not share WebLocks or draft storage')
+  assert.equal(first.count('prompt.submit') + second.count('prompt.submit'), 1)
+  assert.equal(first.calls.find(c => c[0] === 'openSession')[1], first.state.binding)
+  assert.equal(second.calls.find(c => c[0] === 'openSession')[1], first.state.binding)
+})
+
+test('a failed title write keeps the same draft and deterministic title for the next explicit retry', async () => {
+  let fail = true
+  const h = harness({ onRequest: async method => {
+    if (method === 'session.title' && fail) { fail = false; throw Object.assign(new Error('PRIVATE duplicate title'), { code: 4022 }) }
+  } })
+  await h.start()
+  const first = h.value.getSnapshot().entries[record.attention_id]
+  assert.equal(first.phase, 'failed')
+  assert.equal(first.failureStage, 'titling')
+  assert.match(first.message, /保存处理会话名称失败/)
+  assert.ok(!JSON.stringify(first).includes('PRIVATE'))
+  assert.equal(h.count('/attention/bind-session'), 0)
+  await h.start()
+  assert.equal(h.status(), 'submitted')
+  assert.equal(h.count('session.create'), 1)
+  assert.equal(h.count('prompt.submit'), 1)
+  assert.equal(new Set(h.calls.filter(c => c[0] === 'session.title').map(c => c[1].title)).size, 1)
+  assert.equal(h.value.getSnapshot().entries[record.attention_id].failureStage, null)
+})
+
+test('failures identify the safe processing stage without exposing native error bodies', async () => {
+  const cases = [
+    ['creating', { onRequest: async method => { if (method === 'session.create') throw new Error('PRIVATE backend') } }],
+    ['binding', { onRest: async path => { if (path === '/attention/bind-session') throw new Error('PRIVATE backend') } }],
+    ['opening', { binding: 'original-session', onOpen: async () => { throw new Error('PRIVATE backend') } }],
+    ['verifying_session', { binding: 'original-session', onRequest: async method => { if (method === 'session.resume') throw new Error('PRIVATE backend') } }],
+    ['claiming', { binding: 'original-session', onRest: async path => { if (path === '/attention/claim-submit') throw new Error('PRIVATE backend') } }]
+  ]
+  for (const [stage, options] of cases) {
+    const h = harness(options)
+    await h.start()
+    const entry = h.value.getSnapshot().entries[record.attention_id]
+    assert.equal(entry.phase, 'failed')
+    assert.equal(entry.failureStage, stage)
+    assert.ok(!JSON.stringify(entry).includes('PRIVATE'))
+    assert.equal(h.count('prompt.submit'), 0)
+  }
 })
 
 test('available original session is hydrated on its exact route and no new draft is created', async () => {
