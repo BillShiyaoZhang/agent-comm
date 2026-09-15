@@ -1,8 +1,8 @@
 """Paired, durable control RPC over the existing authenticated helper mailbox.
 
 Pairing is a LOCAL administrator operation. Neither a Web registration nor a
-request's claimed owner establishes authority. This module does not grant native
-approval rights and never treats transport acceptance as a conversation answer.
+request's claimed owner establishes authority. Explicitly scoped pairings can
+record owner decisions, never infer consent from conversation or transport ACKs.
 """
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -17,6 +17,7 @@ from .identity import validate_urn
 
 PROTOCOL = "agent-comm-control/v1"
 READ_METHODS = ("capabilities", "contacts.list", "collaboration.state", "inbox.list", "attention.list")
+WRITE_METHODS = ("contacts.add", "approval.respond")
 CONVERSATION_METHODS = ("conversation.send", "conversation.get")
 CONTROL_KINDS = {"control.request", "control.response"}
 
@@ -127,7 +128,7 @@ class RemoteBridge:
             return self._all("pairing")
 
     def register_handler(self, method, handler):
-        if method in {*READ_METHODS, *CONVERSATION_METHODS} or not callable(handler):
+        if method in {*READ_METHODS, *WRITE_METHODS, *CONVERSATION_METHODS} or not callable(handler):
             raise ValueError("Built-in methods cannot be overridden; extension handler must be callable")
         self.handlers[method] = handler
 
@@ -189,13 +190,18 @@ class RemoteBridge:
         owner = pairing["owner_principal"] + "|remote:" + hashlib.sha256(pairing["console_urn"].encode()).hexdigest()[:24]
         if method == "capabilities":
             self._params(params)
-            names = [*READ_METHODS, *CONVERSATION_METHODS, "approval.respond", *self.handlers]
-            available = {*READ_METHODS, *self.handlers, *(CONVERSATION_METHODS if self.conversations else ())}
+            names = [*READ_METHODS, *WRITE_METHODS, *CONVERSATION_METHODS, *self.handlers]
+            available = {*READ_METHODS, *WRITE_METHODS, *self.handlers, *(CONVERSATION_METHODS if self.conversations else ())}
             return {"protocol": PROTOCOL, "methods": [{"name": name,
                 "available": name in available and name in pairing["methods"],
-                **({"reason": "Native trusted interaction is required; remote approval is unsupported"} if name == "approval.respond"
-                   else {"reason": "Not enabled by this adapter or local pairing"} if name not in available or name not in pairing["methods"] else {})}
+                **({"reason": "Not enabled by this adapter or local pairing"} if name not in available or name not in pairing["methods"] else {})}
                 for name in names], "pairing": {"expires_at": pairing["expires_at"]}}
+        if method in WRITE_METHODS:
+            self._params(params, required=("contact_id", "aliases", "urn") if method == "contacts.add" else ("approval_id", "decision"))
+            key = hashlib.sha256((request["console_urn"] + "\0" + request["request_id"]).encode()).hexdigest()
+            return self.store.remote_mutation(method, params, owner, request_key=key,
+                                              fingerprint=hashlib.sha256(canonical(request).encode()).hexdigest(),
+                                              valid_until=min(instant(request["deadline"]), instant(pairing["expires_at"])))
         if method == "contacts.list":
             self._params(params)
             return {"contacts": self.store.state(owner)["contacts"]}

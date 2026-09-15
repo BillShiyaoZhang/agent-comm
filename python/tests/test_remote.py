@@ -1,5 +1,5 @@
 """Two authenticated helper identities, real persistent authority, no network."""
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timezone
 import io
 import json
@@ -7,9 +7,10 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from agent_comm_runtime.daemon import main
-from agent_comm_runtime.remote import PROTOCOL, READ_METHODS, RemoteBridge, hermes_principal
+from agent_comm_runtime.remote import PROTOCOL, READ_METHODS, WRITE_METHODS, RemoteBridge, hermes_principal
 from agent_comm_runtime.store import Store
 
 NOW = 2_000_000_000
@@ -139,6 +140,188 @@ class TestRemote(unittest.TestCase):
         self.assertEqual(self.result(response)["error"]["code"], "invalid_params")
         _, response = self.submit(request("approval", "approval.respond", {"approved": True}))
         self.assertEqual(self.result(response)["error"]["code"], "method_not_allowed")
+
+    def allow_web_actions(self):
+        self.bridge.pair(CONSOLE, "owner-a", [*READ_METHODS, *WRITE_METHODS], stamp(NOW + 2000))
+
+    def pending_task(self, task_id="task-web", expires_at=None):
+        if not self.store.resolve_contact("peer", "owner-a|native")["contacts"]:
+            self.contact("peer", "owner-a")
+        scope = {"purpose": "Coordinate one meeting", "topic": "Web confirmation",
+                 "capabilities": ["send_text"], "recipient_ids": ["peer"], "participant_ids": ["self", "peer"],
+                 "resource_ids": [], "window_start": stamp(NOW + 10), "window_end": stamp(NOW + 1000),
+                 "max_duration_minutes": 30, "max_candidates": 2, "max_actions": 10,
+                 "expires_at": expires_at or stamp(NOW + 1000)}
+        return self.store.prepare_task(task_id, scope, "owner-a|native")
+
+    def test_mutation_capabilities_require_explicit_scope_and_cannot_be_overridden(self):
+        _, before = self.submit()
+        methods = {item["name"]: item["available"] for item in self.result(before)["result"]["methods"]}
+        self.assertTrue(all(not methods[method] for method in WRITE_METHODS))
+        self.allow_web_actions()
+        _, after = self.submit(request("after-pair"))
+        methods = {item["name"]: item["available"] for item in self.result(after)["result"]["methods"]}
+        self.assertTrue(all(methods[method] for method in WRITE_METHODS))
+        for method in WRITE_METHODS:
+            with self.assertRaises(ValueError):
+                self.bridge.register_handler(method, lambda params, owner: {})
+
+    def test_contacts_add_is_deterministic_confirmed_and_owner_scoped(self):
+        self.allow_web_actions()
+        params = {"contact_id": "wang", "aliases": [" 老王 ", "Wang", "Wang"], "urn": "urn:hermes:agent:wang"}
+        wire, first = self.submit(request("add-wang", "contacts.add", params))
+        result = self.result(first)["result"]
+        self.assertEqual(result["status"], "confirmed")
+        self.assertEqual(result["contact"]["aliases"], ["Wang", "老王"])
+        self.assertEqual(self.bridge.process(wire, self.agent), first)
+        _, duplicate = self.submit(request("add-wang-again", "contacts.add", params))
+        self.assertEqual(self.result(duplicate)["result"]["status"], "already_confirmed")
+        self.assertEqual(self.store.state("owner-a|native")["contacts"], [result["contact"]])
+        self.assertEqual(self.store.state("owner-b|native")["contacts"], [])
+        self.assertEqual(self.bridge._all("turn"), [])
+        for changed in ({**params, "urn": "urn:agent-comm:agent:changed"},
+                        {**params, "contact_id": "duplicate-urn"}, {**params, "contact_id": "self"},
+                        {**params, "aliases": []}, {**params, "owner_session": "owner-b"}):
+            _, response = self.submit(request("invalid-contact-" + str(len(self.network.events)), "contacts.add", changed))
+            self.assertEqual(self.result(response)["error"]["code"], "invalid_params")
+        self.assertEqual(len(self.store.state("owner-a|native")["contacts"]), 1)
+
+    def test_contacts_add_resolves_exact_native_pending_binding_and_supersedes_other_binding(self):
+        self.allow_web_actions()
+        pending = self.store.prepare_contact("wang", ["Wang"], "urn:agent-comm:agent:wang", "owner-a|native")
+        other = self.store.prepare_contact("wang", ["Wang"], "urn:agent-comm:agent:otherwang", "owner-a|native")
+        lease = self.store.begin_confirmation(pending["approval_id"], "owner-a|native")
+        before = self.store.attention("owner-a|native")
+        self.submit(request("add-pending", "contacts.add", {"contact_id": "wang", "aliases": ["Wang"], "urn": "urn:agent-comm:agent:wang"}))
+        state = self.store.state("owner-a|native")
+        self.assertEqual(state["pending_confirmations"], [])
+        self.assertEqual([(a["approval_id"], a["status"]) for a in state["approval_decisions"]], [(pending["approval_id"], "approved")])
+        self.assertEqual(set(state["approval_decisions"][0]), {"approval_id", "kind", "subject_id", "status"})
+        changes = {item["approval_id"]: item["state"] for item in self.store.attention("owner-a|native", before["cursor"])["items"]}
+        self.assertEqual(changes, {pending["approval_id"]: "resolved", other["approval_id"]: "superseded"})
+        with self.assertRaisesRegex(ValueError, "No matching active"):
+            self.store.finish_confirmation(pending["approval_id"], lease["token"], "owner-a|native", "拒绝")
+
+    def test_remote_approval_replaces_native_lease_and_cannot_be_reversed_or_cross_owner(self):
+        self.allow_web_actions()
+        pending = self.store.prepare_contact("peer", ["Peer"], "urn:agent-comm:agent:peer", "owner-a|native")
+        lease = self.store.begin_confirmation(pending["approval_id"], "owner-a|native")
+        self.bridge.pair(OTHER, "owner-b", ["approval.respond"], stamp(NOW + 1000))
+        body = {**request("wrong-owner", "approval.respond", {"approval_id": pending["approval_id"], "decision": "approve"}, OTHER), "sender_urn": OTHER}
+        self.assertEqual(self.result(self.bridge.handle(body))["error"]["code"], "invalid_params")
+        _, response = self.submit(request("approve-contact", "approval.respond", {"approval_id": pending["approval_id"], "decision": "approve"}))
+        self.assertEqual(self.result(response)["result"]["status"], "approved_once")
+        with self.assertRaisesRegex(ValueError, "No matching active"):
+            self.store.finish_confirmation(pending["approval_id"], lease["token"], "owner-a|native", "拒绝")
+        _, response = self.submit(request("reverse-contact", "approval.respond", {"approval_id": pending["approval_id"], "decision": "deny"}))
+        self.assertEqual(self.result(response)["error"]["code"], "invalid_params")
+        self.assertEqual(self.store.state("owner-b|native")["approval_decisions"], [])
+
+    def test_remote_approval_applies_task_and_operation_without_sending_business_messages(self):
+        self.allow_web_actions()
+        pending = self.pending_task()
+        self.submit(request("approve-task", "approval.respond", {"approval_id": pending["approval_id"], "decision": "approve"}))
+        self.assertEqual(self.store.state("owner-a|native")["tasks"][0]["status"], "active")
+        for decision, status in (("approve", "ready"), ("deny", "denied")):
+            action = {"capability": "send_text", "recipient_ids": ["peer"], "payload": {"text": "Exact owner-reviewed text"}}
+            pending = self.store.prepare_action("task-web", "op-" + decision, action, "owner-a|native")
+            self.submit(request("decide-" + decision, "approval.respond", {"approval_id": pending["approval_id"], "decision": decision}))
+            self.assertEqual(self.store._get("operation", "op-" + decision)["status"], status)
+            self.assertEqual(self.store._get("operation", "op-" + decision).get("deliveries", []), [])
+        self.assertTrue(all(body["kind"].startswith("control.") for body in self.network.accepted.values()))
+
+    def test_remote_approval_rejects_revoked_expired_superseded_and_invalid_decisions(self):
+        self.allow_web_actions()
+        for change in ("revoked", "expired", "superseded"):
+            pending = self.pending_task("task-" + change, stamp(NOW + 60))
+            task = self.store._get("task", "task-" + change)
+            if change == "revoked":
+                self.store.revoke(task["task_id"], "owner-a|native")
+            elif change == "superseded":
+                with self.store._transaction():
+                    self.store._put("task", task["task_id"], {**task, "revision": 2})
+            else:
+                self.now = NOW + 61
+            _, response = self.submit(request("stale-" + change, "approval.respond", {"approval_id": pending["approval_id"], "decision": "approve"}))
+            self.assertEqual(self.result(response)["error"]["code"], "invalid_params")
+            self.assertNotEqual(self.store._get("task", task["task_id"])["status"], "active")
+            self.now = NOW
+        pending = self.store.prepare_contact("invalid-decision", ["Peer"], "urn:agent-comm:agent:other", "owner-a|native")
+        for answer in (True, "yes", "approve if possible", None, []):
+            _, response = self.submit(request("invalid-answer-" + str(len(self.network.events)), "approval.respond", {"approval_id": pending["approval_id"], "decision": answer}))
+            self.assertEqual(self.result(response)["error"]["code"], "invalid_params")
+
+    def test_remote_decision_can_renew_expired_presentation_without_extending_task_grant(self):
+        self.allow_web_actions()
+        pending = self.store.prepare_contact("renew", ["Renew"], "urn:agent-comm:agent:renew", "owner-a|native")
+        self.now = NOW + 1000
+        body = request("late-web-decision", "approval.respond", {"approval_id": pending["approval_id"], "decision": "approve"})
+        payload = json.loads(body["text"])
+        payload["deadline"] = body["deadline"] = stamp(self.now + 120)
+        body["text"] = json.dumps(payload)
+        _, response = self.submit(body)
+        self.assertEqual(self.result(response)["result"]["status"], "approved_once")
+
+    def test_mutation_receipt_survives_crash_before_bridge_cache_and_rejects_changed_replay(self):
+        self.allow_web_actions()
+        for method in WRITE_METHODS:
+            if method == "contacts.add":
+                params = {"contact_id": "crash-contact", "aliases": ["Crash"], "urn": "urn:agent-comm:agent:crash"}
+            else:
+                pending = self.store.prepare_contact("crash-approval", ["Crash"], "urn:agent-comm:agent:crashapproval", "owner-a|native")
+                params = {"approval_id": pending["approval_id"], "decision": "approve"}
+            wire = {**request("crash-" + method, method, params), "sender_urn": CONSOLE}
+            original_put = self.bridge._put
+            def fail_response_cache(kind, key, value):
+                if kind == "request":
+                    raise OSError("process stopped after business commit")
+                return original_put(kind, key, value)
+            with patch.object(self.bridge, "_put", side_effect=fail_response_cache):
+                with self.assertRaises(OSError):
+                    self.bridge.handle(wire)
+            audit_count = len(self.store._all("audit"))
+            self.bridge.close()
+            self.store.close()
+            self.store = Store(self.home / "collaboration.sqlite3", clock=lambda: self.now, local_urn=AGENT)
+            self.bridge = RemoteBridge(self.home / "remote.sqlite3", self.store, AGENT, clock=lambda: self.now)
+            altered = json.loads(wire["text"])
+            altered["params"] = {**params, **({"contact_id": "another-contact"} if method == "contacts.add" else {"decision": "deny"})}
+            changed = self.bridge.handle({**wire, "text": json.dumps(altered)})
+            self.assertEqual(self.result(changed)["error"]["code"], "request_conflict")
+            recovered = self.bridge.handle(wire)
+            self.assertEqual(self.result(recovered)["result"]["status"], "confirmed" if method == "contacts.add" else "approved_once")
+            self.assertEqual(len(self.store._all("audit")), audit_count)
+            self.bridge.revoke(CONSOLE)
+            self.assertEqual(self.result(self.bridge.handle(wire))["error"]["code"], "not_paired")
+            self.allow_web_actions()
+
+    def test_mutation_attention_failure_rolls_back_business_and_receipt(self):
+        self.allow_web_actions()
+        pending = self.store.prepare_contact("rollback", ["Rollback"], "urn:agent-comm:agent:rollback", "owner-a|native")
+        wire = {**request("rollback", "approval.respond", {"approval_id": pending["approval_id"], "decision": "approve"}), "sender_urn": CONSOLE}
+        with patch.object(self.store, "_attention_put", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.bridge.handle(wire)
+        self.assertIsNone(self.store._get("contact", "rollback"))
+        self.assertEqual(self.store._all("remote_mutation"), [])
+        self.assertEqual(self.store._get("approval", pending["approval_id"])["status"], "pending")
+
+    def test_mutation_rechecks_request_and_pairing_expiry_after_waiting_for_store(self):
+        for pairing_seconds, elapsed in ((1000, 121), (60, 61)):
+            self.now = NOW
+            self.bridge.pair(CONSOLE, "owner-a", WRITE_METHODS, stamp(NOW + pairing_seconds))
+            wire = {**request("expired-after-wait-" + str(elapsed), "contacts.add", {
+                "contact_id": "late", "aliases": ["Late"], "urn": "urn:agent-comm:agent:late"}), "sender_urn": CONSOLE}
+            transaction = self.store._transaction
+            @contextmanager
+            def delayed_transaction():
+                with transaction():
+                    self.now += elapsed
+                    yield
+            with patch.object(self.store, "_transaction", delayed_transaction):
+                self.assertIn("error", self.result(self.bridge.handle(wire)))
+            self.assertIsNone(self.store._get("contact", "late"))
+            self.assertEqual(self.store._all("remote_mutation"), [])
 
     def test_revocation_and_expiry_block_cached_disclosure_and_new_turns(self):
         wire, _ = self.submit(request(method="contacts.list"))

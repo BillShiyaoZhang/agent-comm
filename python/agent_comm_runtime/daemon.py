@@ -1,8 +1,9 @@
 """Local pairing administration and optional mailbox RPC daemon.
 
 Use the Hermes adapter OR this daemon as the active consumer for a helper, never
-both. The standalone daemon exposes only read methods; a host adapter supplies
-real conversation handlers. No public listening socket is opened.
+both. The standalone daemon exposes locally scoped reads and owner decisions;
+a host adapter supplies real conversation handlers. No public listening socket
+is opened.
 """
 import argparse
 import json
@@ -10,7 +11,7 @@ from pathlib import Path
 import sys
 import time
 
-from .remote import CONTROL_KINDS, READ_METHODS, RemoteBridge, hermes_principal
+from .remote import CONTROL_KINDS, READ_METHODS, WRITE_METHODS, RemoteBridge, hermes_principal
 from .store import Store
 from .transport import HelperTransport
 
@@ -86,7 +87,7 @@ def main(argv=None):
                     except (ValueError, TypeError, KeyError, OSError):
                         errors += 1  # Keep malformed/failed messages pending without logging plaintext.
                 if args.once:
-                    print(json.dumps({"processed": processed, "pending_errors": errors, "methods": READ_METHODS}))
+                    print(json.dumps({"processed": processed, "pending_errors": errors, "methods": [*READ_METHODS, *WRITE_METHODS]}))
                     break
                 time.sleep(1)
         return 0

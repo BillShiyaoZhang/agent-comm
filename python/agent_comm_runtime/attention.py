@@ -84,7 +84,7 @@ class AttentionMixin(AttentionResumeMixin):
         self._attention_put(owner, "approval", approval_id, kind="owner_decision_required",
                             subject_id=approval_id, task_id=task_id, title=title, state=state,
                             source_revision=approval["fingerprint"], target_kind="approval",
-                            summary="请在原生渠道查看当前确切动作并决定。", expires_at=expires, approval_id=approval_id,
+                            summary="请查看当前确切动作，并在已配对的 Web 控制台或原生渠道决定。", expires_at=expires, approval_id=approval_id,
                             created_at=approval.get("created_at"))
 
     def _attention_inbound(self, message, owner_session=None):

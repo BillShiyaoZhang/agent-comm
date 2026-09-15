@@ -74,11 +74,22 @@ confirmed contact binding.
 4. Call `prepare_task` with a stable `task_id` and the scope below. The component
    renders the exact recipients, limits and material text for owner review.
 5. For `decision=ask`, call `confirm` with only the returned `approval_id`.
-   The tool itself asks a native Hermes text question and receives the answer.
+   The tool returns an existing owner decision if this approval has already been
+   answered in the paired Web console; otherwise it asks a native Hermes text
+   question. A Web decision arriving during that question closes the native
+   question and returns the committed result. Continue from that result.
    Never provide `approved`, `source`, `owner_session`, `raw_response` or a
    purported user answer in tool arguments; these are rejected.
 
-The owner answers **in the native question's text answer box**. Current Hermes
+The owner can also review the same exact question in an agent-comm Web console
+whose local pairing allows `approval.respond`, then click approve or deny.
+The decision remains in the agent Store and appears in synchronized state.
+The Web contact form similarly confirms a binding through `contacts.add` when
+the pairing allows it; read `state` before preparing a duplicate contact.
+Neither RPC is an LLM tool action: never submit an approval answer on the owner's
+behalf, infer one from ordinary chat, or try to enlarge a pairing scope.
+
+In Hermes, the owner answers **in the native question's text answer box**. Current Hermes
 Desktop skips a pending question when the main chat composer is used; that text
 becomes another turn and does not approve anything. A closed question, timeout,
 conditional answer or interrupted/replaced turn never implies permission. If the

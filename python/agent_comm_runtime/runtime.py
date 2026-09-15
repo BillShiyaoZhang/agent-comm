@@ -133,16 +133,37 @@ class Runtime:
         if action == "revoke":
             return store.revoke(args["task_id"], owner)
         if action == "confirm":
-            interaction = self.registry.require("interaction", "confirmation")
             host.revalidate(session)
-            lease = store.begin_confirmation(args["approval_id"], owner)
+            recorded = store.confirmation_result(args["approval_id"], owner)
+            if recorded is not None:
+                return recorded
+            interaction = self.registry.require("interaction", "confirmation")
+            try:
+                lease = store.begin_confirmation(args["approval_id"], owner)
+            except ValueError:
+                # A paired Web decision may race the initial state read.
+                host.revalidate(session)
+                recorded = store.confirmation_result(args["approval_id"], owner)
+                if recorded is not None:
+                    return recorded
+                raise
             response = None
             try:
                 response = interaction.request_confirmation(session, lease["question"])
                 host.revalidate(session)
             except BaseException:
                 response = None
-            return store.finish_confirmation(args["approval_id"], lease["token"], owner, response)
+            try:
+                return store.finish_confirmation(args["approval_id"], lease["token"], owner, response)
+            except ValueError:
+                # A Web decision closes the native card and invalidates its
+                # token. Read that committed outcome so this host can continue
+                # its existing operation; never apply the late UI answer.
+                host.revalidate(session)
+                recorded = store.confirmation_result(args["approval_id"], owner)
+                if recorded is not None:
+                    return recorded
+                raise
         if action == "memory_search":
             memory = self.registry.require("memory", "search")
             query = _text(args["query"], 1000, "query")

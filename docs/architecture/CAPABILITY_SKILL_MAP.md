@@ -69,13 +69,14 @@
 | --- | --- | --- |
 | `capabilities` | `RemoteBridge._invoke` L190–198 | 已存在且允许该方法的本地配对；返回方法及逐项 available，不能只看名字 |
 | `contacts.list` | `_invoke` L199–201 | 读取配对 owner 的协作联系人，不是任意 agent 好友抓取或 helper 公钥库 |
+| `contacts.add` | 新版源码 `RemoteBridge._invoke` 与 Store 联系人写入 | 用户在 Web 提交 `{contact_id,aliases,urn}` 即确认绑定；须本机显式配对该方法，主体从配对导出，结果保存在 agent |
 | `collaboration.state` | `_invoke` L202–207 | 可选 `task_id`，读取 owner 的协作状态；不给原生确认权 |
 | `inbox.list` | `_invoke` L202–207 | 可选 `task_id`，读取已落盘协作收件箱；不是任意公共邮箱 |
 | `conversation.send` | `_invoke` L208–222；[platform.py](../../connectors/hermes-platform/hermes_platform_agent_comm/platform.py) L436–479 | Hermes 注册 `conversations=True` 后才可用，还需 remote 开关、本地方法配对和 Gateway 接纳；返回 submitted/turn_id，不等于已经回答 |
 | `conversation.get` | `_invoke` L223–230；`platform.py` L481–492 | Hermes 会话入口；按 conversation_id 返回最近至多 100 回合的状态/文本/回答；独立轮询完成结果 |
-| `approval.respond` | capability descriptor L192–197 | **未实现**，始终说明需原生可信交互；不能计为遗漏的已实现能力，也不能因为配对白名单写了它而使用 |
+| `approval.respond` | 新版源码 `RemoteBridge._invoke` 与 Store 审批状态转移 | 用户提交 `{approval_id,decision:"approve"|"deny"}`；须单独配对权限，校验归属、期限、撤销与版本；保存决定但不直接发消息或执行外部工具 |
 
-Standalone `remote serve` 默认只有 4 个读取方法，不创建真实会话执行器。[Hermes platform.py](../../connectors/hermes-platform/hermes_platform_agent_comm/platform.py) 的真实消息事件与完成回调才提供会话执行。自定义 `register_handler` 是可信宿主开发接口，未注册的方法不算可用产品能力。
+Standalone `remote serve` 不创建真实会话执行器。[Hermes platform.py](../../connectors/hermes-platform/hermes_platform_agent_comm/platform.py) 的真实消息事件与完成回调才提供会话执行。Web 新增写方法需要发布匹配的 runtime 与 Web，并在本机显式更新配对；旧配对和只读同步 worker 不会自动获得或使用它们。自定义 `register_handler` 是可信宿主开发接口，未注册的方法不算可用产品能力。
 
 ### 远程管理 CLI（基线 4 项，原 R/P 均缺失）
 
@@ -158,7 +159,7 @@ Standalone `remote serve` 默认只有 4 个读取方法，不创建真实会话
 
 ## 八、仍未提供的能力与需纠正的旧结论
 
-- **未提供**：远程 `approval.respond`、默认完整记忆导出/自动写回、当前 Hermes 后台私人会话唤醒、通用日历写入、支付、任意操作系统执行；这些不能靠补写 skill 变成已实现能力。
+- **未提供**：默认完整记忆导出/自动写回、当前 Hermes 后台私人会话唤醒、通用日历写入、支付、任意操作系统执行；这些不能靠补写 skill 变成已实现能力。
 - **没有独立端到端任务状态/取消/进度服务**。`kind=cancel` 是应用数据，`accepted` 是本机落盘，`platform_queued` 是平台入队；应用成功必须看具体对方回复及业务约定。
 - **当前可靠 helper 出站采用 HTTPS MQ**；传统 SDK 的 DR/P2P 仍存在。原根 skill 把所有 helper 消息描述成“首选 P2P、Double Ratchet 前向安全”不符合当前实现。
 - **本机消费 ACK 与平台 ACK 分层**。连接器处理完成或持久接管后确认本机 helper；helper 已验证且持久保存入站后确认平台。不能照旧根技能直接向平台销毁消息。

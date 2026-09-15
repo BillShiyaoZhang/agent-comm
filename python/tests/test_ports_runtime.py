@@ -1,6 +1,8 @@
 """Independent contract tests: importing this suite never requires Hermes."""
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from io import StringIO
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -9,6 +11,7 @@ from types import SimpleNamespace
 
 from agent_comm_runtime import AdapterRegistry, Descriptor, HostSession, MemorySnapshot, Runtime, Store, Unsupported
 from agent_comm_runtime.reference import FiniteMemory, TerminalHost, demo
+from agent_comm_runtime.remote import PROTOCOL, RemoteBridge
 
 
 class TestContracts(unittest.TestCase):
@@ -118,6 +121,68 @@ class TestContracts(unittest.TestCase):
         result = self.call("confirm", approval_id=pending["approval_id"])
         self.assertNotEqual(result.get("status"), "approved")
         self.assertEqual(self.call("resolve_contact", name="老王")["contacts"], [])
+
+    def web_decision(self, approval_id, decision):
+        agent, console = "urn:agent-comm:agent:host", "urn:agent-comm:agent:web"
+        bridge = RemoteBridge(Path(self.folder.name) / "remote.sqlite3", self.store, agent)
+        try:
+            bridge.pair(console, self.host.principal, ["approval.respond"], "2099-01-01T00:00:00Z")
+            request_id = "web-" + approval_id + "-" + decision
+            deadline = (datetime.now(timezone.utc) + timedelta(seconds=120)).isoformat()
+            packet = {"protocol": PROTOCOL, "type": "request", "request_id": request_id, "method": "approval.respond",
+                      "params": {"approval_id": approval_id, "decision": decision}, "agent_urn": agent,
+                      "console_urn": console, "deadline": deadline}
+            response = bridge.handle({"message_id": request_id, "sender_urn": console, "recipient_urn": agent,
+                "kind": "control.request", "conversation_id": "control:" + request_id, "deadline": deadline, "text": json.dumps(packet)})
+            return json.loads(response["text"])["result"]
+        finally:
+            bridge.close()
+
+    def test_web_approval_during_native_wait_returns_recorded_allow_and_ignores_late_denial(self):
+        pending = self.stage()
+        self.approve("拒绝", before=lambda: self.web_decision(pending["approval_id"], "approve"))
+        result = self.call("confirm", approval_id=pending["approval_id"])
+        self.assertEqual(result["decision"], "allow")
+        self.assertEqual(result["status"], "approved_once")
+        self.assertEqual(len(self.call("resolve_contact", name="老王")["contacts"]), 1)
+
+    def test_web_denial_during_native_wait_returns_recorded_deny_and_ignores_late_approval(self):
+        pending = self.stage()
+        self.approve("同意", before=lambda: self.web_decision(pending["approval_id"], "deny"))
+        result = self.call("confirm", approval_id=pending["approval_id"])
+        self.assertEqual(result["decision"], "deny")
+        self.assertEqual(result["status"], "denied")
+        self.assertEqual(self.call("resolve_contact", name="老王")["contacts"], [])
+
+    def test_web_decision_does_not_resume_a_changed_native_turn(self):
+        pending = self.stage()
+        def decide_and_change_turn():
+            self.web_decision(pending["approval_id"], "approve")
+            self.host.begin_turn()
+        self.approve(None, before=decide_and_change_turn)
+        result = self.call("confirm", approval_id=pending["approval_id"])
+        self.assertEqual(result["status"], "not_executed")
+        # The Web decision remains valid; only this stale host continuation stops.
+        self.assertEqual(len(self.call("resolve_contact", name="老王")["contacts"]), 1)
+
+    def test_already_recorded_web_decision_needs_no_native_port_and_is_owner_scoped(self):
+        pending = self.stage()
+        self.web_decision(pending["approval_id"], "approve")
+        self.assertEqual(self.call("confirm", approval_id=pending["approval_id"])["decision"], "allow")
+        foreign = self.store.prepare_contact("foreign", ["Foreign"], "urn:agent-comm:agent:foreign", "another-owner|native")
+        lease = self.store.begin_confirmation(foreign["approval_id"], "another-owner|native")
+        self.store.finish_confirmation(foreign["approval_id"], lease["token"], "another-owner|native", "同意")
+        self.assertEqual(self.call("confirm", approval_id=foreign["approval_id"])["status"], "not_executed")
+
+    def test_web_decision_racing_native_lease_acquisition_is_returned(self):
+        pending = self.stage()
+        self.approve()
+        begin = self.store.begin_confirmation
+        def concurrent_decision(approval_id, owner):
+            self.web_decision(approval_id, "approve")
+            return begin(approval_id, owner)
+        with patch.object(self.store, "begin_confirmation", side_effect=concurrent_decision):
+            self.assertEqual(self.call("confirm", approval_id=pending["approval_id"])["decision"], "allow")
 
     def test_conditional_response_does_not_authorize(self):
         self.approve("同意，但只联系另一个人")

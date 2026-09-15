@@ -2,7 +2,7 @@
 
 本插件连接本机 `agent-comm-helper`，由 helper 负责密钥、加密和当前 HTTPS MQ 可靠传输。`platform_url` 必须是本机 loopback HTTP 地址（默认 `http://127.0.0.1:45042`），不可填写云端 platform URL。
 
-## 个人协作模式（1.5.3，可选）
+## 个人协作模式（1.5.4，可选）
 
 本版本通过独立 `agent-comm-runtime` 包提供本地协作内核，
 `agent_comm_collaboration` 是它的 Hermes 原生适配工具，优先用于 Hermes
@@ -29,11 +29,19 @@ Gateway LLM；普通 adapter 直接发送被阻止。** 主人原生对话通过
 `inbox` 读取来信，使用 `prepare_action` / `dispatch` 在授权范围内继续。
 本版本不在后台唤醒桌面会话。关闭模式时保留下文描述的传统 Gateway 消息处理。
 
-首个联系人绑定和事项范围通过 Hermes 自己的 `clarify` 问题卡确认。用户在
+Hermes 原生会话中的首个联系人绑定和事项范围通过自己的 `clarify` 问题卡确认。用户在
 **该问题的文字回答框**输入“可以”或“同意”；主聊天输入框的文字在当前 Hermes
 中会跳过问题并开始新回合，不会批准旧请求。模型只能传 `approval_id`，不能
 传主人身份、`approved` 或回答正文。回调返回后重新验证连接、原生会话与回合；
 超时、关闭、条件回答、中断、子 agent 或外部平台上下文均不产生授权。
+
+新版源码另支持已配对的 Web 工作台：`contacts.add` 接受用户在联系人表单中
+确认的绑定，`approval.respond` 接受用户对 agent 生成的具体待确认请求的同意或
+拒绝。两项方法须在本机分别明确授权，主人主体来自本地配对，普通聊天、联系人
+信任或 `allow_from` 不授予此权限。结果写入同一协作库，并由 Web 读取同步；
+批准本身不会直接发送业务消息。Web 已处理的问题不能再被迟到的原生 callback
+覆盖。已有配对不会随升级自动增权，需安装匹配的 runtime 与 Web，并显式重配。
+安装包用户可查看[配对升级步骤](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md#4-配对远程-web)。
 
 问题卡的等待上限直接取自该次 runtime 授权租约（最多 360 秒，且不超过事项
 期限及宿主更短的问题等待设置）。到期、中断、回合变化或事项失效时，通过

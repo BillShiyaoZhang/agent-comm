@@ -1,7 +1,8 @@
-"""Local authority for contacts, mandates, native decisions and durable sends.
+"""Local authority for contacts, mandates, owner decisions and durable sends.
 
-Only the host bridge calls begin/finish_confirmation. They are deliberately not
-LLM tool handlers. SQLite protects this component's operations, not a host that
+The host bridge calls begin/finish_confirmation; scoped paired consoles use
+remote_mutation. Neither decision path is an LLM tool handler. SQLite protects
+this component's operations, not a host that
 also grants the model arbitrary access to its files or network credentials.
 """
 
@@ -43,6 +44,10 @@ def instant(value):
     if parsed.tzinfo is None:
         raise ValueError("timestamp must include timezone")
     return parsed.timestamp()
+
+
+class RemoteMutationConflict(ValueError):
+    code = "request_conflict"
 
 
 class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
@@ -161,7 +166,7 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
             return operation.get("task_id") if operation else None
         return None
 
-    def prepare_contact(self, contact_id, aliases, urn, owner_session):
+    def _contact_value(self, contact_id, aliases, urn, owner_session):
         self._owner(owner_session)
         identifier(contact_id, "contact_id")
         if contact_id == "self":
@@ -170,8 +175,11 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                 not isinstance(alias, str) or not 1 <= len(alias.strip()) <= 100 for alias in aliases):
             raise ValueError("Provide 1–16 nonempty local aliases")
         urn = validate_urn(urn)
-        contact = {"contact_id": contact_id, "aliases": sorted(set(alias.strip() for alias in aliases)),
-                   "urn": urn, "owner_id": self._principal(owner_session)}
+        return {"contact_id": contact_id, "aliases": sorted(set(alias.strip() for alias in aliases)),
+                "urn": urn, "owner_id": self._principal(owner_session)}
+
+    def prepare_contact(self, contact_id, aliases, urn, owner_session):
+        contact = self._contact_value(contact_id, aliases, urn, owner_session)
         with self._transaction():
             old = self._get("contact", contact_id)
             if old:
@@ -183,6 +191,98 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                         "确认这是同一个人的指定 agent 吗？")
             return {"decision": "ask", **self._approval("contact", contact_id, owner_session, contact,
                                                            question, self.clock() + 900)}
+
+    def remote_mutation(self, method, params, owner_session, *, request_key, fingerprint, valid_until):
+        """Trusted paired bridge only; commit mutation and replay result together.
+
+        The bridge authenticates the console, method scope and deadline before
+        this call. Never expose this entry point as an agent/model tool. Keeping
+        its receipt in this database closes the crash gap between Store commit
+        and the bridge's independent response-cache commit.
+        """
+        self._owner(owner_session)
+        if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+               for value in (request_key, fingerprint)):
+            raise ValueError("A stable authenticated remote request is required")
+        required = {"contacts.add": {"contact_id", "aliases", "urn"},
+                    "approval.respond": {"approval_id", "decision"}}
+        if method not in required or not isinstance(params, dict) or set(params) != required[method]:
+            raise ValueError("Unexpected remote mutation or parameters")
+        with self._transaction():
+            if valid_until <= self.clock():
+                raise ValueError("The remote request or local pairing expired before the mutation could start")
+            old = self._get("remote_mutation", request_key)
+            if old:
+                if old["fingerprint"] != fingerprint or old["owner_id"] != self._principal(owner_session):
+                    raise RemoteMutationConflict("This request ID was already used for different contents or owner")
+                return old["result"]
+            if method == "contacts.add":
+                result = self._remote_add_contact(params, owner_session)
+            else:
+                result = self._remote_respond_approval(params, owner_session)
+            self._put("remote_mutation", request_key, {"fingerprint": fingerprint,
+                      "owner_id": self._principal(owner_session), "result": result})
+            return result
+
+    def _remote_add_contact(self, params, owner_session):
+        contact = self._contact_value(params["contact_id"], params["aliases"], params["urn"], owner_session)
+        contact_id = contact["contact_id"]
+        old = self._get("contact", contact_id)
+        if old:
+            if old != contact:
+                raise ValueError("Confirmed contact is immutable; use a new ID and confirm a new binding")
+            return {"decision": "allow", "contact": old, "status": "already_confirmed"}
+        if any(self._belongs(item, owner_session) and item["urn"] == contact["urn"] for item in self._all("contact")):
+            raise ValueError("This agent identity is already a confirmed contact; use the existing contact")
+        self._put("contact", contact_id, contact)
+        # An exact pending local binding is also fulfilled by this explicit Web
+        # action. Invalidate any native callback and resolve its attention item.
+        for approval in self._all("approval"):
+            if (self._belongs(approval, owner_session) and approval["kind"] == "contact"
+                    and approval["subject_id"] == contact_id and approval["status"] in {"pending", "presenting", "expired"}):
+                if approval["payload"] == contact:
+                    approval.update(status="approved", owner_session=owner_session)
+                    approval.pop("token_hash", None)
+                    approval.pop("lease_until", None)
+                    self._put("approval", approval["approval_id"], approval)
+                    self._audit("remote_confirmation_resolved", approval_id=approval["approval_id"],
+                                owner_session=owner_session, status="approved")
+                else:
+                    self._attention_approval(approval, refresh=True)
+        self._audit("remote_contact_added", contact_id=contact_id, owner_session=owner_session)
+        return {"decision": "allow", "contact": contact, "status": "confirmed"}
+
+    def _remote_respond_approval(self, params, owner_session):
+        approval_id = identifier(params["approval_id"], "approval_id")
+        decision = params["decision"]
+        if not isinstance(decision, str) or decision not in {"approve", "deny"}:
+            raise ValueError("Approval decision must be approve or deny")
+        approval = self._get("approval", approval_id)
+        if not self._belongs(approval, owner_session):
+            raise ValueError("Approval does not belong to this paired owner")
+        status = "approved" if decision == "approve" else "denied"
+        result = {"approval_id": approval_id, "decision": "allow" if decision == "approve" else "deny",
+                  "status": "approved_once" if decision == "approve" else "denied"}
+        if approval["status"] in {"approved", "denied"}:
+            if approval["status"] != status:
+                raise ValueError("Approval is already decided")
+            return result
+        if approval["status"] not in {"pending", "presenting", "expired"} or not self._approval_current(approval):
+            raise ValueError("Approval belongs to an expired or revoked task, or a superseded proposal")
+        # A short native UI lease can be re-presented; it is not the underlying
+        # grant deadline. _approval_current checks the task/policy/proposal now.
+        # Web decisions replace that lease atomically so late native UI callbacks
+        # cannot contradict an already recorded decision.
+        approval.update(status=status, owner_session=owner_session)
+        approval.pop("token_hash", None)
+        approval.pop("lease_until", None)
+        if decision == "approve":
+            self._apply_approval(approval)
+        else:
+            self._deny_approval(approval)
+        self._put("approval", approval_id, approval)
+        self._audit("remote_confirmation_resolved", approval_id=approval_id, owner_session=owner_session, status=status)
+        return result
 
     def resolve_contact(self, name, owner_session):
         self._owner(owner_session)
@@ -442,6 +542,20 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
             self._put("approval", approval_id, approval)
             return {"token": token, "question": approval["question"], "expires_at": approval["expires_at"]}
 
+    def confirmation_result(self, approval_id, owner_session):
+        """Read a recorded owner decision; never consume an answer or a lease."""
+        self._owner(owner_session)
+        identifier(approval_id, "approval_id")
+        with self._lock:
+            approval = self._get("approval", approval_id)
+            if not self._belongs(approval, owner_session):
+                raise ValueError("Approval does not belong to this owner")
+            if approval["status"] not in {"approved", "denied"}:
+                return None
+            approved = approval["status"] == "approved"
+            return {"approval_id": approval_id, "decision": "allow" if approved else "deny",
+                    "status": "approved_once" if approved else "denied"}
+
     def _approval_current(self, approval):
         if approval["kind"] == "worker_policy":
             return self._worker_approval_current(approval)
@@ -484,16 +598,7 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                     result = {"decision": "allow", "status": "approved_once"}
                 elif no:
                     approval["status"] = "denied"
-                    if approval["kind"] == "worker_policy":
-                        policy = self._get("worker_policy", approval["subject_id"])
-                        policy["status"] = "revoked"
-                        self._put("worker_policy", policy["task_id"], policy)
-                    elif approval["kind"] == "collaboration_v2":
-                        self._v2_deny_approval(approval)
-                    elif approval["kind"] == "operation":
-                        operation = self._get("operation", approval["subject_id"])
-                        operation["status"] = "denied"
-                        self._put("operation", operation["operation_id"], operation)
+                    self._deny_approval(approval)
                     result = {"decision": "deny", "status": "denied"}
                 else:
                     approval["status"] = "pending"
@@ -503,6 +608,18 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
             self._audit("native_confirmation_resolved", approval_id=approval_id, owner_session=owner_session,
                         status=approval["status"])
             return {"approval_id": approval_id, **result}
+
+    def _deny_approval(self, approval):
+        if approval["kind"] == "worker_policy":
+            policy = self._get("worker_policy", approval["subject_id"])
+            policy["status"] = "revoked"
+            self._put("worker_policy", policy["task_id"], policy)
+        elif approval["kind"] == "collaboration_v2":
+            self._v2_deny_approval(approval)
+        elif approval["kind"] == "operation":
+            operation = self._get("operation", approval["subject_id"])
+            operation["status"] = "denied"
+            self._put("operation", operation["operation_id"], operation)
 
     def _apply_approval(self, approval):
         if approval["kind"] == "worker_policy":
@@ -754,7 +871,12 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
             approvals = [self._public_approval(a) for a in self._all("approval") if self._belongs(a, owner_session)
                          and a["status"] in {"pending", "presenting", "expired"} and self._approval_current(a)
                          and (task_id is None or self._approval_task_id(a) == task_id)]
+            decisions = [{key: a[key] for key in ("approval_id", "kind", "subject_id", "status")}
+                         for a in self._all("approval") if self._belongs(a, owner_session)
+                         and a["status"] in {"approved", "denied"}
+                         and (task_id is None or self._approval_task_id(a) == task_id)]
             return {"tasks": [{**t, "worker": self._worker_view(t)} for t in tasks], "operations": operations, "pending_confirmations": approvals,
+                    "approval_decisions": decisions,
                     "contacts": [c for c in self._all("contact") if self._belongs(c, owner_session)],
                     "next_actions": ["confirm_specific_pending_request" if approvals else "prepare_scoped_action",
                                      "read_inbox", "inspect_delivery_status", "revoke_task"],
