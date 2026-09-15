@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -222,12 +223,172 @@ class TestNativeBridge(unittest.TestCase):
                 self.assertEqual(self.call("resolve_contact", name="老王")["contacts"], [])
         with self.native() as record:
             approval = self.stage_contact()
-            record["agent"].clarify_callback = lambda q, c: (_ for _ in ()).throw(RuntimeError("UI gone"))
-            self.assertNotEqual(self.call("confirm", approval_id=approval).get("decision"), "allow")
-            # The failed callback released its lease, so the native question can be retried.
-            record["agent"].clarify_callback = lambda q, c: server._clarify_block("native-session", q, c)
+            from tui_gateway import server_requests
+            with patch.object(server_requests, "send_async", side_effect=RuntimeError("UI gone")):
+                self.assertNotEqual(self.call("confirm", approval_id=approval).get("decision"), "allow")
+            # The failed native request released its lease, so it can be retried.
             with self.answer():
                 self.assertEqual(self.call("confirm", approval_id=approval)["decision"], "allow")
+
+    def test_actual_lease_closes_card_before_long_host_timeout_and_late_yes_is_ignored(self):
+        from tui_gateway import server_requests
+        original_begin = Store.begin_confirmation
+
+        def short_lease(store, approval_id, owner_session):
+            result = original_begin(store, approval_id, owner_session)
+            with store._transaction():
+                approval = store._get("approval", approval_id)
+                approval["lease_until"] = store.clock() + .03
+                store._put("approval", approval_id, approval)
+            return result
+
+        with self.native(), self.answer(None) as events:
+            approval_id = self.stage_contact()
+            start = time.monotonic()
+            with patch.object(Store, "begin_confirmation", short_lease), \
+                    patch.object(server, "_clarify_timeout_seconds", return_value=3600):
+                result = self.call("confirm", approval_id=approval_id)
+            self.assertLess(time.monotonic() - start, 1)
+            self.assertEqual(result.get("reasons"), ["expired_or_superseded"], result)
+            request = next(payload for event, _, payload in events if event == "clarify.request")
+            cancel = [payload for event, _, payload in events if event == "request.cancel"]
+            self.assertEqual(len(cancel), 1)
+            self.assertEqual(cancel[0]["id"], request["request_id"])
+            self.assertFalse(self.question_pending(request["request_id"], "native-session"))
+            self.assertFalse(server_requests.resolve_response({"id": request["request_id"], "result": {"answer": "同意"}}))
+            store = Store(self.db)
+            try:
+                saved = store._get("approval", approval_id)
+                self.assertEqual(saved["status"], "expired")
+                self.assertNotIn("lease_until", saved)
+                self.assertNotIn("token_hash", saved)
+                self.assertEqual(store._all("contact"), [])
+            finally:
+                store.close()
+        # Contact binding itself has not been decided/expired by this UI lease.
+        with self.native(), self.answer("拒绝"):
+            self.assertEqual(self.call("confirm", approval_id=approval_id)["status"], "denied")
+
+    def test_shorter_host_timeout_clears_only_its_card_and_releases_lease(self):
+        from tui_gateway import server_requests
+        with self.native():
+            approval_id = self.stage_contact()
+            with patch.object(server_requests, "_write"):
+                settle_other = server_requests.send_async("clarify", "other-session",
+                    {"question": "unrelated native question", "choices": None}, lambda result: None)
+            try:
+                with self.answer(None) as events:
+                    result = self.call("confirm", approval_id=approval_id)
+                    self.assertEqual(result["decision"], "clarify")
+                    self.assertEqual(len(server_requests.open_requests("other-session")), 1)
+                    self.assertEqual(server_requests.open_requests("native-session"), [])
+                    self.assertEqual([event for event, _, _ in events].count("request.cancel"), 1)
+                store = Store(self.db)
+                try:
+                    saved = store._get("approval", approval_id)
+                    self.assertEqual(saved["status"], "pending")
+                    self.assertNotIn("token_hash", saved)
+                    self.assertNotIn("lease_until", saved)
+                finally:
+                    store.close()
+            finally:
+                with patch.object(server_requests, "_emit"):
+                    settle_other("test_cleanup")
+
+    def test_turn_cancel_without_response_withdraws_card_and_does_not_authorize(self):
+        with self.native() as record, self.answer(None, before_answer=lambda: record.update(_turn_cancel_requested=True)) as events:
+            approval_id = self.stage_contact()
+            result = self.call("confirm", approval_id=approval_id)
+            self.assertNotEqual(result.get("decision"), "allow")
+            self.assertEqual([event for event, _, _ in events].count("request.cancel"), 1)
+            store = Store(self.db)
+            try:
+                self.assertEqual(store._all("contact"), [])
+                saved = store._get("approval", approval_id)
+                self.assertEqual(saved["status"], "pending")
+                self.assertNotIn("token_hash", saved)
+                self.assertNotIn("lease_until", saved)
+            finally:
+                store.close()
+
+    def test_native_client_cancel_releases_current_lease(self):
+        from tui_gateway import server_requests
+        with self.native(), self.answer(None, before_answer=lambda: server_requests.cancel("native-session")) as events:
+            approval_id = self.stage_contact()
+            result = self.call("confirm", approval_id=approval_id)
+            self.assertEqual(result["decision"], "clarify")
+            self.assertEqual([event for event, _, _ in events].count("request.cancel"), 1)
+            self.assertEqual(server_requests.open_requests("native-session"), [])
+
+    def test_component_disabled_while_question_open_withdraws_without_answer(self):
+        from tui_gateway import server_requests
+        with self.native(), self.answer(None, before_answer=lambda: self.settings.update(collaboration_enabled=False)) as events:
+            approval_id = self.stage_contact()
+            result = self.call("confirm", approval_id=approval_id)
+            self.assertEqual(result["decision"], "clarify")
+            self.assertEqual([event for event, _, _ in events].count("request.cancel"), 1)
+            self.assertEqual(server_requests.open_requests("native-session"), [])
+            store = Store(self.db)
+            try:
+                saved = store._get("approval", approval_id)
+                self.assertEqual(saved["status"], "pending")
+                self.assertNotIn("token_hash", saved)
+                self.assertNotIn("lease_until", saved)
+                self.assertEqual(store._all("contact"), [])
+            finally:
+                store.close()
+
+    def test_missing_native_cancel_contract_fails_closed_without_callback_fallback(self):
+        from tui_gateway import server_requests
+        with self.native(), self.answer() as events:
+            approval_id = self.stage_contact()
+            with patch.object(server_requests, "send_async", None):
+                result = self.call("confirm", approval_id=approval_id)
+            self.assertNotEqual(result.get("decision"), "allow")
+            self.assertEqual(events, [])
+            self.assertEqual(self.call("resolve_contact", name="老王")["contacts"], [])
+
+    def test_native_frame_failure_after_registration_withdraws_its_request(self):
+        from tui_gateway import server_requests
+        for error in (RuntimeError, KeyboardInterrupt):
+            with self.subTest(error=error), self.native():
+                frames, cancelled = [], []
+                def broken_sink(frame):
+                    frames.append(frame)
+                    # The renderer may already have received the question when
+                    # the write fails; send_async has not returned its handle.
+                    raise error("native transport disappeared after registration")
+
+                approval_id = self.stage_contact("wang-" + error.__name__)
+                with patch.object(server_requests, "_write"):
+                    settle_other = server_requests.send_async("clarify", "native-session",
+                        {"question": "another question in the same session", "choices": None}, lambda result: None)
+                other = server_requests.open_requests("native-session")[0]
+                try:
+                    with patch.object(server_requests, "_write", side_effect=broken_sink), \
+                            patch.object(server_requests, "_emit", side_effect=lambda *args: cancelled.append(args)):
+                        result = self.call("confirm", approval_id=approval_id)
+                    self.assertEqual(result["decision"], "clarify")
+                    self.assertEqual(len(frames), 1)
+                    self.assertEqual(server_requests.open_requests("native-session"), [other])
+                    self.assertEqual(len(cancelled), 1)
+                    self.assertEqual(cancelled[0][0], "request.cancel")
+                    self.assertEqual(cancelled[0][2]["id"], frames[0]["id"])
+                    self.assertFalse(server_requests.resolve_response({"id": frames[0]["id"], "result": {"answer": "同意"}}))
+                    store = Store(self.db)
+                    try:
+                        saved = store._get("approval", approval_id)
+                        self.assertEqual(saved["status"], "pending")
+                        self.assertNotIn("token_hash", saved)
+                        self.assertNotIn("lease_until", saved)
+                        self.assertEqual(store._all("contact"), [])
+                    finally:
+                        store.close()
+                finally:
+                    with patch.object(server_requests, "_emit"):
+                        settle_other("test_cleanup")
+                with self.answer("拒绝"):
+                    self.assertEqual(self.call("confirm", approval_id=approval_id)["status"], "denied")
 
     def test_turn_change_cancel_and_detachment_reject_late_native_yes(self):
         for mutation in (lambda r: setattr(r["agent"], "_current_turn_id", "turn-2"),

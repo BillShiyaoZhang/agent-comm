@@ -154,10 +154,14 @@ class HermesHostPort:
 class HermesInteractionPort:
     descriptor = Descriptor("hermes-native-question", "interaction", ("confirmation",))
 
+    def __init__(self, store, approval_id):
+        self.store = store
+        self.approval_id = approval_id
+
     def request_confirmation(self, session, question):
-        question += ("\n\n请在这条 Hermes 原生问题的回答框中输入“同意”或“拒绝”。"
-                     "条件性回答不会视为授权；关闭、超时或在主聊天框发送文字均不会自动批准。")
-        return session.opaque.callback(question, None)
+        from .confirmation import request_confirmation
+        return request_confirmation(self.store, self.approval_id, session, question,
+                                    revalidate=HermesHostPort().revalidate)
 
 
 class _HermesTransportPort:
@@ -193,7 +197,7 @@ def handle_tool(args, **runtime):
         from .store import Store
         from .transport import HelperTransport
         store = Store(state_path(settings), local_urn=settings.get("urn"))
-        registry = AdapterRegistry().register(HermesHostPort()).register(HermesInteractionPort())
+        registry = AdapterRegistry().register(HermesHostPort()).register(HermesInteractionPort(store, args.get("approval_id")))
         memory_config = settings.get("collaboration_memory_adapter")
         if memory_config is not None:
             if not isinstance(memory_config, dict) or set(memory_config) - {"name", "options"} or "name" not in memory_config:
