@@ -84,6 +84,59 @@ becomes another turn and does not approve anything. A closed question, timeout,
 conditional answer or interrupted/replaced turn never implies permission. If the
 user adds a condition, revise the concrete action and show its updated question.
 
+## Durable attention and native recovery
+
+`{"action":"attention","after":0,"limit":100}` reads durable attention items.
+Follow its `cursor` while `has_more` is true. Item state is `open`, `resolved`,
+`superseded` or `expired`; opening, reading, copying a recovery instruction or
+dismissing a notification never approves an action. Read current `state` before
+handling an item. A reminder is not a new grant and does not authorize a send.
+
+The optional `agent-comm-attention` Hermes Desktop companion provides a permanent
+attention center and template notifications without starting the private LLM.
+Its “复制指令并打开原生对话” button only navigates and copies a request; the owner
+chooses whether to send that request. The companion cannot answer approvals.
+If the owner resumes in another conversation in the same profile, use the same
+current `approval_id` with `confirm`: the trusted native host creates a fresh
+presentation lease. An existing active lease must first be released or expire;
+re-presentation never extends the underlying task grant. Expired or superseded
+actions require a newly prepared action, not replaying an old “yes”.
+
+## Bilateral collaboration v2
+
+`{"action":"revoke_collaboration_maintenance","collaboration_id":"meeting-shared-1"}`
+stops the separately bounded fixed ACK/sync maintenance permission. Revoking a
+business task does not itself communicate a cancellation. If the business grant
+has expired or was revoked, `withdraw`, `cancel_request`, and `cancel_ack` may ask
+for a native, single-use recovery confirmation; this does not restore that grant.
+
+Use `{"action":"collaborations"}` (optionally `task_id`) to read structured
+bilateral state. Each participant first authorizes their own local task. Local
+task IDs can differ; `collaboration_id` associates their protocol events and
+does not grant authority. Neither joining nor proposing implies acceptance.
+
+Prepare a typed event through the existing pipeline:
+
+```json
+{"action":"prepare_collaboration","task_id":"my-meeting","collaboration_id":"meeting-shared-1","operation_id":"invite-1","kind":"invite","payload":{"peer_id":"wang-work"}}
+```
+
+| kind | Exact payload |
+|---|---|
+| `invite` | `peer_id`: confirmed local contact ID |
+| `join` | `message_id`: persisted authenticated invite wire ID |
+| `proposal` / `change_request` | Existing meeting fields: `proposal_id`, `version`, `topic`, `participant_ids`, `start`, `end` |
+| `receipt` | `event_id`: the event being acknowledged |
+| `accept`, `agreement`, `agreement_ack`, `withdraw`, `cancel_request`, `cancel_ack`, `sync_request`, `sync_response` | `{}`; runtime derives the current bound version and evidence |
+
+Keep the same operation ID for retries. On `ask`, use native `confirm` with the
+returned approval ID. On `allow`, `dispatch` that immutable operation without
+asking again. Unsupported fields or capabilities cannot be disguised as text.
+Incoming structured events remain peer statements; only the local grant and
+native confirmation determine local permission. Report proposal acceptance,
+agreement synchronization and transport acceptance separately. This version
+does not create a calendar event or run background LLM negotiation.
+
 ## Scope and typed actions
 
 `scope` requires every field below except optional `allowed_windows`. Use actual dates from the current task;

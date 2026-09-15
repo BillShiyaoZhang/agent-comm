@@ -19,6 +19,8 @@ import time
 from .policy import (compile_message, evaluate, render_action, render_scope,
                      validate_action, validate_scope)
 from .identity import validate_urn
+from .attention import AttentionMixin
+from .collaboration_v2 import CollaborationV2Mixin
 
 
 def canonical(value):
@@ -42,7 +44,7 @@ def instant(value):
     return parsed.timestamp()
 
 
-class Store:
+class Store(AttentionMixin, CollaborationV2Mixin):
     def __init__(self, path, *, clock=time.time, local_urn=None):
         self.clock = clock
         self.local_urn = local_urn
@@ -88,6 +90,8 @@ class Store:
     def _put(self, kind, key, body):
         self._db.execute("INSERT INTO collaboration_records VALUES (?,?,?) "
                          "ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body", (kind, key, canonical(body)))
+        if kind in {"approval", "inbound", "operation", "v2_operation", "v2_collaboration"}:
+            self._attention_on_write(kind, key, body)
 
     def _audit(self, event, **data):
         key = secrets.token_hex(16)
@@ -146,6 +150,15 @@ class Store:
     @staticmethod
     def _public_approval(approval):
         return {key: approval[key] for key in ("approval_id", "kind", "subject_id", "question", "expires_at", "status")}
+
+    def _approval_task_id(self, approval):
+        if approval["kind"] == "task":
+            return approval["subject_id"]
+        if approval["kind"] in {"operation", "collaboration_v2"}:
+            kind = "v2_operation" if approval["kind"] == "collaboration_v2" else "operation"
+            operation = self._get(kind, approval["subject_id"])
+            return operation.get("task_id") if operation else None
+        return None
 
     def prepare_contact(self, contact_id, aliases, urn, owner_session):
         self._owner(owner_session)
@@ -290,6 +303,8 @@ class Store:
         self._owner(owner_session)
         identifier(operation_id, "operation_id")
         with self._transaction():
+            if self._get("v2_operation", operation_id):
+                raise ValueError("Operation ID is already used by a v2 action")
             task = self._task(task_id, owner_session)
             verdict = self._evaluate_current(task, action)
             # Replaying an already reserved operation must remain possible when
@@ -416,6 +431,8 @@ class Store:
             elif approval["kind"] == "operation":
                 op = self._get("operation", approval["subject_id"])
                 deadline = min(deadline, instant(self._get("task", op["task_id"])["scope"]["expires_at"]))
+            elif approval["kind"] == "collaboration_v2":
+                deadline = min(deadline, self._v2_approval_deadline(approval))
             token = secrets.token_urlsafe(32)
             approval.update(status="presenting", owner_session=owner_session, expires_at=deadline,
                             token_hash=digest(token), lease_until=min(deadline, self.clock() + 360))
@@ -423,6 +440,8 @@ class Store:
             return {"token": token, "question": approval["question"], "expires_at": approval["expires_at"]}
 
     def _approval_current(self, approval):
+        if approval["kind"] == "collaboration_v2":
+            return self._v2_approval_current(approval)
         if approval["kind"] == "contact":
             return (approval["subject_id"] != "self"
                     and self._get("contact", approval["subject_id"]) in (None, approval["payload"]))
@@ -460,7 +479,9 @@ class Store:
                     result = {"decision": "allow", "status": "approved_once"}
                 elif no:
                     approval["status"] = "denied"
-                    if approval["kind"] == "operation":
+                    if approval["kind"] == "collaboration_v2":
+                        self._v2_deny_approval(approval)
+                    elif approval["kind"] == "operation":
                         operation = self._get("operation", approval["subject_id"])
                         operation["status"] = "denied"
                         self._put("operation", operation["operation_id"], operation)
@@ -475,7 +496,9 @@ class Store:
             return {"approval_id": approval_id, **result}
 
     def _apply_approval(self, approval):
-        if approval["kind"] == "contact":
+        if approval["kind"] == "collaboration_v2":
+            self._v2_apply_approval(approval)
+        elif approval["kind"] == "contact":
             self._put("contact", approval["subject_id"], approval["payload"])
         elif approval["kind"] == "task":
             task = self._get("task", approval["subject_id"])
@@ -507,6 +530,10 @@ class Store:
         Revocation therefore linearizes before or after queue acceptance, not
         during it. An uncertain attempt retains its ID and budget reservation.
         """
+        with self._lock:
+            is_v2 = self._get("v2_operation", operation_id) is not None
+        if is_v2:
+            return self.dispatch_collaboration(operation_id, owner_session, transport)
         with self._transaction():
             operation = self._get("operation", operation_id)
             if not self._belongs(operation, owner_session):
@@ -535,6 +562,7 @@ class Store:
                     return self._operation_view(operation)
                 task["used_count"] += 1
                 operation["status"] = "sending"
+                operation["reserved_at"] = self.clock()
                 operation["deliveries"] = [{"recipient_id": c["contact_id"], "recipient_urn": c["urn"],
                     "message_id": "collab-" + digest([operation_id, operation["hash"], c["urn"]])[:48],
                     "status": "pending"} for c in operation["recipients"]]
@@ -607,7 +635,8 @@ class Store:
                 return {"message_id": message_id, "status": "already_recorded"}
             self._put("inbound", message_id, {**record, "fingerprint": fingerprint, "received_at": self.clock(),
                                              "trust": "peer_statement_not_owner_authority"})
-            return {"message_id": message_id, "status": "recorded"}
+            protocol = self.ingest_v2_record(record)
+            return {"message_id": message_id, "status": "recorded", **({"collaboration": protocol} if protocol else {})}
 
     def sync_inbox(self, transport):
         recorded = 0
@@ -634,10 +663,36 @@ class Store:
     def _inbox(self, owner_session, task_id):
         contacts = {c["urn"] for c in self._all("contact") if self._belongs(c, owner_session)}
         tasks = {t["task_id"] for t in self._all("task") if self._belongs(t, owner_session)}
-        records = [m for m in self._all("inbound") if m["sender_urn"] in contacts
-                   and (not self._get("task", m.get("task_id", "")) or m.get("task_id") in tasks)
-                   and (task_id is None or (task_id in tasks and m.get("task_id") == task_id))]
+        records = []
+        for message in self._all("inbound"):
+            if message["sender_urn"] not in contacts:
+                continue
+            local_task = self._inbound_local_task(message, owner_session)
+            if local_task is False:
+                continue
+            if task_id is None or (task_id in tasks and local_task == task_id):
+                records.append(message)
         return sorted(records, key=lambda m: (m["received_at"], m["message_id"]))[-100:]
+
+    def _inbound_local_task(self, message, owner_session):
+        """Resolve shared wire IDs using a locally bound, owner-checked record."""
+        wire_id = message.get("task_id", "")
+        try:
+            packet = json.loads(message["text"])
+        except (ValueError, TypeError, RecursionError):
+            packet = None
+        if isinstance(packet, dict) and packet.get("protocol") == "agent-comm-collaboration/v2":
+            shared_id = packet.get("collaboration_id")
+            if not isinstance(shared_id, str):
+                return False
+            collaboration = self._get("v2_collaboration", shared_id)
+            if collaboration:
+                return collaboration["task_id"] if self._belongs(collaboration, owner_session) else False
+            return None
+        task = self._get("task", wire_id)
+        if task and not self._belongs(task, owner_session):
+            return False
+        return task["task_id"] if task else None
 
     def inbox(self, owner_session, task_id=None):
         self._owner(owner_session)
@@ -687,12 +742,12 @@ class Store:
             operations = [self._operation_view(o) for o in self._all("operation") if self._belongs(o, owner_session) and o["task_id"] in task_ids]
             approvals = [self._public_approval(a) for a in self._all("approval") if self._belongs(a, owner_session)
                          and a["status"] in {"pending", "presenting", "expired"} and self._approval_current(a)
-                         and (task_id is None or (a["kind"] == "task" and a["subject_id"] == task_id)
-                              or (a["kind"] == "operation" and self._get("operation", a["subject_id"])["task_id"] == task_id))]
+                         and (task_id is None or self._approval_task_id(a) == task_id)]
             return {"tasks": tasks, "operations": operations, "pending_confirmations": approvals,
                     "contacts": [c for c in self._all("contact") if self._belongs(c, owner_session)],
                     "next_actions": ["confirm_specific_pending_request" if approvals else "prepare_scoped_action",
                                      "read_inbox", "inspect_delivery_status", "revoke_task"],
                     "inbox": self._inbox(owner_session, task_id),
                     "proposals": [p for p in self._all("proposal") if p["task_id"] in task_ids],
+                    "collaboration": self.collaborations(owner_session, task_id),
                     "delivery_meaning": "accepted 仅指本机 helper 持久队列接受，不能当作对方同意或业务完成。"}

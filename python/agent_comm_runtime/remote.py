@@ -16,7 +16,7 @@ import time
 from .identity import validate_urn
 
 PROTOCOL = "agent-comm-control/v1"
-READ_METHODS = ("capabilities", "contacts.list", "collaboration.state", "inbox.list")
+READ_METHODS = ("capabilities", "contacts.list", "collaboration.state", "inbox.list", "attention.list")
 CONVERSATION_METHODS = ("conversation.send", "conversation.get")
 CONTROL_KINDS = {"control.request", "control.response"}
 
@@ -199,6 +199,9 @@ class RemoteBridge:
         if method == "contacts.list":
             self._params(params)
             return {"contacts": self.store.state(owner)["contacts"]}
+        if method == "attention.list":
+            self._params(params, optional=("after", "limit"))
+            return self.store.attention(owner, params.get("after", 0), params.get("limit", 100))
         if method in {"collaboration.state", "inbox.list"}:
             self._params(params, optional=("task_id",))
             task_id = params.get("task_id")

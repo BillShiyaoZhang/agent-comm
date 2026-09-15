@@ -226,6 +226,10 @@ TOOL_SCHEMA = {
         "describe lists registered host/memory/interaction/transport capabilities; absent ports return unsupported. "
         "Memory search/snapshots are opt-in adapters, not automatic full memory export. "
         "state restores contacts, pending confirmations and tasks; inbox syncs peer messages as untrusted data. "
+        "attention lists durable attention items (after/limit); reading or opening an item never approves it. "
+        "collaborations lists v2 agreements. prepare_collaboration prepares a typed v2 event with task_id, "
+        "collaboration_id, operation_id, kind and payload; it uses the same confirm/dispatch pipeline. "
+        "revoke_collaboration_maintenance stops fixed protocol maintenance sends for a collaboration_id. "
         "export_contact returns a short friend invitation with URN, public platform URL and introduction link; "
         "contact_id defaults to self. A confirmed friend's contact_id requires its explicit platform_url. "
         "For self, omit platform_url only when public_platform_url is configured. Exporting does not send or add a contact. "
@@ -242,9 +246,12 @@ TOOL_SCHEMA = {
         "type": "object", "additionalProperties": False, "required": ["action"],
         "properties": {
             "action": {"type": "string", "enum": list(_FIELDS)},
-            **{key: _STRING for key in ("task_id", "resource_id", "title", "text", "name", "contact_id", "urn", "approval_id", "operation_id", "message_id", "query", "reference", "platform_url")},
+            **{key: _STRING for key in ("task_id", "collaboration_id", "resource_id", "title", "text", "name", "contact_id", "urn", "approval_id", "operation_id", "message_id", "query", "reference", "platform_url")},
+            "kind": {"type": "string", "enum": ["invite", "join", "proposal", "change_request", "accept", "agreement", "agreement_ack", "withdraw", "cancel_request", "cancel_ack", "sync_request", "sync_response", "receipt"]},
+            "payload": {"type": "object", "description": "invite={peer_id}; join={message_id}; proposal/change_request=meeting payload; receipt={event_id}; other kinds={}. Strict runtime validation applies."},
+            "after": {"type": "integer", "minimum": 0},
             "aliases": _IDS,
-            "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "attention: 1–100; memory_search: 1–20"},
             "max_chars": {"type": "integer", "minimum": 1, "maximum": 8000},
             "scope": {"type": "object", "additionalProperties": False, "required": list(_SCOPE_PROPERTIES),
                 "properties": {**_SCOPE_PROPERTIES, "allowed_windows": {

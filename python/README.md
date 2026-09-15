@@ -1,6 +1,6 @@
 # Agent Comm 本地协作 Runtime
 
-`agent-comm-runtime` 0.1.0 是可独立安装的 Python 3.11+ 包，标准库即可运行。它不导入 Hermes、模型 SDK 或任何记忆库。联系人、授权、任务、不可变动作、资源快照、入站和审计的唯一实现位于这里；Hermes connector 是它的首个实际宿主适配器。Web 通过明确配对的远程控制协议读取 agent 侧状态，不另建一份联系人或事项主库。
+`agent-comm-runtime` 0.1.1 是可独立安装的 Python 3.11+ 包，标准库即可运行。它不导入 Hermes、模型 SDK 或任何记忆库。联系人、授权、任务、不可变动作、资源快照、入站和审计的唯一实现位于这里；Hermes connector 是它的首个实际宿主适配器。Web 通过明确配对的远程控制协议读取 agent 侧状态，不另建一份联系人或事项主库。
 
 ## 安装与独立运行
 
@@ -38,7 +38,30 @@ flowchart LR
     TP --> G["Go helper<br/>身份、密钥与持久收发"]
 ```
 
-扩展协议版本 `1.0`、Python 包版本 `0.1.0`、协作消息 `agent-comm-collaboration/v1`、SQLite schema `1` 是不同版本维度。当前 adapter API 要求版本精确相同；未来改变合约时显式升级，避免静默兼容猜测。原 Hermes 协作数据库无需迁移，原 `hermes-native-<profile hash>` 主体仍能读取旧记录。
+扩展协议版本 `1.0`、Python 包版本 `0.1.1`、协作消息 `agent-comm-collaboration/v1` / `v2`、SQLite schema `1` 是不同版本维度。当前 adapter API 要求版本精确相同；未来改变合约时显式升级，避免静默兼容猜测。v2 与 attention 使用新增记录类型，旧 v1 行保留；原 `hermes-native-<profile hash>` 主体仍能读取旧记录。不能用旧二进制继续处理已建立的 v2 协作。
+
+## 双边协作与持久提醒
+
+v2 的模型入口是 `prepare_collaboration`，必需字段为 `task_id`、`collaboration_id`、`operation_id`、`kind`、`payload`。本方与对方各自使用自己的 task_id，只有 collaboration_id 在网络上共享。邀请和加入各自取得本机原生确认；模型与对端都不能提交主人身份或同意答案。
+
+| kind | payload 与行为 |
+| --- | --- |
+| `invite` | `{ "peer_id": "已确认的本地联系人ID" }` |
+| `join` | `{ "message_id": "已认证入站邀请的消息ID" }` |
+| `proposal` / `change_request` | 与 `propose_meeting` 相同的方案字段；本地参与人 ID 转为绝对 URN。发起方发布连续版本，对方提出修改请求。 |
+| `accept` / `withdraw` / `cancel_request` / `cancel_ack` | `{}`；从当前本地事实编译确切版本及引用，不能额外携带授权声明。 |
+| `agreement` / `agreement_ack` / `sync_request` / `sync_response` | `{}`；固定模板维护消息，须有原生批准的独立有限许可。 |
+| `receipt` | `{ "event_id": "已保存事件ID" }` |
+
+准备结果若为 `ask`，通过已有 `confirm(approval_id)` 重新展示原生问题；获准后通过 `dispatch(operation_id)` 发送。`collaborations` 查看双方阶段、等待原因和待发操作。`state` 的 `collaboration` 字段提供相同投影。v1/v2 业务动作共享任务累计预算，维护许可最多 32 条、最多 7 天，并在邀请/加入确认中明确展示。
+
+本阶段由宿主主动恢复、调用 `inbox` 接收和 `dispatch` 逐段驱动；协议可生成固定维护待发项，但没有后台私人模型自动协商。`accepted` 只代表本机 helper 接受消息；双方同版显式接受、发起方形成持久约定并完成 ACK/回执同步后才到 `closed`。首版只协调线上会议方案（`agreement_only`），没有日历写入。对方代表权标注为 `peer_attested`，不冒充独立核验的人类签名。
+
+`revoke_collaboration_maintenance(collaboration_id)` 可单独停止维护许可。原业务委托过期、撤销或预算耗尽后的 `withdraw`、`cancel_request`、`cancel_ack` 必须重新取得原生的 900 秒单事件恢复许可；它不增加原委托预算，也不恢复原业务权限。
+
+`attention` 返回 `agent-comm-attention/v1`：`items`、整数 `cursor`、`has_more`。参数 `after` 为非负游标、`limit` 为 1–100。业务写入与提醒投影在同一 SQLite 事务中提交；每个事项只有最新状态，revision 可跳号，关闭状态保留为 tombstone。重复消息不重新提醒；拉取或标为已读均不会产生授权。
+
+远程读取需在本机配对中明确增加 `attention.list`，旧配对不会自动扩大。Hermes companion 和 Web 通知中心读取这些持久事实；通知渠道的尝试不代表系统已经显示或用户已经阅读。
 
 ## 已实现的扩展端口
 

@@ -2,7 +2,7 @@
 
 本插件连接本机 `agent-comm-helper`，由 helper 负责密钥、加密和当前 HTTPS MQ 可靠传输。`platform_url` 必须是本机 loopback HTTP 地址（默认 `http://127.0.0.1:45042`），不可填写云端 platform URL。
 
-## 个人协作模式（1.3.0，可选）
+## 个人协作模式（1.4.0，可选）
 
 本版本通过独立 `agent-comm-runtime` 包提供本地协作内核，
 `agent_comm_collaboration` 是它的 Hermes 原生适配工具，优先用于 Hermes
@@ -58,6 +58,59 @@ Gateway LLM；普通 adapter 直接发送被阻止。** 主人原生对话通过
 scope/payload 规格见随包的 `skills/personal-collaboration/SKILL.md`。测试仍使用
 文末命令，涵盖策略、SQLite 恢复/并发/崩溃、原生 callback、helper HTTP 与
 传统 connector 兼容性；不会修改真实 profile、调用模型或向真实对端发送消息。
+
+## 协作待办与纯提醒 companion（N1）
+
+随 Python wheel 提供可选 `agent-comm-attention` Hermes 插件包，包含 Desktop
+前端与 dashboard 只读 API。它每 15 秒读取当前连接/profile 的持久待办，不启动
+LLM，不发送对端消息，不申请或消耗原生确认租约。它提供：
+
+- 永久“协作待办”侧栏页和状态栏分别显示未读与待处理数量；普通来信和完成记录
+  显示在“最新进展”。任何开放事项都可标为已读，授权卡已读后仍待处理；解决、
+  撤销或过期后按新 revision 更新。
+- 前台应用内提示和后台 OS 原生提醒；只发送程序生成的计数摘要，不把来信正文
+  或资料放进锁屏通知。首次同步历史普通消息不弹提醒，未解决的决定和恢复项仍展示。
+- 按连接/profile/owner/item revision 持久保存**提醒尝试**水位，用 Web Locks
+  序列化多个窗口的 claim。OS 偏好、焦点、重连基线可能抑制通知，claim 不代表送达。
+  缺少 Web Locks 时保留中心和计数，明确显示系统提醒不可用；不静默假装已提醒。
+- 点击仅导航。“复制指令并打开原生对话”会先重新同步，再复制恢复请求并打开
+  同 profile 的既有原生会话；会话不可恢复时打开新对话。用户自行发送恢复请求，
+  由现有原生 question callback 展示、收集确切决定。已读和关闭通知都不等于批准。
+
+导出到一个**尚不存在**的目录进行检查：
+
+```sh
+python -m hermes_platform_agent_comm.companion_export --output ./agent-comm-attention
+```
+
+也可调用安装 wheel 后的 `agent-comm-hermes-companion --output ...`。导出不会
+修改 Hermes 配置、启用插件、重启服务或发送提醒。包内 `desktop/plugin.js` 是
+Hermes 的纯 ESM 运行时插件，`dashboard/manifest.json` 声明 profile 受控 API。
+
+部署时将检查后的目录安装到 Hermes 的可信用户插件目录
+`<Hermes root>/plugins/agent-comm-attention/`；保留已有插件和配置。通过 Hermes
+的插件设置显式启用 `agent-comm-attention` 的后端，并在 Desktop 的能力/插件
+设置启用同名 Desktop contribution。Gateway/dashboard 使用的 Python 环境均须
+安装当前 runtime 与 connector wheel。重启 dashboard 加载 API；Desktop 重载
+插件。当前 profile 仍需 `collaboration_enabled: true`。
+
+只读接口为 `GET /api/plugins/agent-comm-attention/attention?after=0&limit=100`；
+可选 `profile` 由 Hermes 自身解析并限定到该 dashboard owner 管理的 profile。
+后端使用 Hermes `_require_token` 和 `_config_profile_scope`，不接受 owner、
+任意文件路径、审批答案或 token 参数；不增加自己的认证旁路。响应使用
+`agent-comm-attention/v1` 并添加 `owner_key` 与只供导航的 `resume` 信息。
+
+Desktop 必须运行且连接到对应 profile 才能轮询和触发系统提醒；关闭应用或
+切换其他连接后，待办仍保存在 agent 数据库，重连后重新同步。独立网页或移动端
+推送不由此 companion 提供。旧的 Hermes 内部接口缺失时 API 明确 unavailable，
+不会降级为无认证访问或启动私人模型。
+
+验证（全部使用临时数据，前端通知使用 fake host）：
+
+```sh
+python -m unittest discover -s connectors/hermes-platform/tests -p 'test_attention*.py' -v
+node --experimental-vm-modules connectors/hermes-platform/tests/test_attention_desktop.mjs
+```
 
 ## 导出加好友文案
 
@@ -188,13 +241,13 @@ helper 持久 inbox 是未消费消息的来源。插件同时通过 SSE 和 `GE
 在安装了 Hermes 与本插件依赖的 Python 环境运行：
 
 ```sh
-PYTHONPATH=/path/to/hermes-agent:/path/to/agent-comm/python python -m unittest discover -s connectors/hermes-platform/tests -v
+PYTHONPATH=/path/to/hermes-agent:/path/to/agent-comm/python:/path/to/agent-comm/connectors/hermes-platform python -m unittest discover -s connectors/hermes-platform/tests -v
 ```
 
 PowerShell：
 
 ```powershell
-$env:PYTHONPATH = 'C:/path/to/hermes-agent;C:/path/to/agent-comm/python'
+$env:PYTHONPATH = 'C:/path/to/hermes-agent;C:/path/to/agent-comm/python;C:/path/to/agent-comm/connectors/hermes-platform'
 $env:PYTHONDONTWRITEBYTECODE = '1'
 & 'C:/path/to/hermes-agent/venv/Scripts/python.exe' -m unittest discover -s connectors/hermes-platform/tests -v
 ```
