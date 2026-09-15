@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="hermes-platform-agent-comm",
-    version="1.5.2",
+    version="1.5.3",
     description="Durable agent-comm messaging adapter for Hermes Gateway",
     packages=find_packages(),
     package_data={"hermes_platform_agent_comm": ["plugin.yaml", "skills/personal-collaboration/SKILL.md"],

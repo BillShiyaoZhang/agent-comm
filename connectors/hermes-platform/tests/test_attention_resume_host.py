@@ -8,6 +8,65 @@ import unittest
 
 
 class RealAttentionResumeHostTests(unittest.TestCase):
+    def test_generated_recovery_calls_pass_connector_guard_and_read_the_referenced_source(self):
+        code = r'''
+import json, os, re
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from agent_comm_runtime import Store
+from hermes_platform_agent_comm.collaboration.attention import _instruction
+from hermes_platform_agent_comm.collaboration.hermes import _validate_args, profile_principal
+
+owner = profile_principal() + '|attention'
+store = Store(Path(os.environ['HERMES_HOME']) / 'collaboration.sqlite3', local_urn='urn:agent-comm:agent:self')
+try:
+    store.prepare_contact('friend', ['Peer'], 'urn:agent-comm:agent:peer', owner)
+    now = datetime.now(timezone.utc)
+    store.prepare_task('task-one', {
+        'purpose': 'test exact generated calls', 'topic': 'test', 'capabilities': ['send_text'],
+        'recipient_ids': ['self'], 'participant_ids': ['self'], 'resource_ids': [],
+        'window_start': now.isoformat(), 'window_end': (now + timedelta(hours=1)).isoformat(),
+        'expires_at': (now + timedelta(hours=1)).isoformat(),
+        'max_duration_minutes': 1, 'max_candidates': 1, 'max_actions': 1}, owner)
+    source_items = store.attention(owner)['items']
+    assert len(source_items) == 2
+    for item in source_items:  # covers a task and a no-task contact approval
+        text = _instruction(item)
+        calls = [json.loads(block) for block in re.findall(r'```json\n(.*?)\n```', text, re.S)]
+        assert len(calls) == 3, calls
+        for call in calls:
+            _validate_args(call)  # real connector/runtime guard, never a permissive test stub
+        assert [call['action'] for call in calls] == ['state', 'attention', 'confirm']
+        state_call, attention_call, confirm_call = calls
+        state = store.state(owner, **{key: value for key, value in state_call.items() if key != 'action'})
+        feed = store.attention(owner, **{key: value for key, value in attention_call.items() if key != 'action'})
+        assert any(row['attention_id'] == item['attention_id'] for row in feed['items'])
+        assert any(row['approval_id'] == confirm_call['approval_id'] for row in state['pending_confirmations'])
+        assert attention_call['after'] == max(0, item['revision'] - 1)
+        assert attention_call['limit'] == 100
+        for invalid in ({'action': 'attention', 'attention_id': item['attention_id'],
+                         'target': item['target'], 'revision': item['revision']},
+                        {**attention_call, 'task_id': 'task-one'}):
+            try:
+                _validate_args(invalid)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('Reference fields must remain rejected by the real guard')
+    assert store._all('operation') == []
+    assert all(item['status'] == 'pending' and 'token_hash' not in item for item in store._all('approval'))
+finally:
+    store.close()
+print('generated state/attention/confirm JSON passes actual connector guard and reads actual pending source')
+'''
+        with tempfile.TemporaryDirectory(prefix="agent-comm-instruction-host-") as home:
+            env = dict(os.environ, HERMES_HOME=home, HERMES_TEST_ISOLATION="1", PYTHONDONTWRITEBYTECODE="1")
+            connector = str(Path(__file__).resolve().parents[1])
+            env["PYTHONPATH"] = connector + os.pathsep + env.get("PYTHONPATH", "")
+            result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace", timeout=45)
+            self.assertEqual(result.returncode, 0, result.stderr[-4000:] + result.stdout[-2000:])
+
     def test_real_session_db_rejects_generic_title_and_accepts_distinct_handling_sessions(self):
         code = r'''
 import os
