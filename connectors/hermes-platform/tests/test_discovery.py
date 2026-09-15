@@ -19,6 +19,7 @@ class TestDiscovery(unittest.TestCase):
                 "plugins": {"enabled": ["agent_comm"]},
                 "platforms": {"agent_comm": {"enabled": True, "extra": {
                     "platform_url": "http://127.0.0.1:45042",
+                    "public_platform_url": "https://agents.example.org",
                     "allow_from": ["urn:agent-comm:agent:chosen-peer"],
                     "state_path": str(home / "receipts.sqlite3"),
                 }}},
@@ -45,6 +46,10 @@ config = load_gateway_config()
 cfg = config.platforms[Platform("agent_comm")]
 assert cfg.enabled
 assert cfg.extra["platform_url"] == "http://127.0.0.1:45042", cfg.extra
+from hermes_platform_agent_comm.collaboration.hermes import read_settings
+settings = read_settings()
+assert settings["public_platform_url"] == "https://agents.example.org", settings
+assert settings["platform_url"] == "http://127.0.0.1:45042", settings
 assert cfg.extra["allow_from"] == ["urn:agent-comm:agent:chosen-peer"], cfg.extra
 adapter = platform_registry.create_adapter("agent_comm", cfg)
 assert adapter.__class__.__name__ == "AgentCommAdapter"

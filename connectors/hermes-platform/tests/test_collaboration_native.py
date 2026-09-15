@@ -1,12 +1,12 @@
 """Real Hermes native callback/authority integration; no model or real account.
 
-The actual tui_gateway registry, ContextVars, transport ownership checks, native
-clarify pending table and clarify.respond RPC are used. Only native rendering is
+The actual tui_gateway registry, ContextVars, transport ownership checks and native
+clarify request/response lifecycle are used. Only native rendering is
 replaced by a deterministic test client. Every file is under a temporary home.
 """
 import asyncio
 import atexit
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -31,7 +31,7 @@ from hermes_platform_agent_comm.platform import AgentCommAdapter
 from hermes_platform_agent_comm.collaboration import hermes
 from hermes_platform_agent_comm.collaboration.store import Store
 from agent.delegation_context import delegated_child_context
-from tui_gateway.transport import bind_transport, reset_transport
+from tui_gateway.transport import bind_transport, current_transport, reset_transport
 
 _stdout = sys.stdout
 from tui_gateway import server
@@ -85,6 +85,15 @@ class TestNativeBridge(unittest.TestCase):
         self.assertEqual(result["decision"], "ask", result)
         return result["approval_id"]
 
+    def question_pending(self, request_id, sid):
+        if request_id in getattr(server, "_pending", {}):
+            return True
+        try:
+            from tui_gateway import server_requests
+        except ImportError:
+            return False
+        return any(item["id"] == request_id for item in server_requests.open_requests(sid))
+
     @contextmanager
     def answer(self, response="同意", before_answer=None):
         events = []
@@ -93,7 +102,7 @@ class TestNativeBridge(unittest.TestCase):
             events.append((event, sid, dict(payload)))
             if event == "clarify.request":
                 self.assertIsNone(payload["choices"])
-                self.assertIn(payload["request_id"], server._pending)
+                self.assertTrue(self.question_pending(payload["request_id"], sid))
                 if before_answer:
                     before_answer()
                 if response is not None:
@@ -101,7 +110,33 @@ class TestNativeBridge(unittest.TestCase):
                         "method": "clarify.respond", "params": {"request_id": payload["request_id"], "answer": response}})
                     self.assertNotIn("error", result, result)
 
-        with patch.object(server, "_emit", side_effect=emit), patch.object(server, "_clarify_timeout_seconds", return_value=.03):
+        # Current Hermes sends a JSON-RPC server request; the previously verified
+        # host used clarify.request/clarify.respond. Exercise each host's actual
+        # response router while replacing only the renderer's wire sink.
+        def write(frame):
+            if frame.get("method") != "clarify":
+                return
+            payload = {**frame["params"], "request_id": frame["id"]}
+            sid = payload["session_id"]
+            events.append(("clarify.request", sid, payload))
+            self.assertIsNone(payload["choices"])
+            self.assertTrue(self.question_pending(frame["id"], sid))
+            if before_answer:
+                before_answer()
+            if response is not None:
+                self.assertIsNone(server.dispatch({"jsonrpc": "2.0", "id": frame["id"],
+                                                   "result": {"answer": response}}, transport=current_transport()))
+
+        with ExitStack() as patches:
+            patches.enter_context(patch.object(server, "_emit", side_effect=emit))
+            patches.enter_context(patch.object(server, "_clarify_timeout_seconds", return_value=.03))
+            try:
+                from tui_gateway import server_requests
+            except ImportError:
+                pass
+            else:
+                patches.enter_context(patch.object(server_requests, "_write", side_effect=write))
+                patches.enter_context(patch.object(server_requests, "_emit", side_effect=emit))
             yield events
 
     def test_real_native_question_and_response_confirm_only_displayed_binding(self):
@@ -113,7 +148,7 @@ class TestNativeBridge(unittest.TestCase):
             self.assertEqual(len(events), 1)
             self.assertIn("urn:agent-comm:agent:peer", events[0][2]["question"])
             self.assertNotIn("token", json.dumps(result))
-            self.assertNotIn(events[0][2]["request_id"], server._pending)
+            self.assertFalse(self.question_pending(events[0][2]["request_id"], events[0][1]))
             replay = self.call("confirm", approval_id=approval)
             self.assertEqual(replay["status"], "not_executed")
             self.assertEqual(len(events), 1)
@@ -126,6 +161,38 @@ class TestNativeBridge(unittest.TestCase):
                 result = self.call("confirm", approval_id=approval, **{field: value})
                 self.assertEqual(result["status"], "not_executed", field)
             self.assertEqual(self.call("resolve_contact", name="老王")["contacts"], [])
+
+    def test_export_self_uses_public_platform_without_a_native_question_or_send(self):
+        self.settings.update(platform_url="http://127.0.0.1:45042",
+                             public_platform_url="https://agents.example.org")
+        with self.native(), self.answer() as events:
+            before = self.call("state")
+            result = self.call("export_contact")
+            self.assertEqual(result["status"], "exported", result)
+            self.assertEqual(result["urn"], self.settings["urn"])
+            self.assertEqual(result["platform_url"], self.settings["public_platform_url"])
+            self.assertIn(result["introduction_url"], result["text"])
+            self.assertNotIn("127.0.0.1", result["text"])
+            self.assertEqual(len(result["text"].splitlines()), 1)
+            self.assertEqual(events, [])
+            self.assertEqual(self.call("state"), before)
+
+    def test_export_never_substitutes_helper_url_and_friend_needs_its_own_platform(self):
+        self.settings["platform_url"] = "http://127.0.0.1:45042"
+        with self.native(), self.answer() as events:
+            self.assertEqual(self.call("export_contact")["status"], "not_executed")
+            self.call("confirm", approval_id=self.stage_contact())
+            self.settings["public_platform_url"] = "https://owner-platform.example.org"
+            self.assertEqual(self.call("export_contact", contact_id="wang")["status"], "not_executed")
+            result = self.call("export_contact", contact_id="wang", platform_url="https://peer-platform.example.org")
+            self.assertEqual(result["status"], "exported", result)
+            self.assertEqual(result["urn"], "urn:agent-comm:agent:peer")
+            self.assertEqual(result["platform_url"], "https://peer-platform.example.org")
+            self.assertEqual(len(events), 1)  # Only the pre-existing contact-binding question.
+
+    def test_export_rejects_non_native_call_before_opening_state(self):
+        self.assertEqual(self.call("export_contact", platform_url="https://agents.example.org")["status"], "not_executed")
+        self.assertFalse(self.db.exists())
 
     def test_owner_context_cannot_be_recreated_with_public_ids(self):
         self.assertEqual(self.call("state")["status"], "not_executed")

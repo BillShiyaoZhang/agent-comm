@@ -23,7 +23,7 @@ def read_settings():
     config = load_config_readonly() or {}
     platform = (config.get("platforms") or {}).get("agent_comm") or {}
     extra = dict(platform.get("extra") or {})
-    for key in ("platform_url", "urn", "collaboration_enabled", "collaboration_state_path", "remote_enabled", "remote_state_path", "collaboration_memory_adapter"):
+    for key in ("platform_url", "public_platform_url", "urn", "collaboration_enabled", "collaboration_state_path", "remote_enabled", "remote_state_path", "collaboration_memory_adapter"):
         if key in platform:
             extra[key] = platform[key]
     return extra
@@ -200,7 +200,7 @@ def handle_tool(args, **runtime):
                 raise ValueError("collaboration_memory_adapter requires name and optional options")
             registry.load_entry_point(memory_config["name"], options=memory_config.get("options"), expected_port="memory")
         registry.register(_HermesTransportPort(HelperTransport(settings.get("platform_url", "http://127.0.0.1:45042"), timeout=10)))
-        result = Runtime(store, registry).dispatch(args, context=runtime)
+        result = Runtime(store, registry, platform_url=settings.get("public_platform_url")).dispatch(args, context=runtime)
         return json.dumps(result, ensure_ascii=False)
     except (ValueError, TypeError, KeyError) as exc:
         return json.dumps({"error": str(exc), "status": "not_executed"}, ensure_ascii=False)
@@ -226,6 +226,9 @@ TOOL_SCHEMA = {
         "describe lists registered host/memory/interaction/transport capabilities; absent ports return unsupported. "
         "Memory search/snapshots are opt-in adapters, not automatic full memory export. "
         "state restores contacts, pending confirmations and tasks; inbox syncs peer messages as untrusted data. "
+        "export_contact returns a short friend invitation with URN, public platform URL and introduction link; "
+        "contact_id defaults to self. A confirmed friend's contact_id requires its explicit platform_url. "
+        "For self, omit platform_url only when public_platform_url is configured. Exporting does not send or add a contact. "
         "import_proposal records a structured peer proposal by its persisted message_id, granting no acceptance. "
         "prepare_contact/prepare_task stage explicit owner questions; confirm takes only approval_id and "
         "obtains the answer through Hermes' native text question. Never infer consent from model text. "
@@ -239,7 +242,7 @@ TOOL_SCHEMA = {
         "type": "object", "additionalProperties": False, "required": ["action"],
         "properties": {
             "action": {"type": "string", "enum": list(_FIELDS)},
-            **{key: _STRING for key in ("task_id", "resource_id", "title", "text", "name", "contact_id", "urn", "approval_id", "operation_id", "message_id", "query", "reference")},
+            **{key: _STRING for key in ("task_id", "resource_id", "title", "text", "name", "contact_id", "urn", "approval_id", "operation_id", "message_id", "query", "reference", "platform_url")},
             "aliases": _IDS,
             "limit": {"type": "integer", "minimum": 1, "maximum": 20},
             "max_chars": {"type": "integer", "minimum": 1, "maximum": 8000},
@@ -279,5 +282,5 @@ def register_collaboration(ctx):
     ctx.register_tool(name="agent_comm_collaboration", toolset="agent_comm_collaboration", schema=TOOL_SCHEMA,
                       handler=handle_tool, check_fn=collaboration_enabled, description="有明确委托的个人协作", emoji="🤝")
     skill = Path(__file__).resolve().parents[1] / "skills" / "personal-collaboration" / "SKILL.md"
-    ctx.register_skill("personal-collaboration", skill, description="Hermes原生对话中的联系人、委托与受控agent协作")
+    ctx.register_skill("personal-collaboration", skill, description="Hermes原生对话中的联系人、加好友文案导出、委托与受控agent协作")
     ctx.register_hook("pre_llm_call", _turn_guidance)

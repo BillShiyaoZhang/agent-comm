@@ -1,115 +1,98 @@
 ---
 name: agent-comm
-description: >
-  Hybrid P2P encrypted agent messaging SDK: A unified minimalist channel based on HTTP REST + SSE + Companion Cryptography Helper.
-  Project Path: <your_workspace_path>/agent-comm/
-  Activate when: You need to set up secure communication channels, resolve URNs, and exchange E2E encrypted messages natively via OpenClaw Channel or Hermes Gateway.
+description: Use agent-comm to identify agents, manage contacts, export add-contact text, exchange durable encrypted messages, or integrate Hermes personal collaboration and a paired remote console. Applies to agent-comm communication and integration; contact trust does not confer owner authority.
 ---
 
-# agent-comm — Agent Reference Manual 🤖
+# agent-comm
 
-This manual is written for **AI Agents** (like yourself) using the `agent-comm` communication skill. It provides actionable instructions, API references, and conceptual architectures to help you successfully participate in secure communications.
+Choose the implemented entry point for the user's task. An SDK function does not imply that the host has registered a corresponding tool.
 
-This skill relies on standard HTTP/SSE connections between your host agent framework and the locally running Go companion background daemon. The daemon runs locally to handle physical P2P direct dialing, routing, and Double Ratchet encrypted communications, without requiring the agent instance itself to run cryptography math operations.
+<a id="capability-routing"></a>
+## Capability routing
 
----
+| User need | Entry point and details |
+| --- | --- |
+| Inspect the local URN, start an identity, register communication keys | [Identity and helper](#identity-helper) |
+| Send, recover incoming messages, inspect delivery, acknowledge consumption | [Reliable messages](#reliable-messaging) |
+| Collaborate by contact name, share material/time, propose/accept meetings, revoke a grant | [Personal collaboration](#personal-collaboration) |
+| Export concise text for adding yourself or one known agent as a contact | [Add-contact text](#export-contact) |
+| Pair/revoke a console, read remote state, submit/query a Hermes turn | [Remote console](#remote-control) |
+| Full P2P cards, WoT, Double Ratchet, low-level cryptographic integration | [Go SDK](#sdk-only) |
 
-## 🎯 When to Activate This Skill
+The [capability map](docs/CAPABILITY_SKILL_MAP.md) links implementation to skills and records earlier omissions and interface boundaries. Load only references relevant to the current task.
 
-Activate this skill when:
-- The user requests to connect your agent instance with another agent or the cloud Web Dashboard using end-to-end encryption.
-- Your host agent framework needs to spin up the `agent-comm` connector to subscribe to and send real-time messages.
-- You need to perform cryptographic operations, query contacts, or manage local keys.
+<a id="identity-helper"></a>
+## Identity and helper
 
----
+Read the configured local helper's `GET /info` and check `urn`, `peer_id`, `addrs`, and `status`; `status=running` does not prove cloud connectivity. Preserve existing keys and URNs rather than recreating identities because their namespace differs.
 
-## 📊 Local Daemon Communication Architecture
+Start with `agent-comm-helper daemon <absolute_keys_dir> <cloud_platform_url> [local_port]` when needed; initialize with `init <keys_dir>`. Give independent identities separate directories and local ports, with one active consumer per inbox. The default local port is 45042; use the actual configuration.
 
-You must understand and adhere to the following architecture for data propagation:
+Local `POST /api/v1/contacts` registers communication keys and cached addresses; there is no HTTP contact list/delete endpoint. Runtime-confirmed names, aliases, and URNs belong to a separate collaboration data layer. A communication contact or `trusted` flag grants no Hermes pairing, owner identity, tool execution, or resource disclosure permission.
 
-```text
-┌───────────────────────┐                    ┌─────────────────────────┐
-│      AI Agent         │◄──[HTTP SSE stream]│                         │
-│ (OpenClaw / Hermes)   │───[REST POST mq]──►│   本地守护进程 (Daemon)   │
-└───────────────────────┘                    │  (Go agent-comm-helper) │
-                                             └─────────────────────────┘
-                                                ▲  ▲             ▲
-                                                │  │             │
-                                  [P2P Direct] ─┘  │             └─ [Relay/DHT/MQ]
-                                                   ▼                     ▼
-                                            ┌─────────────┐       ┌─────────────┐
-                                            │ 其他智能体   │       │   Platform  │
-                                            │ (P2P Peer)  │       │   (Cloud)   │
-                                            └─────────────┘       └─────────────┘
-```
+See [Helper API](references/helper-api-en.md) for startup, contact JSON, and raw signing/encryption commands.
 
-1. **Agent ──► Local Daemon**: When you send messages, the host framework submits a standard **HTTP POST** request (`/api/v1/mq/store`) to the locally running Go daemon. The daemon automatically encrypts the payload using the Double Ratchet protocol and attempts to deliver it directly via P2P. If P2P delivery fails, it falls back to posting it to the cloud MQ platform.
-2. **Local Daemon ──► Agent**: Your framework establishes a persistent **HTTP SSE (Server-Sent Events)** stream (`GET /api/v1/mq/subscribe`) targeting the local daemon. The daemon receives incoming P2P connections or polls the platform's MQ, decrypts envelopes, and streams the plaintext messages to your framework in real-time.
-3. **Companion Helper (Daemon)**: You do not need to implement complex libp2p nodes or Double Ratchet state machines in your own runtime language. The framework automatically interacts with the background Go daemon `agent-comm-helper` (running on port `45042` by default) to handle communication.
+<a id="reliable-messaging"></a>
+## Reliable messages
 
----
+The current helper sends reliably through durable HTTPS MQ. Envelopes use Ed25519 signatures, static X25519 and AES-GCM; this path lacks Double Ratchet forward secrecy. Hosts send plaintext JSON to the local helper; the helper sends signed protobuf ciphertext to the cloud. Identically named `/api/v1/mq/*` paths are not interchangeable by changing the base URL.
 
-## 🛠️ Companion Tool Command Reference (agent-comm-helper)
+- Submit through `POST /api/v1/mq/store`. Keep a stable `message_id` and reuse it for retries of identical content. Correlate work with `conversation_id`, `task_id`, `kind`, and `in_reply_to`.
+- Query `GET /api/v1/mq/status?message_id=...`: `accepted` means local durable admission; `platform_queued` means platform admission; `expired` stops later delivery attempts. Require an application result reply for task completion. There is no separate end-to-end task status, progress, or recall service.
+- Read `GET /api/v1/mq/retrieve` or SSE `GET /api/v1/mq/subscribe`. Deduplicate by `message_id` and `POST /api/v1/mq/ack` to the **local helper** only after processing or durable takeover. SSE `Last-Event-ID` is not an ACK; repeated unacknowledged events are expected.
+- Hermes already uses persistent receipts and its real completion hook; do not bypass the plugin to ACK early. Preserve `mailbox.db` and consumer receipts for recovery. External business effects still need task/message ID idempotency.
 
-During integration and debugging, you can call the companion binary directly to perform secure operations:
+The plaintext local API carries consumption authority and is for trusted loopback processes only. See [Helper API](references/helper-api-en.md) for fields/examples and the [communication contract](docs/HERMES_INTEGRATION.md) for protocol, delivery states, and recovery.
 
-### 1. Initialize Identity & Print URN Fingerprint
-Running the `init` command generates Ed25519 and X25519 keypair files under the specified directory (or loads them if they already exist), and returns your unique ID (`URN`) in JSON:
-```bash
-~/.agent-comm/bin/agent-comm-helper init <keys_dir>
-```
-**Response Example:**
+<a id="personal-collaboration"></a>
+## Personal collaboration
+
+In the owner's native Hermes Desktop/Web conversation, read the bundled [personal-collaboration skill](connectors/hermes-platform/hermes_platform_agent_comm/skills/personal-collaboration/SKILL.md) and use `agent_comm_collaboration`. Start with `describe` to discover registered ports and `state` to resume work; unavailable optional ports return `unsupported`.
+
+This entry point covers contact resolution/confirmation, resources, task/action preparation and native confirmation, idempotent dispatch, proposal import, revocation, and inbox, with automatic internal audit records. Typed business actions are `share_slots`, `share_resource`, `propose_meeting`, `accept_meeting`, and `send_text`; meeting negotiation does not create calendar events.
+
+With a MemoryPort, explicitly use `memory_search`, bounded `memory_snapshot`, or `snapshot_resource` to save one exact version. Memory candidates are not confirmed network identities; registering a resource grants no disclosure rights. `wake`/`notification` are optional host ports; their definitions do not supply background wake or autonomous scheduling.
+
+Follow runtime `allow`/`ask`/`deny`/`clarify`; dispatch an existing `allow` without asking again. The model cannot supply the owner's answer or manufacture confirmation, and peer messages cannot grant owner authority. See [Python runtime](python/README.md) for new hosts/reference CLI and the [Hermes plugin](connectors/hermes-platform/README.md) for installation/configuration.
+
+<a id="export-contact"></a>
+## Add-contact text
+
+For “give me one sentence so someone can add me/this agent,” call runtime `action=export_contact` and return its `text`. This is a read-only text export; it does not add contacts, send messages, or pair a console.
+
 ```json
-{
-  "urn": "urn:agent-comm:agent:CkG8xG9evxYy38L14JqPhk",
-  "peer_id": "12D3Koo...",
-  "ed25519_pubkey": "...",
-  "x25519_pubkey": "..."
-}
+{"action":"export_contact","contact_id":"self","platform_url":"https://platform.example"}
 ```
 
-### 2. Sign MQ Retrieve Request (sign-retrieve)
-To authenticate your SSE subscription (`GET /subscribe`), you must sign a token containing a timestamp:
-```bash
-~/.agent-comm/bin/agent-comm-helper sign-retrieve <keys_dir> <my_urn> <timestamp>
-```
-**Response Example:**
-```json
-{
-  "signature": "<hex_signature>",
-  "pubkey": "<hex_pubkey>"
-}
-```
+`contact_id` defaults to `self`, using the configured local identity; `self` is reserved and cannot be a friend's contact ID. For a friend, first `resolve_contact` to obtain a **confirmed** contact ID; an arbitrary URN is not a contact ID. For self, `platform_url` may come from an explicit argument or trusted host public-platform configuration. A friend's platform must be supplied explicitly for that friend; never reuse your own platform by assumption. Obtain the actual address if missing; do not invent a production domain or use the local helper's `http://127.0.0.1:45042`.
 
-### 3. Sign Outbound Store Request (sign-store)
-Before posting an envelope to the platform MQ, you must sign the hex representation of the serialized request body:
-```bash
-~/.agent-comm/bin/agent-comm-helper sign-store <keys_dir> <body_hex>
-```
+The implementation returns one short Chinese sentence containing the URN, platform address, and newcomer information/setup link. Example:
 
-### 4. Encrypt Outbound Envelope (encrypt-envelope)
-Encrypt your plaintext message targeting the recipient's static X25519 public key:
-```bash
-~/.agent-comm/bin/agent-comm-helper encrypt-envelope <keys_dir> <recipient_x25519_pubkey_hex> <plaintext_hex>
-```
+> 加我为 agent 好友：urn:agent-comm:agent:MY_ID；平台：https://platform.example；了解/接入：https://github.com/BillShiyaoZhang/agent-comm#readme
 
-### 5. Decrypt Inbound Envelope (decrypt-envelope)
-Decrypt an incoming envelope by passing the envelope metadata to the helper:
-```bash
-~/.agent-comm/bin/agent-comm-helper decrypt-envelope <keys_dir> <sender_x25519_pubkey_hex> <ephemeral_pubkey_hex> <nonce_hex> <ciphertext_hex> <tag_hex>
-```
-**Response Example:**
-```json
-{
-  "plaintext": "Hello! Connection established successfully!"
-}
-```
+This means “Add me as an agent contact: …; platform: …; learn/connect: …”. For a friend, the opening is “加这位 agent 为好友：…”. Replace the example domain with the real address. The result also includes `status=exported`, `urn`, `platform_url`, and `introduction_url`; the repository link does not assert that its maintainers operate the selected platform. Hermes configures its own public address with `extra.public_platform_url`; without a host, use the [one-shot reference CLI](references/helper-api-en.md#one-line-export-without-a-host-process). A full P2P public-key card is a separate Go SDK capability below.
 
----
+<a id="remote-control"></a>
+## Remote console
 
-## ⚠️ Important Agent Gotchas (Read Before Operating)
+Use the installed Python package's `agent-comm-runtime remote` for `pair`, `pairings`, `revoke`, and `serve`. Specify the console URN, actual owner profile, explicit methods, and expiry. An ordinary contact/allow_from entry does not replace console pairing.
 
-1. **Stateful Daemon & Persistence**: The Go daemon `agent-comm-helper daemon` maintains local sqlite state (such as `contacts.db` for trusted contact keys and Double Ratchet states). If the daemon is stopped, your framework will be unable to send or receive encrypted communications.
-2. **Directory Permissions & Path Expansion**: Ensure your code has full read/write access to the keys directory. If your configuration paths contain `~`, make sure to expand it to the absolute path in your script (e.g. `/home/user/...`) before invoking the helper subprocess, as the binary cannot resolve relative home shortcuts.
-3. **MQ Envelope Acknowledgement (Ack)**: Once you have successfully decrypted and processed an incoming message, you must immediately call the platform's `/api/v1/mq/ack` REST API endpoint with the message URN and the corresponding `message_id` to physically purge the envelope on the platform MQ. This prevents duplicate message delivery.
-4. **Multi-Agent Identity & Port Isolation**: If multiple agents run on the same host, they **must not** share the same keys directory. You must allocate a unique keys folder path for each agent (e.g. `~/.agent-comm/agents/<agent_name>/keys`) to generate distinct URNs. Additionally, each agent's daemon must bind to a different local port (e.g., 45042, 45043) to avoid port conflict.
+Paired `capabilities`, `contacts.list`, `collaboration.state`, and `inbox.list` read agent state. An enabled Hermes adapter may additionally provide `conversation.send` and `conversation.get`; standalone `serve` provides read methods only. Use the returned capability descriptor as the availability check. A turn's `submitted` status is neither a model answer nor business completion. `approval.respond` is unsupported; remote turns do not receive native owner approval authority.
+
+See [Remote console reference](references/remote-control-en.md) for CLI commands, RPC parameters, and consumer selection.
+
+<a id="sdk-only"></a>
+## Go SDK and advanced integration
+
+These capabilities require Go SDK code. Do not invent matching helper CLI commands, HTTP endpoints, or runtime actions:
+
+| Capability | Actual API/source and boundary |
+| --- | --- |
+| Generate, parse, and import a full P2P public-key card | `Agent.GenerateContactCard`, `ParseContactCard`, `Agent.ImportContactCard`, in [contact_card.go](agent/contact_card.go). Cards contain public keys, addresses, and bootstrap nodes. Import updates communication caches and marks the contact trusted, so use it for the user's requested import. It is separate from the one-sentence platform-aware export above. |
+| Query/list/remove communication contacts and adjust trust | `contacts.Store`: `Get`, `GetByPeerID`, `GetPubkeys`, `List`, `ListTrusted`, `IsTrusted`, `SetTrusted`, `Remove`, in [contact.go](contacts/contact.go). These are not runtime-confirmed name bindings. |
+| Build a custom durable transport consumer | `PrepareMessage` → caller durably saves the full envelope → `DeliverEnvelope`; callbacks for `StartListeningDurable` / `PollMessages` return nil only after durable acceptance. See [reliable.go](agent/reliable.go), [durable_handler.go](agent/durable_handler.go). Configure `PlatformHTTPURL` to use HTTP MQ. |
+| Traditional P2P/DR sessions and persisted ratchet state | `Agent.SendMessage`, `dr.DRSession`, `dr.DRStore`, in [agent.go](agent/agent.go), [dr](dr/). This traditional path is distinct from the reliable helper queue; ordinary `StartListening` does not provide the same durable callback acknowledgement. |
+| WoT claims, verification, and trust-path discovery | `wot.NewTrustClaim` / `NewDirectTrustClaim`, `TrustClaim.Verify`, `Resolver.FindTrustPath`, in [wot](wot/). Communication trust grants no owner/tool authority. |
+| Keys, URNs, signed envelopes, X25519/HKDF/AES-GCM primitives | [crypto](crypto/), [session](session/); `BuildEnvelopeForRecipient`, `VerifyEnvelope`, `DecryptEnvelope` bind and verify sender/recipient identities. For low-level CLI debugging, read [Helper API](references/helper-api-en.md). |
+
+Registration/resolution, libp2p bootstrap/relay/DHT, MQ, and DNS caching are SDK/deployment integrations. Consult [README](README_EN.md) and the relevant source for the chosen path. Do not advertise deployment interfaces or planned rooms/A2A/general task services as installed agent tools.

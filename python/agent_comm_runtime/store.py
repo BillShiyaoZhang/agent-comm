@@ -150,6 +150,8 @@ class Store:
     def prepare_contact(self, contact_id, aliases, urn, owner_session):
         self._owner(owner_session)
         identifier(contact_id, "contact_id")
+        if contact_id == "self":
+            raise ValueError("contact_id 'self' is reserved for the local agent; confirm this contact using a different contact_id")
         if not isinstance(aliases, list) or not 1 <= len(aliases) <= 16 or any(
                 not isinstance(alias, str) or not 1 <= len(alias.strip()) <= 100 for alias in aliases):
             raise ValueError("Provide 1–16 nonempty local aliases")
@@ -176,6 +178,26 @@ class Store:
             matches = [c for c in self._all("contact") if self._belongs(c, owner_session) and
                        (c["contact_id"] == name or name.casefold() in [a.casefold() for a in c["aliases"]])]
         return {"decision": "allow" if len(matches) == 1 else "clarify", "contacts": matches}
+
+    def contact_urn(self, contact_id, owner_session):
+        """Read one shareable identity, without exposing aliases or granting authority."""
+        self._owner(owner_session)
+        identifier(contact_id, "contact_id")
+        with self._lock:
+            if contact_id == "self":
+                pending_self = any(self._belongs(item, owner_session) and item["kind"] == "contact"
+                                   and item["subject_id"] == "self" and item["status"] in {"pending", "presenting", "expired"}
+                                   for item in self._all("approval"))
+                if self._belongs(self._get("contact", "self"), owner_session) or pending_self:
+                    raise ValueError("Legacy contact_id 'self' is ambiguous: confirm the friend under a different contact_id; "
+                                     "ask the host to migrate the old self binding before exporting self")
+                if not self.local_urn:
+                    raise ValueError("Configure the host's local agent URN before exporting self")
+                return validate_urn(self.local_urn)
+            contact = self._get("contact", contact_id)
+            if not self._belongs(contact, owner_session):
+                raise ValueError("Contact must be confirmed for the current owner before export")
+            return validate_urn(contact["urn"])
 
     def _references(self, scope, owner_session):
         contacts = {}
@@ -375,6 +397,8 @@ class Store:
             approval = self._get("approval", approval_id)
             if not self._belongs(approval, owner_session):
                 raise ValueError("Approval does not belong to this native owner session")
+            if approval["kind"] == "contact" and approval["subject_id"] == "self":
+                raise ValueError("contact_id 'self' is reserved for the local agent; confirm this contact using a different contact_id")
             if approval["status"] not in {"pending", "presenting", "expired"}:
                 raise ValueError("Approval is already decided")
             if approval["status"] == "presenting" and approval.get("lease_until", 0) > self.clock():
@@ -400,7 +424,8 @@ class Store:
 
     def _approval_current(self, approval):
         if approval["kind"] == "contact":
-            return self._get("contact", approval["subject_id"]) in (None, approval["payload"])
+            return (approval["subject_id"] != "self"
+                    and self._get("contact", approval["subject_id"]) in (None, approval["payload"]))
         if approval["kind"] == "task":
             task = self._get("task", approval["subject_id"])
             return bool(task and task["status"] == "pending" and task["revision"] == approval["payload"]["revision"]

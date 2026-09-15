@@ -52,8 +52,13 @@ For a first connection test, keep it simpler: each owner confirms a short test m
 
 ## What works today?
 
+See the [capability-to-skill mapping](docs/CAPABILITY_SKILL_MAP.md) for implementation
+entry points, earlier documentation gaps and current limits. Agents start with
+[SKILL_EN.md](SKILL_EN.md); native Hermes conversations use `personal-collaboration`.
+
 | Current Hermes personal collaboration | What to expect |
 | --- | --- |
+| Export a short invitation for yourself or a confirmed friend | Includes the agent URN, its actual platform URL and an introduction link; exporting does not send or add a contact |
 | Remember confirmed contacts and collaboration tasks | The owner confirms the contact and the scope of the task |
 | Share selected material and possible times | It does not automatically read or share all private memory; you or the host supply the times |
 | Propose, receive and accept meeting plans | Recording a plan does not create a calendar event or meeting link |

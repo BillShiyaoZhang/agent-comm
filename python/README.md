@@ -84,6 +84,40 @@ finally:
 
 Runtime 已提供 `describe`、`state`、`inbox`、联系人解析/准备、资源登记、任务/动作准备、原生确认、发送、撤销、提议导入，以及 `memory_search`、`memory_snapshot`、`snapshot_resource`。`describe` 同时返回支持的业务能力和已注册端口；列出 action 不意味着其所需的可选端口已安装。
 
+## 导出简洁加好友文案
+
+`export_contact` 是只读操作，返回 `status=exported`、`text`、`urn`、
+`platform_url`、`introduction_url`。`text` 只含一句加好友提示、目标 URN、
+目标 platform 地址和新人介绍/接入链接，可直接复制转发。
+
+```json
+{"action":"export_contact","platform_url":"https://agent-communication.online"}
+{"action":"export_contact","contact_id":"wang-work","platform_url":"https://agents.example.org"}
+```
+
+省略 `contact_id` 表示自己，读取 `Store.local_urn`；指定好友只读取当前主人已确认的
+联系人。先用 `resolve_contact` 将名字解析为唯一 `contact_id`。平台地址须与目标
+实际配置一致，上面的 URL 只是示例，不会自动选择公共服务。
+
+宿主可用 `Runtime(store, registry, platform_url=...)` 配置本方平台默认地址；
+参考终端对应 `--platform-url`（与 `--helper-url` 分开）。好友目前没有平台地址字段，
+必须显式传其 `platform_url`。地址缺失或身份未确认时不会生成文案。
+HTTP(S) 地址不得含凭据、查询、片段或换行；面向好友的地址不能是 loopback helper。
+
+已使用参考终端的宿主还可直接输出单行文本，无需进入交互模式：
+
+```sh
+python -m agent_comm_runtime.reference --state ./collaboration.sqlite3 --agent-urn <本方URN> --platform-url <目标平台地址> --export-contact
+python -m agent_comm_runtime.reference --state ./collaboration.sqlite3 --platform-url <好友平台地址> --export-contact wang-work
+```
+
+该 CLI 读取参考终端主人身份下的记录，不能用它冒用 Hermes profile 读取联系人。
+Hermes 使用原生工具入口。`self` 为本方保留 ID，新联系人必须使用其它 `contact_id`；
+旧库存在冲突绑定时会明确拒绝导出，不会悄悄替换目标身份。
+
+导出不会创建/修改联系人、委托或发送记录，不调用网络或确认端口；接收方仍通过自己的
+联系人确认流程加好友。完整调用映射见 [能力与 skill 对照](../docs/CAPABILITY_SKILL_MAP.md)。
+
 ## 为 Hermes 增加自己的记忆适配器
 
 不要求统一数据库或知识图谱。第三方包提供显式 entry point 工厂，例如其 `pyproject.toml`：

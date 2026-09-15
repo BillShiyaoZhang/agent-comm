@@ -1,6 +1,7 @@
 """The common dispatcher: host authority in, model arguments never supply it."""
 from dataclasses import asdict
 
+from .contact_export import render_contact
 from .ports import HostSession, MemorySnapshot, Unsupported
 
 ACTION_FIELDS = {
@@ -10,6 +11,7 @@ ACTION_FIELDS = {
     "import_proposal": ({"task_id", "message_id"}, set()),
     "register_resource": ({"resource_id", "title", "text"}, set()),
     "resolve_contact": ({"name"}, set()),
+    "export_contact": (set(), {"contact_id", "platform_url"}),
     "prepare_contact": ({"contact_id", "aliases", "urn"}, set()),
     "prepare_task": ({"task_id", "scope"}, set()),
     "prepare_action": ({"task_id", "operation_id", "operation"}, set()),
@@ -47,9 +49,14 @@ def _text(value, maximum, name):
 
 
 class Runtime:
-    def __init__(self, store, registry):
+    def __init__(self, store, registry, *, platform_url=None):
         self.store = store
         self.registry = registry
+        # The host may configure its own platform, never infer it from the
+        # loopback helper or apply it to a friend's unrelated network identity.
+        # Validate this optional value only when exporting, so an incorrect
+        # invitation address cannot block state inspection or revocation.
+        self.platform_url = platform_url
         registry.require("host", "owner_context")
 
     def dispatch(self, args, *, context=None):
@@ -85,6 +92,14 @@ class Runtime:
             return store.register_resource(args["resource_id"], args["title"], args["text"], owner)
         if action == "resolve_contact":
             return store.resolve_contact(args["name"], owner)
+        if action == "export_contact":
+            contact_id = args.get("contact_id", "self")
+            urn = store.contact_urn(contact_id, owner)
+            platform_url = args.get("platform_url", self.platform_url if contact_id == "self" else None)
+            if platform_url is None:
+                raise ValueError("Provide platform_url for this agent's actual platform (not the local helper); "
+                                 "a friend's platform must always be provided explicitly")
+            return render_contact(urn, platform_url, is_self=contact_id == "self")
         if action == "prepare_contact":
             return store.prepare_contact(args["contact_id"], args["aliases"], args["urn"], owner)
         if action == "prepare_task":
