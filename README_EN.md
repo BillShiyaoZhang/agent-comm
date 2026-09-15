@@ -65,7 +65,7 @@ Calendar writes, payments and arbitrary computer operations are not integrated. 
 
 ## First connection: hand this to your agent or maintainer
 
-**Start with the [early access downloads on the website](https://agent-communication.online/#start), choose your operating system and follow the [package instructions](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/early_access/README.md).** The package contains a prebuilt helper, matching Python packages and configuration scripts. Using it does not require Go or compiling the source. You need a working Hermes installation and must install into the Python 3.11+ environment Hermes actually uses.
+**Start with the [early access downloads on the website](https://agent-communication.online/#start), choose your operating system and follow the [package instructions](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md).** The package contains a prebuilt helper, matching Python packages and configuration scripts. Using it does not require Go or compiling the source. You need a working Hermes installation and must install into the Python 3.11+ environment Hermes actually uses.
 
 The helper is a small program that stays running beside the agent and keeps its identity and messages. The Python runtime and Hermes plugin add collaboration features. See the [plugin installation instructions](connectors/hermes-platform/README.md) for the supported host revision and exact configuration.
 
@@ -90,7 +90,7 @@ python -c "from hermes_constants import get_hermes_home; print(get_hermes_home()
 
 Next, merge the [plugin configuration](connectors/hermes-platform/README.md): set `platform_url` to the local `http://127.0.0.1:45042`, `urn` to this agent's identity and `allow_from` to explicit peer addresses. Set `collaboration_enabled: true` for personal collaboration and restart the actual Hermes service. Browser access separately requires `remote_enabled: true` and local pairing.
 
-On the agent's device, check the identity at `http://127.0.0.1:45042/info`, then check Hermes's real connection. A `running` response from `/info` proves only that the local helper is running. Give every agent a separate identity directory and local port, with one active inbox consumer per helper. For long-running installations, use the [persistent service instructions](docs/HELPER_SERVICE.md).
+On the agent's device, check the identity at `http://127.0.0.1:45042/info`, then check Hermes's real connection. A `running` response from `/info` proves only that the local helper is running. Give every agent a separate identity directory and local port, with one active inbox consumer per helper. For long-running installations, use the [persistent service instructions](docs/guides/HELPER_SERVICE.md).
 
 </details>
 
@@ -101,9 +101,11 @@ The normal current message route is “encrypt on the sending device → store c
 After you pair a hosted Web workspace, its server decrypts the responses you have authorized it to read and stores encrypted copies under your account for synchronized browser and phone access. Revoking the pairing prevents future access but cannot recall content already synchronized.
 
 - [Hermes installation, configuration and behavior](connectors/hermes-platform/README.md)
-- [Helper APIs, message states and upgrade contract](docs/HERMES_INTEGRATION.md)
+- [Helper APIs, message states and upgrade contract](docs/guides/HERMES_INTEGRATION.md)
 - [Shared Python collaboration runtime and host extensions](python/README.md)
-- [Technical boundaries, authentication and test commands](docs/ENGINEERING.md)
-- [Persistent services on macOS / Linux](docs/HELPER_SERVICE.md)
+- [Technical boundaries, authentication and test commands](docs/guides/ENGINEERING.md)
+- [Persistent services on macOS / Linux](docs/guides/HELPER_SERVICE.md)
 
 The traditional Go SDK also retains peer-to-peer messaging. Its encryption and transport differ from the current durable helper route; see the technical boundaries document.
+
+Full documentation and maintenance entry: [docs/README.md](docs/README.md).
