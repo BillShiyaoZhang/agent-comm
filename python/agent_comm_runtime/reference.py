@@ -2,6 +2,7 @@
 
     python -m agent_comm_runtime.reference --demo
     python -m agent_comm_runtime.reference --state ./collaboration.sqlite3
+    python -m agent_comm_runtime.reference --agent-urn urn:agent-comm:agent:me --platform-url https://platform.example --export-contact
 
 The terminal process owner is trusted; do not attach its stdin to a remote peer
 or let model text impersonate terminal input. Production hosts must substitute
@@ -108,17 +109,38 @@ def main(argv=None):
         if callable(getattr(stream, "reconfigure", None)):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--demo", action="store_true", help="Run an isolated offline adapter smoke demo")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--demo", action="store_true", help="Run an isolated offline adapter smoke demo")
+    mode.add_argument("--export-contact", nargs="?", const="self", metavar="CONTACT_ID",
+                      help="Print one invitation for self (default) or one confirmed contact; no interactive input")
     parser.add_argument("--state", type=Path, default=Path("collaboration.sqlite3"))
     parser.add_argument("--memory-json", type=Path, help="Explicit owner-selected memory records only")
     parser.add_argument("--helper-url", help="Optional loopback helper; no transport is registered by default")
+    parser.add_argument("--platform-url", help="This agent's actual platform address for export_contact (not the local helper)")
     parser.add_argument("--agent-urn")
     args = parser.parse_args(argv)
     if args.demo:
         demo()
         return 0
+    if args.export_contact is not None:
+        store = Store(args.state, local_urn=args.agent_urn)
+        host = TerminalHost(args.state.parent)
+        try:
+            runtime = Runtime(store, AdapterRegistry().register(host))
+            request = {"action": "export_contact", "contact_id": args.export_contact}
+            if args.platform_url is not None:
+                request["platform_url"] = args.platform_url
+            result = runtime.dispatch(request, context=host.begin_turn())
+            if result.get("status") == "exported":
+                print(result["text"])
+                return 0
+            print(result.get("error", "Contact export unavailable"), file=sys.stderr)
+            return 1
+        finally:
+            host.active = False
+            store.close()
     if not sys.stdin.isatty():
-        parser.error("The reference host requires an interactive terminal; use --demo for offline smoke verification")
+        parser.error("The reference host requires an interactive terminal; use --demo or --export-contact for noninteractive runs")
     store = Store(args.state, local_urn=args.agent_urn)
     host = TerminalHost(args.state.parent)
     registry = AdapterRegistry().register(host).register(TerminalInteraction())
@@ -126,7 +148,7 @@ def main(argv=None):
         registry.register(FiniteMemory(json.loads(args.memory_json.read_text(encoding="utf-8"))))
     if args.helper_url:
         registry.register(HelperTransport(args.helper_url))
-    runtime = Runtime(store, registry)
+    runtime = Runtime(store, registry, platform_url=args.platform_url)
     print('输入工具 JSON，例如 {"action":"describe"}；exit 退出。')
     try:
         while True:

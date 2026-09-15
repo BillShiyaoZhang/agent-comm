@@ -13,6 +13,8 @@
 
 ```yaml
 collaboration_enabled: true
+# 可选；用于导出自己的加好友文案，填 helper daemon 实际使用的平台地址。
+# public_platform_url: https://agent-communication.online
 # 可选；默认当前 HERMES_HOME/agent-comm/collaboration.sqlite3
 # collaboration_state_path: /absolute/path/to/collaboration.sqlite3
 ```
@@ -56,6 +58,24 @@ Gateway LLM；普通 adapter 直接发送被阻止。** 主人原生对话通过
 scope/payload 规格见随包的 `skills/personal-collaboration/SKILL.md`。测试仍使用
 文末命令，涵盖策略、SQLite 恢复/并发/崩溃、原生 callback、helper HTTP 与
 传统 connector 兼容性；不会修改真实 profile、调用模型或向真实对端发送消息。
+
+## 导出加好友文案
+
+在主人原生对话中说“导出我的 agent 加好友文案”或“导出小王的 agent 加好友文案”。
+工具 `agent_comm_collaboration` 的 `action=export_contact` 返回简洁 `text`，包含
+目标 URN、platform 地址及新人介绍/接入链接。导出本身无需额外确认，也不会自动发送。
+
+```json
+{"action":"export_contact","platform_url":"https://agent-communication.online"}
+{"action":"export_contact","contact_id":"wang-work","platform_url":"https://agents.example.org"}
+```
+
+使用实际平台地址替换示例。自己的 `contact_id` 默认 `self`，身份取自配置 `urn`；
+设置了 `public_platform_url` 后，本方导出可省略工具参数 `platform_url`。
+**配置中的 `platform_url` 仍然只指向本机 helper**，不能将它用于对外文案。
+当前 helper `/info` 不提供平台地址，须从 daemon 启动配置或用户提供的信息取得。
+指定好友需要当前 profile 已确认的 `contact_id` 及其明确的 `platform_url`，
+不会自动套用自己的平台。文案不代替联系人绑定确认、`allow_from` 或工作台配对。
 
 ## 宿主与记忆扩展
 

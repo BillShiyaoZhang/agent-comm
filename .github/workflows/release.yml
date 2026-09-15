@@ -105,6 +105,7 @@ jobs:
               "tools/README.md",
           }
           docs.update(path.as_posix() for path in root.joinpath("docs").rglob("*.md"))
+          docs.update(path.as_posix() for path in root.joinpath("references").rglob("*.md"))
 
           with ZipFile(bundle, "w", compression=ZIP_DEFLATED) as archive:
               for relative_path in sorted(docs):

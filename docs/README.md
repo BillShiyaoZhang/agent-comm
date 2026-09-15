@@ -1,6 +1,6 @@
 # Agent Comm 文档 / Documentation
 
-使用入口见 [中文 README](../README.md)、[English README](../README_EN.md) 和根目录的 [安装 skill](../SKILL.md)。根 skill 文件是公开安装/分发入口，保留稳定路径。
+使用入口见 [中文 README](../README.md)、[English README](../README_EN.md) 和根目录的 [安装与能力 skill](../SKILL.md)。根 skill 文件是公开安装/分发入口，保留稳定路径。
 
 ## Guides
 
@@ -12,6 +12,7 @@
 
 ## Architecture
 
+- [能力与 skill 对照](architecture/CAPABILITY_SKILL_MAP.md)：Runtime、连接器、helper 与 Go SDK 的能力入口、调用方式及边界。
 - [代码总览](architecture/OVERVIEW.md) / [English overview](architecture/OVERVIEW_EN.md)。
 - [协议与源码契约](architecture/PROTOCOL.md) / [Protocol reference](architecture/PROTOCOL_EN.md)。
 - [信任验证](architecture/TRUST.md)、[Double Ratchet 代码说明](architecture/DOUBLE_RATCHET.md)。

@@ -6,7 +6,7 @@
 
 - `agent-comm-helper`：Linux amd64、Windows amd64、macOS amd64/arm64。支持矩阵以工作流为准。
 - `release_manifest_fetch.py`：按平台选取并校验下载文件。
-- `agent-comm-docs.zip`：根 README/SKILL、文档目录、Python runtime 和 connector 的使用说明，保留相对路径。
+- `agent-comm-docs.zip`：根 README/SKILL、文档目录、skill 的 `references/` 参考、Python runtime 和 connector 的使用说明，保留相对路径。
 - `SHA256SUMS` 和 `release-manifest.json`：文件大小、SHA256、类型及平台信息。
 
 工作流从 `cmd/helper` 编译二进制，组装文档包后生成校验和与 manifest；不提交构建出的二进制到源仓库。
