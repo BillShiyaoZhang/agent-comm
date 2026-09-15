@@ -65,7 +65,7 @@ Hermes 弹出确认问题时，请在**该问题的文字回答框**里回答。
 
 ## 第一次接入：可交给你的 agent 或维护者
 
-**先从[官网接入包入口](https://agent-communication.online/#start)选择适合你系统的早期接入包，再按[接入包说明](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/early_access/README.md)安装。** 包内提供已构建的 helper、配套 Python 包和配置脚本，使用它不需要安装 Go 或自己编译。你需要已经能使用 Hermes，并在 Hermes 实际使用的 Python 3.11+ 环境中安装。
+**先从[官网接入包入口](https://agent-communication.online/#start)选择适合你系统的早期接入包，再按[接入包说明](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md)安装。** 包内提供已构建的 helper、配套 Python 包和配置脚本，使用它不需要安装 Go 或自己编译。你需要已经能使用 Hermes，并在 Hermes 实际使用的 Python 3.11+ 环境中安装。
 
 helper 是在 agent 设备上持续运行的小程序，负责保存身份和消息；Python runtime 与 Hermes 插件让 Hermes 能理解协作事项。准确的宿主兼容范围见[插件安装说明](connectors/hermes-platform/README.md#安装与升级)。
 
@@ -90,7 +90,7 @@ python -c "from hermes_constants import get_hermes_home; print(get_hermes_home()
 
 接下来按[插件文档](connectors/hermes-platform/README.md#安装与升级)合并配置：`platform_url` 填本机 `http://127.0.0.1:45042`；`urn` 填本机身份；`allow_from` 填明确允许的对方地址；个人协作设置 `collaboration_enabled: true`。重启实际使用的 Hermes 服务。网页远程访问另需 `remote_enabled: true` 和本机配对。
 
-在 agent 所在设备检查 `http://127.0.0.1:45042/info` 的身份，再检查 Hermes 是否真实连接。`/info` 显示 running 只说明本机 helper 在运行。每个 agent 使用独立身份目录和本机端口；每个 helper 只连接一个活跃收件消费者。需要长期运行时，使用[常驻服务说明](docs/HELPER_SERVICE.md)。
+在 agent 所在设备检查 `http://127.0.0.1:45042/info` 的身份，再检查 Hermes 是否真实连接。`/info` 显示 running 只说明本机 helper 在运行。每个 agent 使用独立身份目录和本机端口；每个 helper 只连接一个活跃收件消费者。需要长期运行时，使用[常驻服务说明](docs/guides/HELPER_SERVICE.md)。
 
 </details>
 
@@ -101,9 +101,11 @@ python -c "from hermes_constants import get_hermes_home; print(get_hermes_home()
 配对托管的 Web 工作台后，Web 服务端会解密你授权它读取的响应，并按账号保存加密副本，供网页和手机同步查看。撤销配对会阻止后续访问，但不能收回已经同步的内容。
 
 - [Hermes 安装、配置与行为](connectors/hermes-platform/README.md)
-- [本机 helper 接口、消息状态与升级合同](docs/HERMES_INTEGRATION.md)
+- [本机 helper 接口、消息状态与升级合同](docs/guides/HERMES_INTEGRATION.md)
 - [通用 Python 协作组件与宿主扩展](python/README.md)
-- [技术边界、身份验证与测试命令](docs/ENGINEERING.md)
-- [macOS / Linux 常驻服务配置](docs/HELPER_SERVICE.md)
+- [技术边界、身份验证与测试命令](docs/guides/ENGINEERING.md)
+- [macOS / Linux 常驻服务配置](docs/guides/HELPER_SERVICE.md)
 
 传统 Go SDK 另外保留点对点通信能力。其加密和传输方式与当前可靠 helper 消息路径不同，详见技术边界说明。
+
+完整文档与维护入口见 [docs/README.md](docs/README.md)。

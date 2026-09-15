@@ -1,4 +1,4 @@
-name: Release agent-comm CLI
+name: Release agent-comm helper
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Build and Release CLI Binaries
+    name: Build and Release Helper Binaries
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -90,21 +90,26 @@ jobs:
           root = Path(".")
           dist = Path("release-dist")
           bundle = dist / "agent-comm-docs.zip"
-          docs = [
+          docs = {
               "README.md",
               "README_EN.md",
               "SKILL.md",
               "SKILL_EN.md",
-              "docs/CI_DISTRIBUTION_PLAN.md",
-              "docs/HERMES_INTEGRATION.md",
+              "python/README.md",
+              "connectors/README.md",
               "connectors/hermes-platform/README.md",
-          ]
+              "connectors/openclaw-channel/README.md",
+              "connectors/hermes-platform/hermes_platform_agent_comm/skills/personal-collaboration/SKILL.md",
+              "examples/README.md",
+              "tests/README.md",
+              "tools/README.md",
+          }
+          docs.update(path.as_posix() for path in root.joinpath("docs").rglob("*.md"))
 
           with ZipFile(bundle, "w", compression=ZIP_DEFLATED) as archive:
-              for relative_path in docs:
+              for relative_path in sorted(docs):
                   path = root / relative_path
-                  if path.is_file():
-                      archive.write(path, arcname=relative_path)
+                  archive.write(path, arcname=relative_path)
           PY
 
       - name: Generate Release Metadata

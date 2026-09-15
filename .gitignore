@@ -1,7 +1,3 @@
-test_dr
-test_dr_net
-test_dr_persist
-
 # Keys and Databases
 *.pem
 contacts/*.pem
