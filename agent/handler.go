@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/BillShiyaoZhang/agent-comm/dr"
 	pb "github.com/BillShiyaoZhang/agent-comm/proto"
@@ -17,6 +18,7 @@ func (a *Agent) StartListening(ctx context.Context, handler func(urn string, msg
 	// 1. Listen for realtime peer connections (ECIES / DR Streams)
 	a.Host.SetStreamHandler(session.ProtoID, func(stream network.Stream) {
 		defer stream.Close()
+		_ = stream.SetDeadline(time.Now().Add(30 * time.Second))
 
 		env, err := session.ReadEnvelope(stream)
 		if err != nil {

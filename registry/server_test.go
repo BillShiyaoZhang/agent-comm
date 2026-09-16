@@ -216,14 +216,23 @@ func TestP2PRegistrationRejectsForgeryAndAllowsOwnerPublication(t *testing.T) {
 	owner, key := signedRequest(t, time.Now().Unix())
 	serverHost := registryTestHost(t, nil)
 	publisher := registryTestHost(t, nil)
+	ownerHost := registryTestHost(t, key)
 	store := NewInMemoryStore()
 	NewServer(serverHost, store).Register()
 	if publisher.ID().String() == owner.PeerId {
 		t.Fatal("test requires a separate publisher")
 	}
-	// A third-party transport may relay the owner's authentic signed record.
-	if response := sendRegistration(t, publisher, serverHost, owner); !response.Ok {
+	if response := sendRegistration(t, ownerHost, serverHost, owner); !response.Ok {
 		t.Fatalf("owner-signed publication rejected: %s", response.Info)
+	}
+	assertStoredRecord(t, store, owner)
+	// The record signature omits addresses; a copied signature must not let
+	// another peer replace its owner's routing hints.
+	replayed := cloneRequest(owner)
+	replayed.Addrs = []string{"/ip4/127.0.0.1/tcp/9999"}
+	replayed.RelayAddrs = []string{"/ip4/127.0.0.1/tcp/9998"}
+	if response := sendRegistration(t, publisher, serverHost, replayed); response.Ok {
+		t.Fatal("third-party replay replaced unsigned routing addresses")
 	}
 	assertStoredRecord(t, store, owner)
 	for _, attack := range invalidRegistrations(t, owner, key) {
@@ -240,7 +249,7 @@ func TestP2PRegistrationRejectsForgeryAndAllowsOwnerPublication(t *testing.T) {
 	update.StoresUserData = true
 	update.X25519Pubkey[0] ^= 1
 	signRequest(update, key)
-	if response := sendRegistration(t, publisher, serverHost, update); !response.Ok {
+	if response := sendRegistration(t, ownerHost, serverHost, update); !response.Ok {
 		t.Fatalf("owner update rejected: %s", response.Info)
 	}
 	assertStoredRecord(t, store, update)
@@ -251,4 +260,20 @@ func TestP2PRegistrationRejectsForgeryAndAllowsOwnerPublication(t *testing.T) {
 	if err := VerifyResolveResult(owner.Urn, &resolved); err != nil {
 		t.Fatalf("stored signature did not survive P2P resolution: %v", err)
 	}
+}
+
+func TestInMemoryStoreRejectsRegistrationRollback(t *testing.T) {
+	current, key := signedRequest(t, time.Now().Unix())
+	store := NewInMemoryStore()
+	if err := registerRecord(store, current); err != nil {
+		t.Fatal(err)
+	}
+	stale := cloneRequest(current)
+	stale.Timestamp--
+	stale.X25519Pubkey[0] ^= 1
+	signRequest(stale, key)
+	if err := registerRecord(store, stale); err == nil {
+		t.Fatal("valid old signature rolled back current encryption key")
+	}
+	assertStoredRecord(t, store, current)
 }

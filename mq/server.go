@@ -22,7 +22,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const MaxFrameSize = 16 << 20 // bound allocations for untrusted wire frames
+const MaxFrameSize = 16 << 20      // bound allocations for untrusted wire frames
+const maxRetrievePayload = 4 << 20 // leave room for transport framing/JSON encoding
 
 const ProtoID = "/hermes/agent-comm/mq/1.0.0"
 
@@ -78,9 +79,14 @@ func (s *SQLiteStore) StoreEnvelope(ctx context.Context, recipientURN string, en
 	}
 	msgID := env.MessageId
 	expiry := expiryUnix
-	if expiry == 0 {
-		// Default 7-day TTL
-		expiry = time.Now().Add(7 * 24 * time.Hour).Unix()
+	now := time.Now().Unix()
+	if expiry < 0 || (expiry != 0 && expiry <= now) {
+		return "", fmt.Errorf("expiry must be in the future")
+	}
+	maximumExpiry := now + 7*24*60*60
+	if expiry == 0 || expiry > maximumExpiry {
+		// A caller cannot create a message outside the relay retention policy.
+		expiry = maximumExpiry
 	}
 
 	payloadBytes, err := goproto.Marshal(env)
@@ -121,7 +127,7 @@ func (s *SQLiteStore) Retrieve(ctx context.Context, recipientURN string) ([]*pro
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, payload FROM messages WHERE recipient = ? AND read_at = 0 AND (expiry = 0 OR expiry > ?) ORDER BY stored_at, rowid",
+		"SELECT id, payload FROM messages WHERE recipient = ? AND read_at = 0 AND (expiry = 0 OR expiry > ?) ORDER BY stored_at, rowid LIMIT 500",
 		recipientURN, time.Now().Unix(),
 	)
 	if err != nil {
@@ -130,17 +136,28 @@ func (s *SQLiteStore) Retrieve(ctx context.Context, recipientURN string) ([]*pro
 	defer rows.Close()
 
 	var envelopes []*proto.EncryptedEnvelope
+	var totalBytes int
 	for rows.Next() {
 		var id string
 		var payload []byte
 		if err := rows.Scan(&id, &payload); err != nil {
 			continue
 		}
+		if len(payload) > crypto.MaxEnvelopeSize {
+			continue // reject oversized legacy or corrupt database records
+		}
+		if totalBytes+len(payload) > maxRetrievePayload {
+			break // remaining messages stay pending until this batch is ACKed
+		}
 		var env proto.EncryptedEnvelope
 		if err := goproto.Unmarshal(payload, &env); err != nil {
 			continue // corrupted entry, skip
 		}
 		envelopes = append(envelopes, &env)
+		totalBytes += len(payload)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	// If nothing found, return empty but ok
@@ -152,8 +169,8 @@ func (s *SQLiteStore) Retrieve(ctx context.Context, recipientURN string) ([]*pro
 }
 
 func (s *SQLiteStore) Ack(ctx context.Context, recipientURN string, messageIDs []string) (int, error) {
-	if len(messageIDs) == 0 {
-		return 0, fmt.Errorf("message_ids required")
+	if len(messageIDs) == 0 || len(messageIDs) > 1000 {
+		return 0, fmt.Errorf("1 to 1000 message_ids required")
 	}
 
 	if err := AuthorizeRecipient(ctx, recipientURN); err != nil {

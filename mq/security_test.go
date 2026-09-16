@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -84,6 +86,92 @@ func TestMQFrameAllocationIsBounded(t *testing.T) {
 		}
 		if _, err := readMQResponse(bytes.NewReader(buf)); err == nil {
 			t.Fatalf("response accepted invalid size %d", size)
+		}
+	}
+}
+
+func TestSQLiteRejectsExpiredAndCapsUnboundedRetention(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "mq.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sender, _ := crypto.GenerateIdentityKeyPair()
+	recipient, _ := crypto.GenerateIdentityKeyPair()
+	ctx := WithAuthenticatedPublicKey(context.Background(), sender.PublicKey)
+	for i, expiry := range []int64{-1, time.Now().Unix() - 1, math.MaxInt64, 0} {
+		env := &pb.EncryptedEnvelope{
+			RecipientUrn: recipient.URN(), MessageId: fmt.Sprintf("expiry-%d", i),
+			SenderStaticPubkey: make([]byte, 32), EphemeralPubkey: make([]byte, 32),
+			Nonce: make([]byte, 12), Tag: make([]byte, 16), Ciphertext: []byte("opaque"),
+		}
+		if err := crypto.SignEnvelope(env, sender); err != nil {
+			t.Fatal(err)
+		}
+		_, err := s.StoreEnvelope(ctx, recipient.URN(), env, expiry)
+		if i < 2 {
+			if err == nil {
+				t.Fatal("accepted negative or expired retention")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		var saved int64
+		if err := s.db.QueryRow("SELECT expiry FROM messages WHERE id = ?", env.MessageId).Scan(&saved); err != nil {
+			t.Fatal(err)
+		}
+		if saved <= time.Now().Unix() || saved > time.Now().Unix()+7*24*60*60 {
+			t.Fatalf("uncapped retention: %d", saved)
+		}
+	}
+}
+
+func TestSQLiteRetrievePagesByBytesWithoutLosingMessages(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "mq.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sender, _ := crypto.GenerateIdentityKeyPair()
+	recipient, _ := crypto.GenerateIdentityKeyPair()
+	sendContext := WithAuthenticatedPublicKey(context.Background(), sender.PublicKey)
+	receiveContext := WithAuthenticatedPublicKey(context.Background(), recipient.PublicKey)
+	for i := 0; i < 8; i++ {
+		env := &pb.EncryptedEnvelope{
+			RecipientUrn: recipient.URN(), MessageId: fmt.Sprintf("large-%d", i),
+			SenderStaticPubkey: make([]byte, 32), EphemeralPubkey: make([]byte, 32),
+			Nonce: make([]byte, 12), Tag: make([]byte, 16), Ciphertext: make([]byte, 750000),
+		}
+		if err := crypto.SignEnvelope(env, sender); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.StoreEnvelope(sendContext, recipient.URN(), env, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := make(map[string]bool)
+	for len(seen) < 8 {
+		batch, err := s.Retrieve(receiveContext, recipient.URN())
+		if err != nil || len(batch) == 0 || len(batch) >= 8 {
+			t.Fatalf("invalid bounded batch: %d, %v", len(batch), err)
+		}
+		size := 0
+		var ids []string
+		for _, env := range batch {
+			if seen[env.MessageId] {
+				t.Fatalf("ACKed message returned: %s", env.MessageId)
+			}
+			seen[env.MessageId] = true
+			ids = append(ids, env.MessageId)
+			size += goproto.Size(env)
+		}
+		if size > maxRetrievePayload {
+			t.Fatalf("retrieval exceeded byte budget: %d", size)
+		}
+		if n, err := s.Ack(receiveContext, recipient.URN(), ids); err != nil || n != len(ids) {
+			t.Fatalf("ACK batch: %d, %v", n, err)
 		}
 	}
 }

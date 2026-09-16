@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/internal/wire"
 	agentpb "github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -57,10 +58,14 @@ func (c *Client) Resolve(target peer.AddrInfo, urn string) (ResolveResult, error
 		return ResolveResult{}, err
 	}
 
-	stream, err := c.host.NewStream(context.Background(), target.ID, protocol.ID(ProtoID))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stream, err := c.host.NewStream(ctx, target.ID, protocol.ID(ProtoID))
 	if err != nil {
 		return ResolveResult{}, fmt.Errorf("failed to open stream: %w", err)
 	}
+	defer stream.Close()
+	_ = stream.SetDeadline(time.Now().Add(30 * time.Second))
 
 	if _, err := stream.Write(reqBytes); err != nil {
 		stream.Reset()
@@ -71,7 +76,7 @@ func (c *Client) Resolve(target peer.AddrInfo, urn string) (ResolveResult, error
 		return ResolveResult{}, fmt.Errorf("failed to signal write done: %w", err)
 	}
 
-	buf, err := io.ReadAll(stream)
+	buf, err := wire.ReadMessage(stream)
 	stream.Close()
 	if err != nil {
 		return ResolveResult{}, fmt.Errorf("failed to read response: %w", err)
@@ -83,7 +88,7 @@ func (c *Client) Resolve(target peer.AddrInfo, urn string) (ResolveResult, error
 	}
 
 	resolve, ok := resp.Op.(*agentpb.URNRegistryResponse_Resolve)
-	if !ok {
+	if !ok || resolve.Resolve == nil {
 		return ResolveResult{}, fmt.Errorf("unexpected response type")
 	}
 	if !resolve.Resolve.Found {
@@ -148,10 +153,14 @@ func (c *Client) RegisterWithSignature(target peer.AddrInfo, urn string, addrs [
 		return err
 	}
 
-	stream, err := c.host.NewStream(context.Background(), target.ID, protocol.ID(ProtoID))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stream, err := c.host.NewStream(ctx, target.ID, protocol.ID(ProtoID))
 	if err != nil {
 		return fmt.Errorf("failed to open stream: %w", err)
 	}
+	defer stream.Close()
+	_ = stream.SetDeadline(time.Now().Add(30 * time.Second))
 
 	if _, err := stream.Write(reqBytes); err != nil {
 		stream.Reset()
@@ -162,7 +171,7 @@ func (c *Client) RegisterWithSignature(target peer.AddrInfo, urn string, addrs [
 		return fmt.Errorf("failed to signal write done: %w", err)
 	}
 
-	buf, err := io.ReadAll(stream)
+	buf, err := wire.ReadMessage(stream)
 	stream.Close()
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
@@ -174,7 +183,7 @@ func (c *Client) RegisterWithSignature(target peer.AddrInfo, urn string, addrs [
 	}
 
 	reg, ok := resp.Op.(*agentpb.URNRegistryResponse_Register)
-	if !ok {
+	if !ok || reg.Register == nil {
 		return fmt.Errorf("unexpected response type")
 	}
 	if !reg.Register.Ok {

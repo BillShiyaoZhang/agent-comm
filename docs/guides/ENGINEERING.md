@@ -4,6 +4,8 @@
 
 This reference covers the current helper and collaboration integrations. Start with the README for the user journey; use this document when building, maintaining or extending an installation.
 
+`agent.InitIdentity` keeps experimental Kademlia DHT discovery disabled by default. The helper and normal messaging routes use authenticated Registry/MQ discovery, so they do not need this network. SDK users that explicitly require it can set `agent.Config.EnableDHT: true` or use the existing `dht` package APIs; the standalone bootstrap example also remains an explicit DHT server. The upstream dependency still has [GO-2024-3218](https://pkg.go.dev/vuln/GO-2024-3218), with no known fixed version. Default-off is a runtime mitigation, not an upstream fix; whole-SDK vulnerability scans still report the optional code.
+
 ## Components
 
 | Component | Location | Responsibility |

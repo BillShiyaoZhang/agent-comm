@@ -78,11 +78,16 @@ func (s *Store) initSchema() error {
 // Returns an error if the signature is invalid or the claim is already stored.
 // Claim ID is SHA256(issuer||subject||issued_at).
 func (s *Store) AddClaim(c *TrustClaim) error {
+	if c == nil || c.TrustClaim == nil {
+		return fmt.Errorf("trust claim is required")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Verify the signature using the issuer's Ed25519 pubkey from our known peers
-	issuerPK, err := s.GetPeerEd25519PK(c.IssuerUrn)
+	// Do not acquire GetKnownPeer's read lock while holding this write lock.
+	var issuerPK []byte
+	err := s.db.QueryRow("SELECT ed25519_pk FROM known_peers WHERE urn = ?", c.IssuerUrn).Scan(&issuerPK)
 	if err != nil {
 		return fmt.Errorf("cannot verify claim: issuer %s unknown: %w", c.IssuerUrn, err)
 	}

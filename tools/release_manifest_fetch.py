@@ -17,13 +17,42 @@ import platform
 import re
 import stat
 import sys
-from pathlib import Path
+import tempfile
+from pathlib import Path, PurePosixPath
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 DOCS_ASSET_NAME = "agent-comm-docs.zip"
 CHECKSUM_ASSET_NAME = "SHA256SUMS"
 DEFAULT_INSTALL_NAME = "agent-comm.exe" if os.name == "nt" else "agent-comm"
+MAX_ASSET_BYTES = 256 * 1024 * 1024
+
+
+def secure_url(value: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+        raise ValueError("Release downloads require an HTTPS URL without credentials or fragments")
+    return value
+
+
+class SecureRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        secure_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def open_download(url: str):
+    return build_opener(SecureRedirect()).open(
+        Request(secure_url(url), headers={"User-Agent": "agent-comm-release-helper/1.0"}), timeout=30)
+
+
+def safe_name(value: object) -> str:
+    if (not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}", value)
+            or value.endswith(".") or value.split(".")[0].upper() in
+            {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(10)), *(f"LPT{i}" for i in range(10))}):
+        raise ValueError("Release asset and install names must be plain portable filenames")
+    return value
 
 PLATFORM_ALIASES = {
     "linux": "linux",
@@ -49,8 +78,11 @@ def is_url(value: str) -> bool:
 def read_text(source: str) -> str:
     if is_url(source):
         try:
-            with urlopen(Request(source, headers={"User-Agent": "agent-comm-release-helper/1.0"})) as response:
-                return response.read().decode("utf-8-sig")
+            with open_download(source) as response:
+                payload = response.read(1_000_001)
+                if len(payload) > 1_000_000:
+                    raise ValueError("Release manifest exceeds the size limit")
+                return payload.decode("utf-8-sig")
         except URLError as err:
             raise SystemExit(f"failed to read manifest {source}: {err}") from err
 
@@ -59,17 +91,21 @@ def read_text(source: str) -> str:
 
 def download_bytes(url: str) -> bytes:
     try:
-        with urlopen(Request(url, headers={"User-Agent": "agent-comm-release-helper/1.0"})) as response:
-            return response.read()
+        with open_download(url) as response:
+            payload = response.read(MAX_ASSET_BYTES + 1)
+            if len(payload) > MAX_ASSET_BYTES:
+                raise ValueError("Release asset exceeds the size limit")
+            return payload
     except URLError as err:
         raise SystemExit(f"failed to download {url}: {err}") from err
 
 
 def download_to_file(url: str, dest_path: Path) -> None:
     try:
-        req = Request(url, headers={"User-Agent": "agent-comm-release-helper/1.0"})
-        with urlopen(req) as response:
+        with open_download(url) as response:
             total_size = int(response.headers.get("content-length", 0))
+            if total_size > MAX_ASSET_BYTES:
+                raise ValueError("Release asset exceeds the size limit")
             downloaded = 0
             chunk_size = 1024 * 64  # 64KB
             
@@ -78,8 +114,10 @@ def download_to_file(url: str, dest_path: Path) -> None:
                     chunk = response.read(chunk_size)
                     if not chunk:
                         break
-                    f.write(chunk)
                     downloaded += len(chunk)
+                    if downloaded > MAX_ASSET_BYTES:
+                        raise ValueError("Release asset exceeds the size limit")
+                    f.write(chunk)
                     if total_size > 0:
                         percent = (downloaded / total_size) * 100
                         sys.stdout.write(f"\r[Fetch] Downloading {url.split('/')[-1]}: {percent:.1f}% ({downloaded}/{total_size} bytes)")
@@ -134,6 +172,9 @@ def classify_asset(name: str) -> str:
 
 def normalize_asset(asset: dict[str, object]) -> dict[str, object]:
     normalized = dict(asset)
+    safe_name(normalized.get("name"))
+    if not isinstance(normalized.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", normalized["sha256"]):
+        raise ValueError("Each release asset requires a lowercase SHA256 digest")
     normalized.setdefault("kind", classify_asset(str(normalized["name"])))
     if normalized["kind"] == "binary" and "platform" not in normalized:
         match = BINARY_RE.match(str(normalized["name"]))
@@ -196,23 +237,58 @@ def select_asset(assets: list[dict[str, object]], kind: str, desired_os: str | N
 
 
 def download_asset(base_url: str, asset: dict[str, object], output_dir: Path, target_name: str | None = None) -> Path:
-    name = str(asset["name"])
-    destination_name = target_name or name
+    asset = normalize_asset(asset)
+    name = safe_name(asset["name"])
+    destination_name = safe_name(target_name or name)
     destination = output_dir / destination_name
-    temp_path = output_dir / f".{destination_name}.download"
-    url = f"{base_url.rstrip('/')}/{name}"
-    
-    # Chunked streaming download to disk
-    download_to_file(url, temp_path)
-
-    expected_sha = str(asset.get("sha256", ""))
-    actual_sha = sha256_file(temp_path)
-    if expected_sha and actual_sha != expected_sha:
+    url = secure_url(f"{base_url.rstrip('/')}/{name}")
+    # Never follow a preexisting predictable .download symlink.
+    with tempfile.NamedTemporaryFile(prefix=".agent-comm-", suffix=".download", dir=output_dir, delete=False) as temporary:
+        temp_path = Path(temporary.name)
+    try:
+        download_to_file(url, temp_path)
+        expected_sha = asset["sha256"]
+        actual_sha = sha256_file(temp_path)
+        if actual_sha != expected_sha:
+            raise SystemExit(f"sha256 mismatch for {name}: expected {expected_sha}, got {actual_sha}")
+        temp_path.replace(destination)
+    finally:
         temp_path.unlink(missing_ok=True)
-        raise SystemExit(f"sha256 mismatch for {name}: expected {expected_sha}, got {actual_sha}")
-
-    temp_path.replace(destination)
     return destination
+
+
+def extract_docs(archive_path: Path, output_dir: Path) -> None:
+    """Only the release's Markdown documentation may be unpacked."""
+    import zipfile
+    root = output_dir.resolve()
+    with zipfile.ZipFile(archive_path) as archive:
+        entries = archive.infolist()
+        if len(entries) > 1000 or sum(entry.file_size for entry in entries) > 32 * 1024 * 1024:
+            raise ValueError("Documentation archive exceeds extraction limits")
+        destinations = []
+        for entry in entries:
+            # ZipInfo normalizes backslashes on Windows; validate original bytes.
+            raw_name = entry.orig_filename
+            path = PurePosixPath(raw_name)
+            if (path.is_absolute() or "\\" in raw_name or "\x00" in raw_name or not path.parts
+                    or any(part in {".", ".."} or ":" in part for part in raw_name.split("/"))
+                    or stat.S_ISLNK(entry.external_attr >> 16)
+                    or (not entry.is_dir() and path.suffix.lower() != ".md")
+                    or entry.file_size > 8 * 1024 * 1024):
+                raise ValueError("Unsafe documentation archive entry")
+            for part in path.parts:
+                safe_name(part)
+            destination = (root / Path(*path.parts)).resolve()
+            if not destination.is_relative_to(root):
+                raise ValueError("Documentation archive escapes output directory")
+            destinations.append((entry, destination))
+        # Validate the entire archive before writing any entries.
+        for entry, destination in destinations:
+            if entry.is_dir():
+                destination.mkdir(parents=True, exist_ok=True)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(archive.read(entry))
 
 
 def set_executable(path: Path) -> None:
@@ -272,13 +348,11 @@ def main() -> int:
         docs_asset = select_asset(assets, "docs")
         docs_path = download_asset(release_base, docs_asset, output_dir)
         try:
-            import zipfile
-            with zipfile.ZipFile(docs_path, 'r') as zip_ref:
-                zip_ref.extractall(output_dir)
+            extract_docs(docs_path, output_dir)
             docs_path.unlink(missing_ok=True)
             print("extracted documentation files directly into output directory")
         except Exception as err:
-            print(f"failed to extract documentation zip: {err}")
+            raise SystemExit(f"failed to extract documentation zip: {err}") from err
 
     set_executable(binary_path)
 

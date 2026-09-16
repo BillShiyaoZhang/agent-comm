@@ -8,10 +8,11 @@ import (
 	"io"
 	"time"
 
+	"github.com/BillShiyaoZhang/agent-comm/internal/wire"
+	"github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/protocol"
-	"github.com/BillShiyaoZhang/agent-comm/proto"
 	goproto "google.golang.org/protobuf/proto"
 )
 
@@ -61,8 +62,8 @@ func (r *Resolver) FindTrustPath(ctx context.Context, targetURN string) (*TrustP
 
 	// BFS from our URN
 	type bfsNode struct {
-		urn    string
-		path   []*TrustClaim
+		urn     string
+		path    []*TrustClaim
 		visited map[string]bool
 	}
 
@@ -111,7 +112,7 @@ func (r *Resolver) FindTrustPath(ctx context.Context, targetURN string) (*TrustP
 				}
 				// Now enqueue for BFS expansion (we'll pick up their claims in next iteration)
 				queue = append(queue, bfsNode{
-					urn: claim.SubjectUrn,
+					urn:  claim.SubjectUrn,
 					path: append(current.path, claim),
 				})
 			}
@@ -189,6 +190,8 @@ func (r *Resolver) FetchClaimsAbout(ctx context.Context, subjectURN string) ([]*
 		}
 
 		// Send query
+		deadline, _ := ctx2.Deadline()
+		_ = stream.SetDeadline(deadline)
 		if err := writeUint32BE(stream, uint32(len(queryBytes))); err != nil {
 			stream.Close()
 			cancel()
@@ -204,17 +207,9 @@ func (r *Resolver) FetchClaimsAbout(ctx context.Context, subjectURN string) ([]*
 		stream.CloseWrite()
 
 		// Read response
-		sizeBuf := make([]byte, 4)
-		if _, err := stream.Read(sizeBuf); err != nil {
-			stream.Close()
-			cancel()
-			lastErr = err
-			continue
-		}
-		size := binary.BigEndian.Uint32(sizeBuf)
-		respBytes := make([]byte, size)
-		if _, err := io.ReadFull(stream, respBytes); err != nil {
-			stream.Close()
+		respBytes, err := wire.ReadFrame(stream)
+		if err != nil {
+			stream.Reset()
 			cancel()
 			lastErr = err
 			continue
@@ -228,6 +223,10 @@ func (r *Resolver) FetchClaimsAbout(ctx context.Context, subjectURN string) ([]*
 			continue
 		}
 
+		if wrapper.Response == nil {
+			lastErr = fmt.Errorf("missing WoT response")
+			continue
+		}
 		out := make([]*TrustClaim, len(wrapper.Response.Claims))
 		for i, c := range wrapper.Response.Claims {
 			out[i] = &TrustClaim{TrustClaim: c}
@@ -244,14 +243,11 @@ func (r *Resolver) FetchClaimsAbout(ctx context.Context, subjectURN string) ([]*
 // HandleWOTStream handles incoming WoT query streams.
 func HandleWOTStream(stream network.Stream, store *Store) {
 	defer stream.Close()
+	_ = stream.SetDeadline(time.Now().Add(30 * time.Second))
 
-	sizeBuf := make([]byte, 4)
-	if _, err := stream.Read(sizeBuf); err != nil {
-		return
-	}
-	size := binary.BigEndian.Uint32(sizeBuf)
-	reqBytes := make([]byte, size)
-	if _, err := io.ReadFull(stream, reqBytes); err != nil {
+	reqBytes, err := wire.ReadFrame(stream)
+	if err != nil {
+		_ = stream.Reset()
 		return
 	}
 
@@ -271,6 +267,10 @@ func HandleWOTStream(stream network.Stream, store *Store) {
 	}
 
 	respBytes, _ := goproto.Marshal(&proto.WOTResponseWrapper{Response: &resp})
+	if len(respBytes) > wire.MaxMessageSize {
+		_ = stream.Reset()
+		return
+	}
 	respLen := make([]byte, 4)
 	binary.BigEndian.PutUint32(respLen, uint32(len(respBytes)))
 	stream.Write(respLen)

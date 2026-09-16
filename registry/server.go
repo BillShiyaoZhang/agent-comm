@@ -3,9 +3,10 @@ package registry
 
 import (
 	"fmt"
-	"io"
 	"sync"
+	"time"
 
+	"github.com/BillShiyaoZhang/agent-comm/internal/wire"
 	agentpb "github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -81,6 +82,10 @@ func (s *InMemoryStore) RegisterWithSignature(urn, peerID string, addrs, relayAd
 	}
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if old, exists := s.账册[urn]; exists && timestamp < old.Timestamp {
+		return fmt.Errorf("registration is older than the current record")
+	}
 	s.账册[urn] = RegistryEntry{
 		Info:           peer.AddrInfo{ID: pid, Addrs: maddrs},
 		X25519PubKey:   x25519PK,
@@ -90,7 +95,6 @@ func (s *InMemoryStore) RegisterWithSignature(urn, peerID string, addrs, relayAd
 		StoresUserData: storesUserData,
 		RelayAddrs:     relayAddrs,
 	}
-	s.mu.Unlock()
 	return nil
 }
 
@@ -139,10 +143,11 @@ func NewServer(h host.Host, store Store) *Server {
 
 // HandleStream services a registry request over a libp2p stream.
 func (s *Server) HandleStream(stream network.Stream) {
-	buf, err := io.ReadAll(stream)
+	defer stream.Close()
+	_ = stream.SetDeadline(time.Now().Add(30 * time.Second))
+	buf, err := wire.ReadMessage(stream)
 	if err != nil {
-		fmt.Printf("[registry] read error: %v\n", err)
-		stream.Close()
+		_ = stream.Reset()
 		return
 	}
 	fmt.Printf("[registry] received %d bytes\n", len(buf))
@@ -158,7 +163,12 @@ func (s *Server) HandleStream(stream network.Stream) {
 
 	switch op := req.Op.(type) {
 	case *agentpb.URNRegistryRequest_Register:
-		ok, info := s.handleRegister(op.Register)
+		ok, info := false, "registration must be published by its owner"
+		// The legacy record signature does not cover routing addresses. Only
+		// its authenticated owner may supply those fields over the network.
+		if op.Register != nil && stream.Conn().RemotePeer().String() == op.Register.PeerId {
+			ok, info = s.handleRegister(op.Register)
+		}
 		resp.Op = &agentpb.URNRegistryResponse_Register{
 			Register: &agentpb.RegisterResponse{Ok: ok, Info: info},
 		}
@@ -188,8 +198,8 @@ func (s *Server) handleRegister(r *agentpb.RegisterRequest) (bool, string) {
 	if r == nil {
 		return false, "registration request is required"
 	}
-	// Validate here even when a custom Store is installed. Ownership comes from
-	// the signature, not RemotePeer: relaying owner-signed records is supported.
+	// Validate here even when a custom Store is installed. The network boundary
+	// additionally binds RemotePeer to the owner because routing hints are unsigned.
 	if err := ValidateRegistration(r.Urn, r.PeerId, r.X25519Pubkey, r.Ed25519Pubkey, r.Signature, r.StoresUserData, r.Timestamp); err != nil {
 		return false, err.Error()
 	}
@@ -201,6 +211,9 @@ func (s *Server) handleRegister(r *agentpb.RegisterRequest) (bool, string) {
 }
 
 func (s *Server) handleResolve(r *agentpb.ResolveRequest) (string, []string, []string, []byte, []byte, []byte, bool, int64, bool) {
+	if r == nil {
+		return "", nil, nil, nil, nil, nil, false, 0, false
+	}
 	return s.store.ResolveExtended(r.Urn)
 }
 

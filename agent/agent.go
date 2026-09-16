@@ -95,13 +95,17 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 		return nil, fmt.Errorf("failed to start libp2p host: %w", err)
 	}
 
-	// Initialize DHT
-	dhtCfg := dht.DHTConfig{Mode: dht.ModeClient, Bootstraps: cfg.BootstrapNodes}
-	d, err := dht.NewDHT(ctx, h, dhtCfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create DHT: %w", err)
+	// Registry/MQ messaging does not use DHT lookups. Do not automatically join
+	// a discovery network affected by upstream GO-2024-3218 (no known fix).
+	var d *kad.IpfsDHT
+	if cfg.EnableDHT {
+		dhtCfg := dht.DHTConfig{Mode: dht.ModeClient, Bootstraps: cfg.BootstrapNodes}
+		d, err = dht.NewDHT(ctx, h, dhtCfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create DHT: %w", err)
+		}
+		dht.Bootstrap(ctx, d)
 	}
-	dht.Bootstrap(ctx, d)
 
 	a := &Agent{
 		Host:           h,
@@ -118,6 +122,11 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 	if cfg.PlatformHTTPURL != "" {
 		a.MQHTTPClient = mq.NewHTTPClient(strings.TrimRight(cfg.PlatformHTTPURL, "/"), keys)
 		go a.registerHTTP(ctx)
+	}
+	// Preserve configured registry/MQ reachability without relying on DHT's
+	// incidental bootstrap peerstore population.
+	for _, node := range cfg.BootstrapNodes {
+		h.Peerstore().AddAddrs(node.ID, node.Addrs, peerstore.PermanentAddrTTL)
 	}
 
 	// Try to register self with bootstrap registries

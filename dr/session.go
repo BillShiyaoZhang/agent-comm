@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
+	"github.com/BillShiyaoZhang/agent-comm/internal/wire"
 	"github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/BillShiyaoZhang/agent-comm/session"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -100,6 +102,10 @@ func (s *DRSession) GetRatchetState() RatchetState {
 
 // Send encrypts a plaintext using the current ratchet chain and sends it over a new stream.
 func (s *DRSession) Send(ctx context.Context, plaintext []byte) error {
+	// Header, nonce and authentication tag are included in the frame limit.
+	if len(plaintext) > wire.MaxMessageSize-40-12-16 {
+		return fmt.Errorf("DR plaintext exceeds frame size limit")
+	}
 	s.mu.Lock()
 	drMsg, err := s.ratchet.Send(plaintext)
 	s.mu.Unlock()
@@ -117,6 +123,7 @@ func (s *DRSession) Send(ctx context.Context, plaintext []byte) error {
 		return fmt.Errorf("open stream: %w", err)
 	}
 	defer stream.Close()
+	setStreamDeadline(ctx, stream)
 
 	// Write: length-prefixed DR message
 	sizeBuf := make([]byte, 4)
@@ -132,7 +139,7 @@ func (s *DRSession) Send(ctx context.Context, plaintext []byte) error {
 	}
 
 	// Read response (if any) — DR is symmetric, so we also get a reply
-	respSize, err := readUint32BE(stream)
+	respBytes, err := wire.ReadFrame(stream)
 	if err != nil {
 		// In simplex mode (no response expected), stream may be already closed.
 		// EOF here is acceptable — it just means the peer sent and closed.
@@ -140,10 +147,6 @@ func (s *DRSession) Send(ctx context.Context, plaintext []byte) error {
 			return nil
 		}
 		return fmt.Errorf("read response size: %w", err)
-	}
-	respBytes := make([]byte, respSize)
-	if _, err := io.ReadFull(stream, respBytes); err != nil {
-		return fmt.Errorf("read response: %w", err)
 	}
 
 	// Decrypt response using the now-advanced ratchet
@@ -184,6 +187,7 @@ func (s *DRSession) SendMessage(ctx context.Context, text string) error {
 // On the first message (Bob's side), it initializes the ratchet from the header.
 // Returns the plaintext payload.
 func (s *DRSession) Receive(ctx context.Context, stream network.Stream) ([]byte, error) {
+	setStreamDeadline(ctx, stream)
 	if stream.Conn().RemotePeer() != s.peerID {
 		return nil, fmt.Errorf("DR stream peer does not match session identity")
 	}
@@ -191,16 +195,8 @@ func (s *DRSession) Receive(ctx context.Context, stream network.Stream) ([]byte,
 		return nil, err
 	}
 	// Read length-prefixed DR message
-	sizeBuf := make([]byte, 4)
-	if _, err := io.ReadFull(stream, sizeBuf); err != nil {
-		return nil, fmt.Errorf("read size: %w", err)
-	}
-	size := binary.BigEndian.Uint32(sizeBuf)
-	if size > 1<<20 {
-		return nil, fmt.Errorf("message too large: %d", size)
-	}
-	msgBytes := make([]byte, size)
-	if _, err := io.ReadFull(stream, msgBytes); err != nil {
+	msgBytes, err := wire.ReadFrame(stream)
+	if err != nil {
 		return nil, fmt.Errorf("read dr msg: %w", err)
 	}
 
@@ -248,7 +244,7 @@ func (s *DRSession) Receive(ctx context.Context, stream network.Stream) ([]byte,
 
 	// Deserialize and decrypt (subsequent messages)
 	var hdr DrHeader
-	hdr, err := DeserializeHeader(msgBytes)
+	hdr, err = DeserializeHeader(msgBytes)
 	if err != nil {
 		return nil, fmt.Errorf("deserialize header: %w", err)
 	}
@@ -299,6 +295,14 @@ func array32(b []byte) [32]byte {
 	var a [32]byte
 	copy(a[:], b)
 	return a
+}
+
+func setStreamDeadline(ctx context.Context, stream network.Stream) {
+	deadline := time.Now().Add(30 * time.Second)
+	if requested, ok := ctx.Deadline(); ok && requested.Before(deadline) {
+		deadline = requested
+	}
+	_ = stream.SetDeadline(deadline)
 }
 
 func readUint32BE(r io.Reader) (uint32, error) {
