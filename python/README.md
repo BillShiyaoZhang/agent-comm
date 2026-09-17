@@ -1,6 +1,6 @@
 # Agent Comm 本地协作 Runtime
 
-`agent-comm-runtime` 0.1.3 是可独立安装的 Python 3.11+ 包，标准库即可运行。它不导入 Hermes、模型 SDK 或任何记忆库。联系人、授权、任务、不可变动作、资源快照、入站和审计的唯一实现位于这里；Hermes connector 是它的首个实际宿主适配器。Web 通过明确配对的远程控制协议同步 agent 侧状态；拥有对应权限后可直接添加联系人和确认授权，所有决定仍写入 agent 的同一个 Store。
+`agent-comm-runtime` 0.1.4 是可独立安装的 Python 3.11+ 包，标准库即可运行。它不导入 Hermes、模型 SDK 或任何记忆库。联系人、授权、任务、不可变动作、资源快照、入站和审计的唯一实现位于这里；Hermes connector 是它的首个实际宿主适配器。Web 通过明确配对的远程控制协议同步 agent 侧状态；拥有对应权限后可直接添加联系人和确认授权，所有决定仍写入 agent 的同一个 Store。
 
 ## 安装与独立运行
 
@@ -38,7 +38,7 @@ flowchart LR
     TP --> G["Go helper<br/>身份、密钥与持久收发"]
 ```
 
-扩展协议版本 `1.0`、Python 包版本 `0.1.3`、协作消息 `agent-comm-collaboration/v1` / `v2`、SQLite schema `1` 是不同版本维度。当前 adapter API 要求版本精确相同；未来改变合约时显式升级，避免静默兼容猜测。v2 与 attention 使用新增记录类型，旧 v1 行保留；原 `hermes-native-<profile hash>` 主体仍能读取旧记录。不能用旧二进制继续处理已建立的 v2 协作。
+扩展协议版本 `1.0`、Python 包版本 `0.1.4`、协作消息 `agent-comm-collaboration/v1` / `v2`、SQLite schema `1` 是不同版本维度。当前 adapter API 要求版本精确相同；未来改变合约时显式升级，避免静默兼容猜测。v2 与 attention 使用新增记录类型，旧 v1 行保留；原 `hermes-native-<profile hash>` 主体仍能读取旧记录。不能用旧二进制继续处理已建立的 v2 协作。
 
 ## 双边协作与持久提醒
 

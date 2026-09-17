@@ -2,7 +2,7 @@
 
 本插件连接本机 `agent-comm-helper`，由 helper 负责密钥、加密和当前 HTTPS MQ 可靠传输。`platform_url` 必须是本机 loopback HTTP 地址（默认 `http://127.0.0.1:45042`），不可填写云端 platform URL。
 
-## 个人协作模式（1.5.4，可选）
+## 个人协作模式（1.5.5，可选）
 
 本版本通过独立 `agent-comm-runtime` 包提供本地协作内核，
 `agent_comm_collaboration` 是它的 Hermes 原生适配工具，优先用于 Hermes

@@ -1,201 +1,193 @@
-name: Release agent-comm helper
+name: Release agent-comm clients
 
 on:
   push:
-    tags:
-      - 'v*' # 仅在推送版本 tag (例如 v1.0.0) 时触发
-  workflow_dispatch: # 允许手动触发
-
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing semantic version tag to release (for example v0.7.0)
+        required: true
+        type: string
+      deployment_ref:
+        description: Deploy repository commit or ref whose nested SDK matches this tag
+        required: true
+        default: main
+        type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
-  build-and-release:
-    name: Build and Release Helper Binaries
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      sdk_sha: ${{ steps.release.outputs.sdk_sha }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      deployment_ref: ${{ steps.release.outputs.deployment_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve an existing release tag to its immutable commit
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          DEPLOYMENT_REF: ${{ inputs.deployment_ref || 'main' }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: python tools/release_assets.py resolve
+
+  test:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sdk_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Go tests
+        run: go test ./...
+      - name: Runtime tests
+        env:
+          PYTHONPATH: python
+        run: python -m unittest discover -s python/tests -v
+      - name: Host-independent connector tests
+        env:
+          PYTHONPATH: python:connectors/hermes-platform:connectors/hermes-platform/tests
+        # Native Hermes integration is tested against a real host separately;
+        # these suites require no host installation and never fake its APIs.
+        run: |
+          python -m pip install fastapi httpx
+          python -m unittest -v test_attention test_collaboration_policy test_collaboration_store test_collaboration_store_adversarial
+      - name: Desktop and resume tests
+        run: node --experimental-vm-modules --test connectors/hermes-platform/tests/test_attention_desktop.mjs connectors/hermes-platform/tests/test_attention_resume_desktop.mjs
+      - name: Release and downloader tests
+        run: python -m unittest discover -s tools -p 'test_release*.py' -v
+
+  helper:
+    needs: [resolve, test]
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
-          # Linux amd64
-          - goos: linux
-            goarch: amd64
-            artifact_name: agent-comm-helper-linux-amd64
-          # Windows amd64
-          - goos: windows
-            goarch: amd64
-            artifact_name: agent-comm-helper-windows-amd64.exe
-          # macOS amd64 (Intel)
-          - goos: darwin
-            goarch: amd64
-            artifact_name: agent-comm-helper-darwin-amd64
-          # macOS arm64 (Apple Silicon M1/M2/M3)
-          - goos: darwin
-            goarch: arm64
-            artifact_name: agent-comm-helper-darwin-arm64
-
+          - {goos: linux, goarch: amd64, name: agent-comm-helper-linux-amd64}
+          - {goos: windows, goarch: amd64, name: agent-comm-helper-windows-amd64.exe}
+          - {goos: darwin, goarch: amd64, name: agent-comm-helper-darwin-amd64}
+          - {goos: darwin, goarch: arm64, name: agent-comm-helper-darwin-arm64}
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
         with:
-          go-version-file: 'go.mod'
-
-      - name: Run Build
-        working-directory: ./
-        run: |
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
-          go build -ldflags="-s -w" -o build/${{ matrix.artifact_name }} ./cmd/helper
-
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
+          ref: ${{ needs.resolve.outputs.sdk_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
         with:
-          name: ${{ matrix.artifact_name }}
-          path: |
-            build/agent-comm-helper-*
+          go-version-file: go.mod
+      - name: Build helper with source revision metadata
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+          HELPER_NAME: ${{ matrix.name }}
+        run: go build -buildvcs=true -ldflags='-s -w' -o "build/$HELPER_NAME" ./cmd/helper
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: build/${{ matrix.name }}
+          if-no-files-found: error
 
-  publish:
-    name: Create GitHub Release
-    needs: build-and-release
+  wheels:
+    needs: [resolve, test]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          path: build-artifacts
-
-      - name: Prepare Release Binaries
-        run: |
-          mkdir -p release-dist
-          # 整理下载归档的文件并移动到统一发布目录
-          find build-artifacts -type f -exec cp {} release-dist/ \;
-          ls -la release-dist/
-
-      - name: Prepare Release Helper
-        run: |
-          cp tools/release_manifest_fetch.py release-dist/release_manifest_fetch.py
-          ls -la release-dist/
-
-      - name: Package Docs Bundle
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          from zipfile import ZIP_DEFLATED, ZipFile
-
-          root = Path(".")
-          dist = Path("release-dist")
-          bundle = dist / "agent-comm-docs.zip"
-          docs = {
-              "README.md",
-              "README_EN.md",
-              "SKILL.md",
-              "SKILL_EN.md",
-              "python/README.md",
-              "connectors/README.md",
-              "connectors/hermes-platform/README.md",
-              "connectors/openclaw-channel/README.md",
-              "connectors/hermes-platform/hermes_platform_agent_comm/skills/personal-collaboration/SKILL.md",
-              "examples/README.md",
-              "tests/README.md",
-              "tools/README.md",
-          }
-          docs.update(path.as_posix() for path in root.joinpath("docs").rglob("*.md"))
-          docs.update(path.as_posix() for path in root.joinpath("references").rglob("*.md"))
-
-          with ZipFile(bundle, "w", compression=ZIP_DEFLATED) as archive:
-              for relative_path in sorted(docs):
-                  path = root / relative_path
-                  archive.write(path, arcname=relative_path)
-          PY
-
-      - name: Generate Release Metadata
-        env:
-          RELEASE_VERSION: ${{ github.ref_name }}
-        run: |
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          import re
-          from datetime import datetime, timezone
-          from pathlib import Path
-
-          dist = Path("release-dist")
-          assets = []
-          binary_re = re.compile(r"^(agent-comm|agent-comm-helper)-(linux|windows|darwin)-(amd64|arm64)(?:\.exe)?$")
-
-          for path in sorted(dist.iterdir()):
-              if not path.is_file():
-                  continue
-              if path.name == "release-manifest.json":
-                  continue
-
-              digest = hashlib.sha256(path.read_bytes()).hexdigest()
-              asset = {
-                  "name": path.name,
-                  "sha256": digest,
-                  "size": path.stat().st_size,
-              }
-              if path.name == "SHA256SUMS":
-                  asset["kind"] = "checksum"
-              elif path.name == "agent-comm-docs.zip":
-                  asset["kind"] = "docs"
-              elif path.name.endswith(".py"):
-                  asset["kind"] = "helper"
-              else:
-                  match = binary_re.match(path.name)
-                  if match:
-                      asset["kind"] = "binary" if match.group(1) == "agent-comm" else "helper-binary"
-                      asset["platform"] = {
-                          "os": match.group(2),
-                          "arch": match.group(3),
-                      }
-                  else:
-                      asset["kind"] = "binary"
-
-              assets.append(asset)
-
-          payload_assets = [asset for asset in assets if asset["kind"] != "checksum"]
-          checksum_lines = [f"{asset['sha256']}  {asset['name']}" for asset in payload_assets]
-          (dist / "SHA256SUMS").write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
-
-          checksum_path = dist / "SHA256SUMS"
-          checksum_asset = {
-              "name": "SHA256SUMS",
-              "sha256": hashlib.sha256(checksum_path.read_bytes()).hexdigest(),
-              "size": checksum_path.stat().st_size,
-              "kind": "checksum",
-          }
-
-          assets = [asset for asset in assets if asset["kind"] != "checksum"] + [checksum_asset]
-
-          manifest = {
-              "schema_version": 1,
-              "name": "agent-comm",
-              "version": os.environ["RELEASE_VERSION"],
-              "repository": os.environ["GITHUB_REPOSITORY"],
-              "release_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{os.environ['RELEASE_VERSION']}",
-              "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-              "checksum_file": "SHA256SUMS",
-              "assets": assets,
-          }
-          (dist / "release-manifest.json").write_text(
-              json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-              encoding="utf-8",
-          )
-          PY
-
-      - name: Create GitHub Release and Upload Assets
-        uses: softprops/action-gh-release@v2
+          ref: ${{ needs.resolve.outputs.sdk_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
         with:
-          files: release-dist/*
-          draft: false
-          prerelease: false
-          generate_release_notes: true
+          python-version: '3.12'
+      - run: python -m pip install 'setuptools>=68' wheel
+      - name: Build runtime and connector wheels without bundling dependencies
+        run: python -m pip wheel --no-deps --no-build-isolation ./python ./connectors/hermes-platform --wheel-dir build/wheels
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels
+          path: build/wheels/*.whl
+          if-no-files-found: error
+
+  publish:
+    needs: [resolve, test, helper, wheels]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sdk_sha }}
+          path: sdk
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: BillShiyaoZhang/agent-collaboration-deploy
+          ref: ${{ needs.resolve.outputs.deployment_ref }}
+          submodules: recursive
+          path: deploy
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk/go.mod
+          cache-dependency-path: sdk/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Validate deployment tools
+        run: |
+          python -m pip install packaging PyYAML
+          python -m unittest discover -s deploy/tools/release/tests -v
+          python -m unittest discover -s deploy/tools/release/early_access/tests -v
+      - name: Verify source identities and build complete installation bundles
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          SDK_SHA: ${{ needs.resolve.outputs.sdk_sha }}
+        run: >-
+          python sdk/tools/release_assets.py assemble --sdk sdk --deployment deploy
+          --artifacts artifacts --output release-dist --tag "$RELEASE_TAG"
+          --sdk-sha "$SDK_SHA" --repository "$GITHUB_REPOSITORY"
+      - name: Refuse to replace an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+        run: python sdk/tools/release_assets.py ensure-unpublished --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY"
+      - name: Create a new draft, verify every upload, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          SDK_SHA: ${{ needs.resolve.outputs.sdk_sha }}
+        run: >-
+          python sdk/tools/release_assets.py publish --output release-dist
+          --tag "$RELEASE_TAG" --sdk-sha "$SDK_SHA" --repository "$GITHUB_REPOSITORY"
+          --notes "sdk/docs/releases/$RELEASE_TAG.md"
