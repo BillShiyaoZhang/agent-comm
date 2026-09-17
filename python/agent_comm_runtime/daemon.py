@@ -71,6 +71,7 @@ def main(argv=None):
             print(json.dumps({"pairings": bridge.pairings()}, ensure_ascii=False))
         else:
             transport = HelperTransport(args.helper_url, timeout=10)
+            last_presence_poll = 0
             while True:
                 processed = 0
                 errors = 0
@@ -86,6 +87,10 @@ def main(argv=None):
                         processed += 1
                     except (ValueError, TypeError, KeyError, OSError):
                         errors += 1  # Keep malformed/failed messages pending without logging plaintext.
+                store.flush_social_outbox(transport)
+                if time.monotonic() - last_presence_poll >= 30:
+                    store.refresh_presence(transport)
+                    last_presence_poll = time.monotonic()
                 if args.once:
                     print(json.dumps({"processed": processed, "pending_errors": errors, "methods": [*READ_METHODS, *WRITE_METHODS]}))
                     break

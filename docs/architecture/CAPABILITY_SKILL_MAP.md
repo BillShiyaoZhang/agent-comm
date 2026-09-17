@@ -1,5 +1,13 @@
 # agent-comm 能力与 skill 对照
 
+## 2026-09-17 当前能力增补
+
+下文保留早期基线审计。当前 Runtime 额外提供 `contact_requests`、`prepare_contact_response`、`prepare_message`、`mark_read`；`prepare_contact` 在本人确认后发送持久好友请求，双方同意后才显示 `connected`，旧单边通讯录映射为 `unverified`。对应 Web RPC 为 `contacts.requests`、`contacts.respond`、`messages.send`、`inbox.mark_read`，并通过已配对的 `collaboration.execute` 访问同一 Runtime。完整动作与参数由 `describe.action_fields` 给出。
+
+Hermes 的已配对 Web 会话与本机主人会话共用协作工具，权限由真实宿主上下文和本地配对共同检查。所有业务数据以本机 Store 为准；消息已读、好友决定与提醒终态同步到其它端。helper 新增 `POST /api/v1/platform/register` 供本机绑定脚本自动注册，`GET /api/v1/presence?urn=...` 校验近期签名心跳。平台注册不代表联系人已接受，也不代表已获主人权限。
+
+当前操作说明见[个人协作 skill](../../connectors/hermes-platform/hermes_platform_agent_comm/skills/personal-collaboration/SKILL.md)与 [Hermes connector](../../connectors/hermes-platform/README.md)。
+
 ## 审计口径
 
 基线为 SDK 提交 `a2d06d0eb5c8a283328986ff7ae60ec13e125891`。本表中的“原 skill”和行号均指该提交，不把本次补文档后的覆盖倒算为原有覆盖。审计读取源码、公开入口与技能正文；没有连接生产服务，也不把接口存在等同于部署后的运行验收。

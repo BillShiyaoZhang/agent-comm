@@ -51,7 +51,7 @@ class MailNetwork:
                     raise ValueError("stable message ID conflicts")
                 network.accepted[key] = dict(body)
                 wire = {**body, "sender_urn": urn}
-                network.mail[body["recipient_urn"]][body["message_id"]] = wire
+                network.mail.setdefault(body["recipient_urn"], {})[body["message_id"]] = wire
                 network.events.append(("stored", urn, body["message_id"]))
                 return {"success": True, "status": "accepted", "message_id": body["message_id"]}
             def retrieve(self):
@@ -166,16 +166,17 @@ class TestRemote(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.bridge.register_handler(method, lambda params, owner: {})
 
-    def test_contacts_add_is_deterministic_confirmed_and_owner_scoped(self):
+    def test_contacts_add_is_deterministic_pending_and_owner_scoped(self):
         self.allow_web_actions()
         params = {"contact_id": "wang", "aliases": [" 老王 ", "Wang", "Wang"], "urn": "urn:hermes:agent:wang"}
         wire, first = self.submit(request("add-wang", "contacts.add", params))
         result = self.result(first)["result"]
-        self.assertEqual(result["status"], "confirmed")
+        self.assertEqual(result["status"], "requested")
+        self.assertEqual(result["contact"]["connection_status"], "pending")
         self.assertEqual(result["contact"]["aliases"], ["Wang", "老王"])
         self.assertEqual(self.bridge.process(wire, self.agent), first)
         _, duplicate = self.submit(request("add-wang-again", "contacts.add", params))
-        self.assertEqual(self.result(duplicate)["result"]["status"], "already_confirmed")
+        self.assertEqual(self.result(duplicate)["result"]["status"], "already_requested")
         self.assertEqual(self.store.state("owner-a|native")["contacts"], [result["contact"]])
         self.assertEqual(self.store.state("owner-b|native")["contacts"], [])
         self.assertEqual(self.bridge._all("turn"), [])
@@ -228,7 +229,7 @@ class TestRemote(unittest.TestCase):
             self.submit(request("decide-" + decision, "approval.respond", {"approval_id": pending["approval_id"], "decision": decision}))
             self.assertEqual(self.store._get("operation", "op-" + decision)["status"], status)
             self.assertEqual(self.store._get("operation", "op-" + decision).get("deliveries", []), [])
-        self.assertTrue(all(body["kind"].startswith("control.") for body in self.network.accepted.values()))
+        self.assertTrue(all(body["kind"].startswith("control.") or body["kind"] == "contact.request" for body in self.network.accepted.values()))
 
     def test_remote_approval_rejects_revoked_expired_superseded_and_invalid_decisions(self):
         self.allow_web_actions()
@@ -264,7 +265,7 @@ class TestRemote(unittest.TestCase):
 
     def test_mutation_receipt_survives_crash_before_bridge_cache_and_rejects_changed_replay(self):
         self.allow_web_actions()
-        for method in WRITE_METHODS:
+        for method in ("contacts.add", "approval.respond"):
             if method == "contacts.add":
                 params = {"contact_id": "crash-contact", "aliases": ["Crash"], "urn": "urn:agent-comm:agent:crash"}
             else:
@@ -289,7 +290,7 @@ class TestRemote(unittest.TestCase):
             changed = self.bridge.handle({**wire, "text": json.dumps(altered)})
             self.assertEqual(self.result(changed)["error"]["code"], "request_conflict")
             recovered = self.bridge.handle(wire)
-            self.assertEqual(self.result(recovered)["result"]["status"], "confirmed" if method == "contacts.add" else "approved_once")
+            self.assertEqual(self.result(recovered)["result"]["status"], "requested" if method == "contacts.add" else "approved_once")
             self.assertEqual(len(self.store._all("audit")), audit_count)
             self.bridge.revoke(CONSOLE)
             self.assertEqual(self.result(self.bridge.handle(wire))["error"]["code"], "not_paired")

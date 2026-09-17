@@ -39,7 +39,8 @@ Hermes 原生会话中的首个联系人绑定和事项范围通过自己的 `cl
 确认的绑定，`approval.respond` 接受用户对 agent 生成的具体待确认请求的同意或
 拒绝。两项方法须在本机分别明确授权，主人主体来自本地配对，普通聊天、联系人
 信任或 `allow_from` 不授予此权限。结果写入同一协作库，并由 Web 读取同步；
-批准本身不会直接发送业务消息。Web 已处理的问题不能再被迟到的原生 callback
+普通消息和好友响应的确认会提交相应的持久 outbox；协作动作仍按其 dispatch 流程执行。
+Web 已处理的问题不能再被迟到的原生 callback
 覆盖。已有配对不会随升级自动增权，需安装匹配的 runtime 与 Web，并显式重配。
 安装包用户可查看[配对升级步骤](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md#4-配对远程-web)。
 
@@ -82,13 +83,15 @@ scope/payload 规格见随包的 `skills/personal-collaboration/SKILL.md`。测�
 
 ## 协作待办与纯提醒 companion（N1）
 
-随 Python wheel 提供可选 `agent-comm-attention` Hermes 插件包，包含 Desktop
-前端与 dashboard 只读 API。它每 15 秒读取当前连接/profile 的持久待办，不启动
+随 Python wheel 提供 `agent-comm-attention` Hermes 插件包，安装配置工具默认部署并启用它，包含 Desktop
+前端与 dashboard 认证 API。它每 15 秒读取当前连接/profile 的持久待办，不启动
 LLM，不发送对端消息，不申请或消耗原生确认租约。它提供：
 
 - 永久“协作待办”侧栏页和状态栏分别显示未读与待处理数量；普通来信和完成记录
   显示在“最新进展”。任何开放事项都可标为已读，授权卡已读后仍待处理；解决、
   撤销或过期后按新 revision 更新。
+- 好友请求直接显示为待处理项，可进入本机对话接受或拒绝。普通消息的“标为已读”
+  写回 agent 数据库；Web 或本机处理后的提醒会在另一端下一次同步时关闭。
 - 前台应用内提示和后台 OS 原生提醒；只发送程序生成的计数摘要，不把来信正文
   或资料放进锁屏通知。首次同步历史普通消息不弹提醒，未解决的决定和恢复项仍展示。
 - 按连接/profile/owner/item revision 持久保存**提醒尝试**水位，用 Web Locks
@@ -110,10 +113,10 @@ Hermes 的纯 ESM 运行时插件，`dashboard/manifest.json` 声明 profile 受
 
 部署时将检查后的目录安装到 Hermes 的可信用户插件目录
 `<Hermes root>/plugins/agent-comm-attention/`；保留已有插件和配置。通过 Hermes
-的插件设置显式启用 `agent-comm-attention` 的后端，并在 Desktop 的能力/插件
-设置启用同名 Desktop contribution。Gateway/dashboard 使用的 Python 环境均须
+的插件设置启用 `agent-comm-attention` 的后端；Desktop contribution 默认启用，保留用户
+显式关闭的偏好。Gateway/dashboard 使用的 Python 环境均须
 安装当前 runtime 与 connector wheel。重启 dashboard 加载 API；Desktop 重载
-插件。当前 profile 仍需 `collaboration_enabled: true`。
+插件。当前 profile 需启用 `collaboration_enabled` 或 `remote_enabled`。
 
 只读接口为 `GET /api/plugins/agent-comm-attention/attention?after=0&limit=100`；
 可选 `profile` 由 Hermes 自身解析并限定到该 dashboard owner 管理的 profile。
@@ -125,6 +128,8 @@ Desktop 必须运行且连接到对应 profile 才能轮询和触发系统提醒
 切换其他连接后，待办仍保存在 agent 数据库，重连后重新同步。独立网页或移动端
 推送不由此 companion 提供。旧的 Hermes 内部接口缺失时 API 明确 unavailable，
 不会降级为无认证访问或启动私人模型。
+当前 Hermes SDK 未提供撤回已经投递的 OS 通知接口；跨端处理会关闭 agent 的待办状态、
+本机未读计数和后续提醒，但操作系统通知中心已经展示的历史条目由宿主管理。
 
 验证（全部使用临时数据，前端通知使用 fake host）：
 
@@ -183,6 +188,17 @@ remote 消费器。
 通过配对校验的远程回合附带固定的宿主会话说明，向模型提供已验证的来源和授权边界。
 该说明允许主人或其控制的 agent 通过工作台对话；它不声称每条消息都由主人手工发送，
 不授予原生审批或额外工具权限。普通对端消息及模型传入参数无法设置该可信说明。
+
+配对包含 `collaboration.execute` 时，远程聊天中的 `agent_comm_collaboration`
+与原生对话调用同一个 Runtime，支持联系人请求、消息、资料、委托和协作动作。
+同名 RPC 的 params 就是工具参数，例如 `{"action":"describe"}`；其 `action_fields`
+列出实际支持的动作及必需/可选字段，Web 可据此提供相同功能。权限只读的旧配对
+仍然只读，升级不会隐式增加权限。需要确认的远程动作返回持久审批，用户从 Web
+问题卡通过 `approval.respond` 决定；模型的 `confirm` 只能读取已作出的决定。
+
+好友请求、响应与普通消息由同一 agent SQLite 持久 outbox 驱动；Gateway 定期重试，
+不依赖下一封来信触发。已建立连接的联系人每约 30 秒更新在线观察，过期状态显示
+unknown。远程回合的工具权限绑定到真实宿主回合，撤销配对或回合结束后不能继续调用。
 
 ## 安装与升级
 

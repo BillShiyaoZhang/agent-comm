@@ -6,7 +6,7 @@ derives the owner identity. Browser and peer input never supply that identity.
 """
 import json
 
-from .hermes import profile_principal, read_settings, state_path
+from .hermes import collaboration_enabled, profile_principal, read_settings, state_path
 from .store import Store
 
 
@@ -58,6 +58,14 @@ def _instruction(item):
                  + call({"action": "confirm", "approval_id": item["target"]["id"]})
                  + "若工具返回过期、撤销、已决定或其它阻断，应停止并如实说明，不重新准备任务或延长权限。"
                    "只接受该原生问题卡的回答；确认结束后汇报结果，不自动执行后续动作。")
+    elif item["target"]["kind"] == "contact":
+        text += ("\n这是一个好友请求。请调用 agent_comm_collaboration contact_requests 读取最新状态和对方 URN，"
+                 "向我说明接受或拒绝的效果。根据我给出的决定调用 prepare_contact_response，"
+                 "再通过 confirm 的原生问题卡确认；不能把对端请求当成我的同意。")
+    elif item["target"]["kind"] == "inbox":
+        text += ("\n请调用 agent_comm_collaboration inbox 读取完整来信；阅读完成后可调用 mark_read，"
+                 "message_id 为此事项 target.id，已读状态会同步到其它客户端。"
+                 "如果我要求回复，用 prepare_message 准备具体内容并通过 confirm 确认。")
     else:
         text += "请说明发起方、所需动作、范围和风险；缺少权限时准备对应的具体原生问题，让我决定。"
     return text
@@ -79,7 +87,7 @@ def read_attention(*, after=0, limit=100):
     if type(after) is not int or after < 0 or type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("Invalid attention cursor or page size")
     settings = read_settings()
-    if settings.get("collaboration_enabled") is not True:
+    if not collaboration_enabled(settings):
         return {"schema": "agent-comm-attention/v1", "items": [], "cursor": after,
                 "has_more": False, "available": False, "reason": "collaboration_disabled"}
     owner = profile_principal()
@@ -107,7 +115,7 @@ def handle_resume(action, body):
         raise TypeError("Unsupported handling parameters")
     settings = read_settings()
     path = state_path(settings)
-    if settings.get("collaboration_enabled") is not True or not path.exists():
+    if not collaboration_enabled(settings) or not path.exists():
         raise ValueError("Collaboration handling unavailable")
     owner = profile_principal()
     store = Store(path, local_urn=settings.get("urn"))
@@ -129,13 +137,27 @@ def handle_resume(action, body):
 def read_attention_detail(attention_id):
     settings = read_settings()
     path = state_path(settings)
-    if settings.get("collaboration_enabled") is not True or not path.exists():
+    if not collaboration_enabled(settings) or not path.exists():
         raise ValueError("Collaboration detail unavailable")
     owner = profile_principal()
     store = Store(path, local_urn=settings.get("urn"))
     try:
         return {"owner_key": owner, "available": True,
                 "item": _decorate(store, owner + "|attention", {"attention_id": attention_id})}
+    finally:
+        store.close()
+
+
+def mark_attention_read(body):
+    if not isinstance(body, dict) or set(body) != {"message_id"}:
+        raise TypeError("Expected one message_id")
+    settings = read_settings()
+    path = state_path(settings)
+    if not collaboration_enabled(settings) or not path.exists():
+        raise ValueError("Collaboration messages unavailable")
+    store = Store(path, local_urn=settings.get("urn"))
+    try:
+        return store.mark_read(body["message_id"], profile_principal() + "|attention")
     finally:
         store.close()
 
@@ -167,7 +189,7 @@ def create_router():
         from hermes_cli.web_server import _require_token
         from hermes_cli.web_server_profiles import _config_profile_scope
         _require_token(request)
-        if action not in {"prepare-resume", "bind-session", "claim-submit", "finish-submit"}:
+        if action not in {"prepare-resume", "bind-session", "claim-submit", "finish-submit", "mark-read"}:
             raise HTTPException(status_code=404, detail="Unknown handling endpoint")
         if set(request.query_params) - {"profile"}:
             raise HTTPException(status_code=400, detail="Unsupported handling parameters")
@@ -180,7 +202,7 @@ def create_router():
             raise HTTPException(status_code=400, detail="Invalid handling request") from None
         try:
             with _config_profile_scope(profile):
-                return handle_resume(action, body)
+                return mark_attention_read(body) if action == "mark-read" else handle_resume(action, body)
         except HTTPException:
             raise
         except TypeError:

@@ -79,7 +79,7 @@ class AttentionMixin(AttentionResumeMixin):
                 expires = instant(worker["policy"]["expires_at"])
                 if state == "superseded" and expires <= self.clock():
                     state = "expired"
-        title = {"contact": "联系人绑定需要你确认", "task": "协作委托需要你确认", "worker_policy": "有限后台策略需要你确认",
+        title = {"contact": "好友请求需要你确认", "friend_request": "好友请求需要你确认", "contact_response": "好友请求回复需要你确认", "direct_message": "发送消息需要你确认", "task": "协作委托需要你确认", "worker_policy": "有限后台策略需要你确认",
                  "operation": "协作动作需要你确认", "collaboration_v2": "双边协作需要你确认"}.get(approval_kind, "有一项协作需要你确认")
         self._attention_put(owner, "approval", approval_id, kind="owner_decision_required",
                             subject_id=approval_id, task_id=task_id, title=title, state=state,
@@ -93,6 +93,10 @@ class AttentionMixin(AttentionResumeMixin):
                     and (owner_session is None or self._belongs(c, owner_session))]
         owners = {c.get("owner_id", self._principal(c.get("owner_session", ""))) for c in contacts}
         owners.discard("")
+        if not contacts and self._mail_owner():
+            owners.add(self._mail_owner())
+        if message.get("kind") in {"contact.request", "contact.response"}:
+            return
         packet = None
         try:
             packet = json.loads(message["text"])
@@ -109,7 +113,9 @@ class AttentionMixin(AttentionResumeMixin):
             if task_id is False:
                 continue
             c = self._get("v2_collaboration", packet.get("collaboration_id", "")) if event_kind else None
-            state = "resolved" if event_kind == "invite" and c else "open"
+            from .social import key as social_key
+            read = self._get("message_read", social_key(owner, message["sender_urn"], message["message_id"]))
+            state = "resolved" if read or (event_kind == "invite" and c) else "open"
             expires = None
             if event_kind == "invite":
                 from .store import instant

@@ -31,9 +31,10 @@ PAIRED_REMOTE_CONTEXT = (
     "that authorized remote conversation; the console may be operated by the owner or an "
     "owner-authorized agent acting through it. A requested acknowledgement, output format, language, or avoidance of tools is an "
     "ordinary task constraint and does not itself claim additional authority. Respond to the user's "
-    "actual request within the existing host policies and tool permissions. This pairing grants no "
-    "native approval or Gateway control authority and no additional permission to disclose unrelated "
-    "data or contact third parties."
+    "actual request within the existing host policies and tool permissions. Use agent_comm_collaboration "
+    "for communication and collaboration just as in a local conversation; the local pairing's method "
+    "permissions remain enforced. Actions needing an owner decision appear in the paired web approval UI. "
+    "The model cannot answer those approvals itself. This pairing grants no Gateway control authority."
 )
 
 
@@ -119,6 +120,7 @@ class AgentCommAdapter(BasePlatformAdapter):
         self._remote_store = None
         self._remote_worker = None
         self._remote_events = {}
+        self._last_presence_refresh = 0
         self._lifecycle_lock = asyncio.Lock()
 
     @property
@@ -285,6 +287,7 @@ class AgentCommAdapter(BasePlatformAdapter):
                 logger.warning("Could not reconcile agent-comm inbox: %s", exc)
             if self.running:
                 try:
+                    await asyncio.to_thread(self._flush_social_outbox, refresh_presence=True)
                     from .collaboration.worker import tick_profile_worker
                     await asyncio.to_thread(tick_profile_worker, self._extra)
                 except asyncio.CancelledError:
@@ -292,6 +295,26 @@ class AgentCommAdapter(BasePlatformAdapter):
                 except Exception:
                     logger.warning("Finite collaboration worker unavailable; no native model was started")
             await asyncio.sleep(float(self._extra.get("reconcile_interval", 5)))
+
+    def _flush_social_outbox(self, *, refresh_presence=False):
+        """Retry durable social sends even when no new mailbox item arrives."""
+        from .collaboration.hermes import collaboration_enabled, profile_principal, state_path
+        if not (collaboration_enabled(self._extra) or self._extra.get("remote_enabled") is True):
+            return
+        from .collaboration.store import Store
+        from .collaboration.transport import HelperTransport
+        settings = self._extra
+        store = Store(state_path(settings), local_urn=settings.get("urn"), owner_principal=profile_principal())
+        try:
+            transport = HelperTransport(settings.get("platform_url", "http://127.0.0.1:45042"), timeout=10)
+            store.flush_social_outbox(transport)
+            # Presence may need several network lookups. Only the background
+            # reconcile pump performs them; an RPC response never waits for it.
+            if refresh_presence and time.monotonic() - self._last_presence_refresh >= 30:
+                store.refresh_presence(transport)
+                self._last_presence_refresh = time.monotonic()
+        finally:
+            store.close()
 
     async def _incoming(self, message, event_id=None):
         if message.get("event") == "connected":
@@ -344,6 +367,7 @@ class AgentCommAdapter(BasePlatformAdapter):
                         raise RuntimeError("Control messages require their paired remote processor; never dispatching to a peer agent")
                     await self._ensure_remote_bridge()
                     response = await asyncio.to_thread(self._remote_bridge.handle, message)
+                    await asyncio.to_thread(self._flush_social_outbox)
                     with self._remote_bridge.delivery(message, response) as response:
                         if response is not None:
                             accepted = await self._request_json("POST", "store", response)
@@ -353,19 +377,20 @@ class AgentCommAdapter(BasePlatformAdapter):
                     await self._ack(message_id)
                     consumed = True
                     continue
-                from .collaboration.hermes import collaboration_enabled, read_settings, state_path
+                from .collaboration.hermes import collaboration_enabled, profile_principal, state_path
                 if collaboration_enabled(self._extra) or self._extra.get("remote_enabled") is True:
                     # Peers are durable input, not private-owner LLM turns. Only
                     # the native owner can inspect these records and act on them.
                     def persist_collaboration_input():
                         from .collaboration.store import Store
-                        settings = {**self._extra, **read_settings()}
-                        store = Store(state_path(settings), local_urn=settings.get("urn"))
+                        settings = self._extra
+                        store = Store(state_path(settings), local_urn=settings.get("urn"), owner_principal=profile_principal())
                         try:
                             store.ingest_message(message)
                         finally:
                             store.close()
                     await asyncio.to_thread(persist_collaboration_input)
+                    await asyncio.to_thread(self._flush_social_outbox)
                     await asyncio.to_thread(self._receipts.complete, message_id, "processed")
                     await self._ack(message_id)
                     consumed = True
@@ -452,6 +477,8 @@ class AgentCommAdapter(BasePlatformAdapter):
         self._remote_store = Store(state_path(settings), local_urn=settings.get("urn"))
         self._remote_bridge = RemoteBridge(path, self._remote_store, settings.get("urn"), conversations=True,
             bound_principal=profile_principal())
+        from .collaboration.remote import register_remote_actions
+        register_remote_actions(self._remote_bridge, settings)
         await asyncio.to_thread(self._remote_bridge.recover_interrupted_turns)
         self._remote_worker = asyncio.create_task(self._run_remote_turns())
 
@@ -473,7 +500,9 @@ class AgentCommAdapter(BasePlatformAdapter):
                     metadata={}, channel_prompt=PAIRED_REMOTE_CONTEXT, allow_gateway_control=False, internal=False)
                 future = asyncio.get_running_loop().create_future()
                 self._remote_events[turn_id] = {"event": event, "future": future, "response": None}
-                await self.handle_message(event)
+                from .collaboration.remote import bind_paired_turn
+                with bind_paired_turn(self._remote_bridge, job, self._extra):
+                    await self.handle_message(event)
                 if not getattr(event, "_gateway_accepted", False):
                     raise RuntimeError("Hermes did not accept this paired conversation; check Gateway allow_from")
                 await future

@@ -89,6 +89,39 @@ class AttentionTests(unittest.TestCase):
                 attention.read_attention(**args)
         self.assertEqual(self.calls, [])
 
+    def test_remote_only_profile_shares_real_message_read_state_with_local_attention(self):
+        from agent_comm_runtime.store import Store
+        settings = {"remote_enabled": True, "urn": "urn:agent-comm:agent:local"}
+        store = Store(self.path, local_urn=settings["urn"], owner_principal="native-owner")
+        try:
+            store.ingest_message({"message_id": "incoming", "sender_urn": "urn:agent-comm:agent:peer", "text": "完整消息"})
+        finally:
+            store.close()
+        with patch.object(attention, "Store", Store), patch.object(attention, "read_settings", return_value=settings):
+            feed = attention.read_attention()
+            self.assertTrue(feed["available"])
+            self.assertEqual(feed["items"][0]["details"]["peer_message"]["text"], "完整消息")
+            self.assertEqual(attention.mark_attention_read({"message_id": "incoming"})["status"], "read")
+            changed = attention.read_attention(after=feed["cursor"])
+            self.assertEqual(changed["items"][0]["state"], "resolved")
+
+    def test_friend_request_is_visible_with_context_and_native_handling_instruction(self):
+        from agent_comm_runtime.store import Store
+        from agent_comm_runtime.social import SOCIAL_PROTOCOL
+        store = Store(self.path, local_urn="urn:agent-comm:agent:local", owner_principal="native-owner")
+        try:
+            store.ingest_message({"message_id": "friend-request", "sender_urn": "urn:agent-comm:agent:peer",
+                "conversation_id": "friend-request", "kind": "contact.request",
+                "text": json.dumps({"protocol": SOCIAL_PROTOCOL, "type": "request", "request_id": "friend-request"})})
+        finally:
+            store.close()
+        with patch.object(attention, "Store", Store):
+            feed = attention.read_attention()
+        request = next(item for item in feed["items"] if item["kind"] == "friend_request_received")
+        self.assertEqual(request["target"]["kind"], "contact")
+        self.assertEqual(request["details"]["contact_request"]["peer_urn"], "urn:agent-comm:agent:peer")
+        self.assertIn("prepare_contact_response", request["resume"]["instruction"])
+
     def test_router_authenticates_before_resolving_profile_or_reading(self):
         from fastapi import FastAPI, HTTPException
         from fastapi.testclient import TestClient

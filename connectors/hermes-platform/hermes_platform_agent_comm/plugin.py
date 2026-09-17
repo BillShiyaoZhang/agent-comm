@@ -8,7 +8,7 @@ def check_requirements() -> bool:
 def _apply_yaml_config(yaml_cfg: dict, platform_cfg: dict) -> dict:
     # Both platforms.agent_comm.extra and legacy flat configuration are accepted.
     extra = dict(platform_cfg.get("extra") or {})
-    keys = ("platform_url", "urn", "state_path", "connect_timeout", "request_timeout",
+    keys = ("platform_url", "public_platform_url", "urn", "state_path", "connect_timeout", "request_timeout",
             "reconcile_interval", "retry_delay", "allow_from", "collaboration_enabled", "collaboration_state_path", "remote_enabled", "remote_state_path", "collaboration_memory_adapter")
     extra.update({key: platform_cfg[key] for key in keys if key in platform_cfg})
     return extra

@@ -205,6 +205,10 @@ func (ds *DaemonServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/info":
 		ds.handleInfo(w, r)
+	case "/api/v1/platform/register":
+		ds.handleRegisterPlatform(w, r)
+	case "/api/v1/presence":
+		ds.handlePresence(w, r)
 	case "/api/v1/mq/store":
 		ds.handleStore(w, r)
 	case "/api/v1/mq/subscribe":
@@ -229,6 +233,39 @@ func (ds *DaemonServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 		}
 	}
+}
+
+func (ds *DaemonServer) handleRegisterPlatform(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err := ds.agent.EnsurePlatformRegistration(ctx); err != nil {
+		http.Error(w, "Local agent registration failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(map[string]interface{}{"registered": true, "urn": ds.agent.Keys.Ed25519.URN()})
+}
+
+func (ds *DaemonServer) handlePresence(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	urn := r.URL.Query().Get("urn")
+	if !strings.HasPrefix(urn, "urn:") || len(urn) > 256 || strings.ContainsAny(urn, " \t\r\n") {
+		http.Error(w, "Valid URN required", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(ds.agent.PeerPresence(ctx, urn))
 }
 
 func (ds *DaemonServer) handleInfo(w http.ResponseWriter, r *http.Request) {

@@ -172,7 +172,9 @@ func (a *Agent) registerHTTP(ctx context.Context) {
 		attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err := a.registerHTTPOnce(attemptCtx)
 		cancel()
-		delay := 5 * time.Minute
+		// A fresh owner-signed registration is also the communication endpoint's
+		// presence heartbeat. Registry TTL alone must never imply online status.
+		delay := 30 * time.Second
 		if err != nil {
 			delay = 5 * time.Second
 		}
@@ -184,6 +186,46 @@ func (a *Agent) registerHTTP(ctx context.Context) {
 		case <-timer.C:
 		}
 	}
+}
+
+// EnsurePlatformRegistration registers this local identity synchronously. Binding
+// a Web console uses this before granting access; the private key stays local.
+func (a *Agent) EnsurePlatformRegistration(ctx context.Context) error {
+	if a.MQHTTPClient == nil {
+		return fmt.Errorf("no HTTP platform configured")
+	}
+	return a.registerHTTPOnce(ctx)
+}
+
+// Presence is derived from a verified, short-lived owner-signed heartbeat, not
+// from existence of a long-lived registry record. Network failures are unknown.
+type Presence struct {
+	URN       string `json:"urn"`
+	Status    string `json:"status"`
+	LastSeen  *int64 `json:"last_seen"`
+	ExpiresAt *int64 `json:"expires_at"`
+}
+
+func (a *Agent) PeerPresence(ctx context.Context, urn string) Presence {
+	result := Presence{URN: urn, Status: "unknown"}
+	if a.MQHTTPClient == nil {
+		return result
+	}
+	resolved, err := a.resolveHTTP(ctx, urn)
+	if err != nil {
+		return result
+	}
+	seen, expires := resolved.Timestamp, resolved.Timestamp+90
+	now := time.Now().Unix()
+	if seen > now+30 {
+		return result
+	}
+	result.LastSeen, result.ExpiresAt = &seen, &expires
+	result.Status = "offline"
+	if now < expires {
+		result.Status = "online"
+	}
+	return result
 }
 
 func (a *Agent) registerHTTPOnce(ctx context.Context) error {

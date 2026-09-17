@@ -23,6 +23,7 @@ from .identity import validate_urn
 from .attention import AttentionMixin
 from .collaboration_v2 import CollaborationV2Mixin
 from .worker import WorkerMixin
+from .social import SocialMixin
 
 
 def canonical(value):
@@ -50,8 +51,8 @@ class RemoteMutationConflict(ValueError):
     code = "request_conflict"
 
 
-class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
-    def __init__(self, path, *, clock=time.time, local_urn=None):
+class Store(SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
+    def __init__(self, path, *, clock=time.time, local_urn=None, owner_principal=None):
         self.clock = clock
         self.local_urn = local_urn
         path = Path(path).expanduser().resolve()
@@ -69,6 +70,8 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
         if not row:
             self._db.execute("INSERT INTO collaboration_meta VALUES (1)")
         self._db.commit()
+        if owner_principal is not None:
+            self.register_owner(owner_principal)
 
     @contextmanager
     def _transaction(self):
@@ -175,6 +178,8 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                 not isinstance(alias, str) or not 1 <= len(alias.strip()) <= 100 for alias in aliases):
             raise ValueError("Provide 1–16 nonempty local aliases")
         urn = validate_urn(urn)
+        if urn == self.local_urn:
+            raise ValueError("Cannot add the local agent as its own contact")
         return {"contact_id": contact_id, "aliases": sorted(set(alias.strip() for alias in aliases)),
                 "urn": urn, "owner_id": self._principal(owner_session)}
 
@@ -185,9 +190,11 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
             if old:
                 if old != contact:
                     raise ValueError("Confirmed contact is immutable; use a new ID and confirm a new binding")
-                return {"decision": "allow", "contact": old, "status": "already_confirmed"}
+                return self._prepare_existing_contact(old, owner_session)
+            if any(self._belongs(item, owner_session) and item["urn"] == urn for item in self._all("contact")):
+                raise ValueError("This agent identity is already a confirmed contact; use the existing contact")
             question = (f"请核对联系人：本地称呼 {', '.join(contact['aliases'])}（{contact_id}）对应 {urn}。\n"
-                        "这只建立联系映射，不允许发送资料或代表你承诺。请根据你已有的名片或私聊核对；网络显示名不构成证明。\n"
+                        "确认后将向此 agent 发送好友请求；对方接受后建立连接。不会自动发送资料或代表你承诺。\n"
                         "确认这是同一个人的指定 agent 吗？")
             return {"decision": "ask", **self._approval("contact", contact_id, owner_session, contact,
                                                            question, self.clock() + 900)}
@@ -205,8 +212,11 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                for value in (request_key, fingerprint)):
             raise ValueError("A stable authenticated remote request is required")
         required = {"contacts.add": {"contact_id", "aliases", "urn"},
-                    "approval.respond": {"approval_id", "decision"}}
-        if method not in required or not isinstance(params, dict) or set(params) != required[method]:
+                    "approval.respond": {"approval_id", "decision"},
+                    "contacts.respond": {"request_id", "decision"},
+                    "messages.send": {"recipient_urn", "text"}, "inbox.mark_read": {"message_id"}}
+        optional = {"contacts.respond": {"contact_id", "aliases"}, "messages.send": {"message_id"}}
+        if method not in required or not isinstance(params, dict) or (required[method] - set(params) or set(params) - required[method] - optional.get(method, set())):
             raise ValueError("Unexpected remote mutation or parameters")
         with self._transaction():
             if valid_until <= self.clock():
@@ -218,11 +228,47 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                 return old["result"]
             if method == "contacts.add":
                 result = self._remote_add_contact(params, owner_session)
+            elif method == "contacts.respond":
+                result = self._respond_contact(params, owner_session)
+            elif method == "messages.send":
+                result = self._send_message(params, owner_session)
+            elif method == "inbox.mark_read":
+                result = self._mark_read(params["message_id"], owner_session)
             else:
                 result = self._remote_respond_approval(params, owner_session)
             self._put("remote_mutation", request_key, {"fingerprint": fingerprint,
                       "owner_id": self._principal(owner_session), "result": result})
             return result
+
+    def execute_owner_once(self, owner_session, callback, *, request_key, fingerprint, valid_until):
+        """Trusted RPC extension boundary with a durable pre-execution claim.
+
+        Runtime actions open their own transactions and may use transports, so
+        a single outer Store transaction cannot cover the callback. An orphaned
+        claim records an uncertain result; it must never execute again silently.
+        """
+        self._owner(owner_session)
+        if not callable(callback) or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                                        for value in (request_key, fingerprint)):
+            raise ValueError("A trusted stable owner request is required")
+        owner = self._principal(owner_session)
+        with self._transaction():
+            if valid_until <= self.clock():
+                raise ValueError("Owner request or local pairing expired before execution")
+            record = self._get("owner_action", request_key)
+            if record:
+                if record["fingerprint"] != fingerprint or record["owner_id"] != owner:
+                    raise RemoteMutationConflict("This request ID was already used for different contents or owner")
+                if record["status"] == "completed":
+                    return record["result"]
+                return {"status": "uncertain", "request_key": request_key,
+                        "instruction": "The previous owner action may have run before interruption. Inspect agent state and pending approvals before making a new request; this request was not repeated."}
+            record = {"owner_id": owner, "fingerprint": fingerprint, "status": "started", "created_at": self.clock()}
+            self._put("owner_action", request_key, record)
+        result = callback()
+        with self._transaction():
+            self._put("owner_action", request_key, {**record, "status": "completed", "result": result})
+        return result
 
     def _remote_add_contact(self, params, owner_session):
         contact = self._contact_value(params["contact_id"], params["aliases"], params["urn"], owner_session)
@@ -231,10 +277,16 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
         if old:
             if old != contact:
                 raise ValueError("Confirmed contact is immutable; use a new ID and confirm a new binding")
-            return {"decision": "allow", "contact": old, "status": "already_confirmed"}
+            previous_status = self._contact_status(old)
+            request = self._request_contact(old)
+            status = "already_connected" if previous_status == "connected" else "already_requested" if previous_status == "pending" else "requested"
+            view = next(c for c in self._contacts_view(owner_session) if c["contact_id"] == contact_id)
+            return {"decision": "allow", "contact": view, "status": status,
+                    **({"request_id": request["request_id"]} if request else {})}
         if any(self._belongs(item, owner_session) and item["urn"] == contact["urn"] for item in self._all("contact")):
             raise ValueError("This agent identity is already a confirmed contact; use the existing contact")
         self._put("contact", contact_id, contact)
+        request = self._request_contact(contact)
         # An exact pending local binding is also fulfilled by this explicit Web
         # action. Invalidate any native callback and resolve its attention item.
         for approval in self._all("approval"):
@@ -250,7 +302,9 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                 else:
                     self._attention_approval(approval, refresh=True)
         self._audit("remote_contact_added", contact_id=contact_id, owner_session=owner_session)
-        return {"decision": "allow", "contact": contact, "status": "confirmed"}
+        view = next(c for c in self._contacts_view(owner_session) if c["contact_id"] == contact_id)
+        return {"decision": "allow", "contact": view, "status": "requested" if request else "confirmed",
+                **({"request_id": request["request_id"]} if request else {})}
 
     def _remote_respond_approval(self, params, owner_session):
         approval_id = identifier(params["approval_id"], "approval_id")
@@ -557,6 +611,14 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                     "status": "approved_once" if approved else "denied"}
 
     def _approval_current(self, approval):
+        if approval["kind"] == "friend_request":
+            contact = self._get("contact", approval["subject_id"])
+            return bool(contact == approval["payload"]["contact"] and self._contact_status(contact) not in {"pending", "connected"})
+        if approval["kind"] == "contact_response":
+            request = self._get("contact_request", approval["subject_id"])
+            return bool(request and self._belongs(request, approval["owner_session"]) and request["status"] == "pending")
+        if approval["kind"] == "direct_message":
+            return not self._get("social_outbox", approval["subject_id"]) and approval["expires_at"] > self.clock()
         if approval["kind"] == "worker_policy":
             return self._worker_approval_current(approval)
         if approval["kind"] == "collaboration_v2":
@@ -622,12 +684,19 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
             self._put("operation", operation["operation_id"], operation)
 
     def _apply_approval(self, approval):
-        if approval["kind"] == "worker_policy":
+        if approval["kind"] == "friend_request":
+            self._request_contact(approval["payload"]["contact"])
+        elif approval["kind"] == "contact_response":
+            self._respond_contact(approval["payload"], approval["owner_session"])
+        elif approval["kind"] == "direct_message":
+            self._queue_social(approval["payload"], self._principal(approval["owner_session"]))
+        elif approval["kind"] == "worker_policy":
             self._worker_apply_approval(approval)
         elif approval["kind"] == "collaboration_v2":
             self._v2_apply_approval(approval)
         elif approval["kind"] == "contact":
             self._put("contact", approval["subject_id"], approval["payload"])
+            self._request_contact(approval["payload"])
         elif approval["kind"] == "task":
             task = self._get("task", approval["subject_id"])
             task["status"] = "active"
@@ -761,9 +830,10 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                 if old["fingerprint"] != fingerprint:
                     raise ValueError("Incoming message ID conflicts with its durable contents")
                 return {"message_id": message_id, "status": "already_recorded"}
+            social = self._ingest_social(record)
             self._put("inbound", message_id, {**record, "fingerprint": fingerprint, "received_at": self.clock(),
                                              "trust": "peer_statement_not_owner_authority"})
-            protocol = self.ingest_v2_record(record)
+            protocol = None if social else self.ingest_v2_record(record)
             return {"message_id": message_id, "status": "recorded", **({"collaboration": protocol} if protocol else {})}
 
     def sync_inbox(self, transport):
@@ -786,6 +856,7 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
         # replays already durable records. Remaining messages stay in the helper.
         if acknowledgments:
             transport.ack(acknowledgments)
+        self.flush_social_outbox(transport)
         return {"recorded": recorded, "rejected": rejected}
 
     def _inbox(self, owner_session, task_id):
@@ -793,13 +864,13 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
         tasks = {t["task_id"] for t in self._all("task") if self._belongs(t, owner_session)}
         records = []
         for message in self._all("inbound"):
-            if message["sender_urn"] not in contacts:
+            if not self._message_visible(message, owner_session):
                 continue
             local_task = self._inbound_local_task(message, owner_session)
             if local_task is False:
                 continue
             if task_id is None or (task_id in tasks and local_task == task_id):
-                records.append(message)
+                records.append(self._message_view(message, owner_session))
         return sorted(records, key=lambda m: (m["received_at"], m["message_id"]))[-100:]
 
     def _inbound_local_task(self, message, owner_session):
@@ -877,7 +948,10 @@ class Store(AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                          and (task_id is None or self._approval_task_id(a) == task_id)]
             return {"tasks": [{**t, "worker": self._worker_view(t)} for t in tasks], "operations": operations, "pending_confirmations": approvals,
                     "approval_decisions": decisions,
-                    "contacts": [c for c in self._all("contact") if self._belongs(c, owner_session)],
+                    "contacts": self._contacts_view(owner_session),
+                    "contact_requests": self._contact_requests(owner_session),
+                    "sent_messages": self._sent_messages(owner_session),
+                    "resources": [r for r in self._all("resource") if self._belongs(r, owner_session)],
                     "next_actions": ["confirm_specific_pending_request" if approvals else "prepare_scoped_action",
                                      "read_inbox", "inspect_delivery_status", "revoke_task"],
                     "inbox": self._inbox(owner_session, task_id),

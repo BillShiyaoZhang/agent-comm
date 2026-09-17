@@ -17,6 +17,10 @@ ACTION_FIELDS = {
     "resolve_contact": ({"name"}, set()),
     "export_contact": (set(), {"contact_id", "platform_url"}),
     "prepare_contact": ({"contact_id", "aliases", "urn"}, set()),
+    "contact_requests": (set(), set()),
+    "prepare_contact_response": ({"request_id", "decision"}, {"contact_id", "aliases"}),
+    "prepare_message": ({"recipient_urn", "text"}, {"message_id"}),
+    "mark_read": ({"message_id"}, set()),
     "prepare_task": ({"task_id", "scope"}, set()),
     "prepare_worker_policy": ({"task_id", "policy"}, set()),
     "pause_worker": ({"task_id"}, set()),
@@ -79,7 +83,15 @@ class Runtime:
             if not isinstance(session, HostSession):
                 raise ValueError("Host adapter did not return a HostSession")
             host.revalidate(session)
-            return self._execute(action, args, host, session)
+            result = self._execute(action, args, host, session)
+            if action in {"state", "inbox", "attention", "contact_requests", "confirm", "prepare_message", "prepare_contact_response", "mark_read"}:
+                self.store.register_owner(session.owner_session)
+            if action == "confirm":
+                try:
+                    self.store.flush_social_outbox(self.registry.require("transport", "durable_mailbox"))
+                except (Unsupported, OSError):
+                    pass  # Persisted outbox is retried by the host pump.
+            return result
         except Unsupported as exc:
             return {"status": "unsupported", "error": str(exc)}
         except (ValueError, TypeError, KeyError) as exc:
@@ -91,6 +103,8 @@ class Runtime:
         store, owner = self.store, session.owner_session
         if action == "describe":
             return {**self.registry.describe(), "actions": sorted(ACTION_FIELDS),
+                    "action_fields": {name: {"required": sorted(required), "optional": sorted(optional)}
+                                      for name, (required, optional) in ACTION_FIELDS.items()},
                     "business_capabilities": ["share_slots", "share_resource", "propose_meeting", "accept_meeting", "send_text"],
                     "background_worker": {"kind": "finite_deterministic_meeting", "native_policy_required": True,
                                           "private_model": False, "max_runs": 100, "max_sends": 32},
@@ -118,6 +132,14 @@ class Runtime:
                 raise ValueError("Provide platform_url for this agent's actual platform (not the local helper); "
                                  "a friend's platform must always be provided explicitly")
             return render_contact(urn, platform_url, is_self=contact_id == "self")
+        if action == "contact_requests":
+            return store.contact_requests(owner)
+        if action == "prepare_contact_response":
+            return store.prepare_contact_response({k: v for k, v in args.items() if k != "action"}, owner)
+        if action == "prepare_message":
+            return store.prepare_message({k: v for k, v in args.items() if k != "action"}, owner)
+        if action == "mark_read":
+            return store.mark_read(args["message_id"], owner)
         if action == "prepare_contact":
             return store.prepare_contact(args["contact_id"], args["aliases"], args["urn"], owner)
         if action == "prepare_task":

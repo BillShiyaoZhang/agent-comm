@@ -16,8 +16,8 @@ import time
 from .identity import validate_urn
 
 PROTOCOL = "agent-comm-control/v1"
-READ_METHODS = ("capabilities", "contacts.list", "collaboration.state", "inbox.list", "attention.list")
-WRITE_METHODS = ("contacts.add", "approval.respond")
+READ_METHODS = ("capabilities", "contacts.list", "collaboration.state", "inbox.list", "attention.list", "contacts.requests")
+WRITE_METHODS = ("contacts.add", "contacts.respond", "messages.send", "inbox.mark_read", "approval.respond")
 CONVERSATION_METHODS = ("conversation.send", "conversation.get")
 CONTROL_KINDS = {"control.request", "control.response"}
 
@@ -64,6 +64,8 @@ class RemoteBridge:
         self.clock = clock
         self.conversations = conversations
         self.bound_principal = bound_principal
+        if store is not None and bound_principal is not None:
+            store.register_owner(bound_principal)
         self.handlers = {}
         self._lock = threading.RLock()
         self._db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
@@ -109,6 +111,8 @@ class RemoteBridge:
             raise ValueError("Pairing deadline must be in the future")
         pairing = {"console_urn": console_urn, "owner_principal": owner_principal, "methods": sorted(set(methods)),
                    "expires_at": expires_at, "revoked": False, "paired_at": self.clock()}
+        if self.store is not None:
+            self.store.register_owner(owner_principal)
         with self._transaction():
             self._put("pairing", console_urn, pairing)
         return pairing
@@ -197,11 +201,18 @@ class RemoteBridge:
                 **({"reason": "Not enabled by this adapter or local pairing"} if name not in available or name not in pairing["methods"] else {})}
                 for name in names], "pairing": {"expires_at": pairing["expires_at"]}}
         if method in WRITE_METHODS:
-            self._params(params, required=("contact_id", "aliases", "urn") if method == "contacts.add" else ("approval_id", "decision"))
+            required = {"contacts.add": ("contact_id", "aliases", "urn"), "approval.respond": ("approval_id", "decision"),
+                        "contacts.respond": ("request_id", "decision"), "messages.send": ("recipient_urn", "text"),
+                        "inbox.mark_read": ("message_id",)}
+            optional = {"contacts.respond": ("contact_id", "aliases"), "messages.send": ("message_id",)}
+            self._params(params, required=required[method], optional=optional.get(method, ()))
             key = hashlib.sha256((request["console_urn"] + "\0" + request["request_id"]).encode()).hexdigest()
             return self.store.remote_mutation(method, params, owner, request_key=key,
                                               fingerprint=hashlib.sha256(canonical(request).encode()).hexdigest(),
                                               valid_until=min(instant(request["deadline"]), instant(pairing["expires_at"])))
+        if method == "contacts.requests":
+            self._params(params)
+            return self.store.contact_requests(owner)
         if method == "contacts.list":
             self._params(params)
             return {"contacts": self.store.state(owner)["contacts"]}
@@ -238,6 +249,18 @@ class RemoteBridge:
             return {"conversation_id": conversation_id, "turns": [{k: j[k] for k in keys}
                     for j in sorted(jobs, key=lambda j: (j["created_at"], j["turn_id"]))[-100:]]}
         if method in self.handlers:
+            # The generic owner action route can prepare a message without a
+            # caller-generated ID. Derive it from the authenticated request so
+            # a crash between Store commit and response caching cannot create
+            # two approvals for the same submitted owner action.
+            if method == "collaboration.execute" and params.get("action") == "prepare_message" and "message_id" not in params:
+                params = {**params, "message_id": "web-message-" + hashlib.sha256(
+                    (request["console_urn"] + "\0" + request["request_id"]).encode()).hexdigest()[:40]}
+            if method == "collaboration.execute":
+                return self.handlers[method](params, owner,
+                    request_key=hashlib.sha256((request["console_urn"] + "\0" + request["request_id"]).encode()).hexdigest(),
+                    fingerprint=hashlib.sha256(canonical(request).encode()).hexdigest(),
+                    valid_until=min(instant(request["deadline"]), instant(pairing["expires_at"])))
             return self.handlers[method](params, owner)
         raise RemoteError("unsupported_method", "The agent adapter has no trusted handler for this method")
 
@@ -277,6 +300,8 @@ class RemoteBridge:
 
     def process(self, message, transport):
         response = self.handle(message)
+        if self.store is not None:
+            self.store.flush_social_outbox(transport)
         with self.delivery(message, response) as response:
             if response is not None:
                 result = transport.store(response)

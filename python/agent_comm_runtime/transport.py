@@ -1,7 +1,7 @@
 """Bounded loopback-only client of the existing durable helper mailbox API."""
 
 import json
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote
 from urllib.request import (HTTPRedirectHandler, ProxyHandler, Request, build_opener)
 
 from .ports import Descriptor
@@ -42,6 +42,16 @@ class HelperTransport:
         if not isinstance(result, dict):
             raise ValueError("Helper response must be a JSON object")
         return result
+
+    def presence(self, urn):
+        # Presence shares the helper origin, outside the mailbox route.
+        from .identity import validate_urn
+        endpoint = self.base.removesuffix("/mq") + "/presence?urn=" + quote(validate_urn(urn), safe="")
+        with self._opener.open(Request(endpoint), timeout=self.timeout) as response:
+            payload = response.read(16001)
+        if len(payload) > 16000:
+            raise ValueError("Helper presence response exceeded its size bound")
+        return json.loads(payload)
 
     def store(self, body):
         return self._request("store", body)

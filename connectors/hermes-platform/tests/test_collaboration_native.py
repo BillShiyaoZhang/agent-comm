@@ -151,7 +151,8 @@ class TestNativeBridge(unittest.TestCase):
             self.assertNotIn("token", json.dumps(result))
             self.assertFalse(self.question_pending(events[0][2]["request_id"], events[0][1]))
             replay = self.call("confirm", approval_id=approval)
-            self.assertEqual(replay["status"], "not_executed")
+            self.assertEqual(replay["status"], "approved_once")
+            self.assertEqual(replay["decision"], "allow")
             self.assertEqual(len(events), 1)
 
     def test_model_cannot_supply_identity_or_approval_text(self):
@@ -474,6 +475,10 @@ class TestNativeBridge(unittest.TestCase):
             wire = envelope("proposal-message", task_id="meeting", text=json.dumps(packet))
             acknowledged = []
             class Transport:
+                def store(self, body):
+                    # A confirmed local contact now queues a real friend request;
+                    # allow its durable outbox to drain while syncing the inbox.
+                    return {"success": True, "message_id": body["message_id"]}
                 def retrieve(self):
                     return [wire]
                 def ack(self, ids):

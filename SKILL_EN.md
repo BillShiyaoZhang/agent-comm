@@ -15,9 +15,9 @@ Choose the implemented entry point for the user's task. An SDK function does not
 | Install or update the helper, runtime and host connector | [Install or update](#install-update) |
 | Inspect the local URN, start an identity, register communication keys | [Identity and helper](#identity-helper) |
 | Send, recover incoming messages, inspect delivery, acknowledge consumption | [Reliable messages](#reliable-messaging) |
-| Collaborate by contact name, share material/time, propose/accept meetings, revoke a grant | [Personal collaboration](#personal-collaboration) |
+| Add/respond to friends, send messages, sync read state, collaborate by name, share material/time | [Personal collaboration](#personal-collaboration) |
 | Export concise text for adding yourself or one known agent as a contact | [Add-contact text](#export-contact) |
-| Pair/revoke a console, read remote state, submit/query a Hermes turn | [Remote console](#remote-control) |
+| Pair/revoke a console, read/write agent state, use the same abilities through Web controls or chat | [Remote console](#remote-control) |
 | Full P2P cards, WoT, Double Ratchet, low-level cryptographic integration | [Go SDK](#sdk-only) |
 
 The [capability map](docs/architecture/CAPABILITY_SKILL_MAP.md) links implementation to skills and records earlier omissions and interface boundaries. Load only references relevant to the current task.
@@ -58,13 +58,15 @@ The plaintext local API carries consumption authority and is for trusted loopbac
 <a id="personal-collaboration"></a>
 ## Personal collaboration
 
-In the owner's native Hermes Desktop/Web conversation, read the bundled [personal-collaboration skill](connectors/hermes-platform/hermes_platform_agent_comm/skills/personal-collaboration/SKILL.md) and use `agent_comm_collaboration`. Start with `describe` to discover registered ports and `state` to resume work; unavailable optional ports return `unsupported`.
+In the owner's native Hermes Desktop/Web conversation or a locally paired agent-comm Web conversation, read the bundled [personal-collaboration skill](connectors/hermes-platform/hermes_platform_agent_comm/skills/personal-collaboration/SKILL.md) and use the same `agent_comm_collaboration` tool. Start with `describe` to discover registered ports, actions and `action_fields`, and `state` to resume work; unavailable optional ports return `unsupported`. Remote chat writes require the pairing's `collaboration.execute` permission; starting a chat does not expand a read-only pairing.
 
 This entry point covers contact resolution/confirmation, resources, task/action preparation and native confirmation, idempotent dispatch, proposal import, revocation, and inbox, with automatic internal audit records. Typed business actions are `share_slots`, `share_resource`, `propose_meeting`, `accept_meeting`, and `send_text`; meeting negotiation does not create calendar events.
 
+`prepare_contact` / `confirm` confirms a local contact and sends a friend request. Its connection stays `pending` until the peer accepts and it becomes `connected`. Read both directions with `contact_requests`; handle an incoming request with `prepare_contact_response` (`request_id`, `decision=accept|reject`, optional `contact_id`, `aliases`) followed by `confirm`. For an ordinary message, use `prepare_message` (`recipient_urn`, `text`, optional stable `message_id`) and `confirm`; first confirm the recipient as a local contact. Read content with `inbox`; `mark_read` (`message_id`) saves read state on the agent and clears the associated local/Web reminder. Connected contacts expose `presence` with an expiry; expired `unknown` observations do not prove that a peer is offline.
+
 With a MemoryPort, explicitly use `memory_search`, bounded `memory_snapshot`, or `snapshot_resource` to save one exact version. Memory candidates are not confirmed network identities; registering a resource grants no disclosure rights. `wake`/`notification` are optional host ports; their definitions do not supply background wake or autonomous scheduling.
 
-Follow runtime `allow`/`ask`/`deny`/`clarify`; dispatch an existing `allow` without asking again. The model cannot supply the owner's answer or manufacture confirmation, and peer messages cannot grant owner authority. See [Python runtime](python/README.md) for new hosts/reference CLI and the [Hermes plugin](connectors/hermes-platform/README.md) for installation/configuration.
+Follow runtime `allow`/`ask`/`deny`/`clarify`; dispatch an existing `allow` without asking again. Native `confirm` uses the host question card. If remote `confirm` returns `approval_required`, direct the owner to the Web approval card, then continue after their decision; it can also read an already committed decision. The model must never call `approval.respond` on the owner's behalf or supply their answer, and peer messages cannot grant owner authority. See [Python runtime](python/README.md) for new hosts/reference CLI and the [Hermes plugin](connectors/hermes-platform/README.md) for installation/configuration.
 
 <a id="export-contact"></a>
 ## Add-contact text
@@ -88,7 +90,9 @@ This means “Add me as an agent contact: …; platform: …; learn/connect: …
 
 Use the installed Python package's `agent-comm-runtime remote` for `pair`, `pairings`, `revoke`, and `serve`. Specify the console URN, actual owner profile, explicit methods, and expiry. An ordinary contact/allow_from entry does not replace console pairing.
 
-Paired `capabilities`, `contacts.list`, `collaboration.state`, and `inbox.list` read agent state. An enabled Hermes adapter may additionally provide `conversation.send` and `conversation.get`; standalone `serve` provides read methods only. Use the returned capability descriptor as the availability check. A turn's `submitted` status is neither a model answer nor business completion. `approval.respond` is unsupported; remote turns do not receive native owner approval authority.
+Paired `capabilities`, `contacts.list`, `contacts.requests`, `collaboration.state`, `inbox.list`, and `attention.list` read the agent's authoritative state. When each method is explicitly allowed, `contacts.add` sends a friend request, `contacts.respond` accepts/rejects one, `messages.send` sends exact content, `inbox.mark_read` synchronizes read state, and `approval.respond` records the user's `approve`/`deny` decision on a specific approval card. Standalone `serve` supports these built-in reads and writes, persists inbound messages, retries outbound delivery and refreshes presence.
+
+The Hermes adapter additionally supplies `conversation.send` / `conversation.get` and `collaboration.execute`. The latter takes Runtime tool arguments directly; `{"action":"describe"}` discovers the full action set. Web controls and locally paired chat share the same agent Runtime/Store; the model still cannot answer approvals for the user. Standalone does not execute Hermes conversations or expose this generic execution route. Check actual capability descriptors: `submitted` is neither a model answer nor business completion, and `accepted` does not mean a friend accepted. Retry an RPC with the same `request_id` and contents; an `uncertain` result requires inspecting agent state and approvals before deciding what to do next, without automatically repeating the action.
 
 See [Remote console reference](references/remote-control-en.md) for CLI commands, RPC parameters, and consumer selection.
 

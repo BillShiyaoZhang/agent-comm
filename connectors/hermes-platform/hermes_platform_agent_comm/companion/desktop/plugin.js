@@ -3,7 +3,7 @@ import { createElement as h, useSyncExternalStore } from 'react'
 
 const PAGE = '/agent-comm-attention'
 const OPEN = new Set(['open'])
-const ACTIONABLE = new Set(['owner_decision_required', 'new_collaboration_request', 'needs_recovery', 'needs_response'])
+const ACTIONABLE = new Set(['owner_decision_required', 'new_collaboration_request', 'friend_request_received', 'needs_recovery', 'needs_response'])
 const ERROR_NAMES = new Set(['Error', 'TypeError', 'SecurityError', 'NotAllowedError', 'AbortError', 'InvalidStateError', 'NotSupportedError', 'QuotaExceededError'])
 const errorName = error => ERROR_NAMES.has(error?.name) ? error.name : 'UnknownError'
 const emptyDiagnostics = () => ({ webLocks: 'unknown', secureContext: null, claimState: 'idle', candidates: 0, claimed: 0,
@@ -103,7 +103,7 @@ export function createAttentionController({ rest, scope, notify, notifyOS, canNo
             || !['open', 'resolved', 'superseded', 'expired'].includes(item.state)
             || typeof item.title !== 'string' || typeof item.safe_summary !== 'string'
             || !Number.isFinite(item.updated_at) || !item.target
-            || !['task', 'inbox', 'approval'].includes(item.target.kind)) throw new Error('Invalid attention item')
+            || !['task', 'inbox', 'approval', 'contact'].includes(item.target.kind)) throw new Error('Invalid attention item')
           const previous = records.get(item.attention_id)
           if (!previous || item.revision > previous.revision) {
             records.set(item.attention_id, item)
@@ -182,7 +182,7 @@ export function createAttentionController({ rest, scope, notify, notifyOS, canNo
         if (result?.owner_key !== expectedOwner || result.available !== true || detail?.attention_id !== item.attention_id
           || !Number.isSafeInteger(detail.revision) || !['open', 'resolved', 'superseded', 'expired'].includes(detail.state)
           || typeof detail.title !== 'string' || typeof detail.safe_summary !== 'string' || !Number.isFinite(detail.updated_at)
-          || !detail.target || !['task', 'inbox', 'approval'].includes(detail.target.kind)
+          || !detail.target || !['task', 'inbox', 'approval', 'contact'].includes(detail.target.kind)
           || !detail.details || typeof detail.details !== 'object') throw new Error('Unavailable detail')
         const previous = records.get(item.attention_id)
         if (previous && detail.revision >= previous.revision) {
@@ -204,12 +204,23 @@ export function createAttentionController({ rest, scope, notify, notifyOS, canNo
     getSnapshot: () => snapshot,
     subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) },
     poll, reset, loadDetail, isOpen, isPending, isRead, isUnread,
-    markRead(item) {
+    async markRead(item) {
       const current = records.get(item.attention_id)
       if (!current || current.revision !== item.revision) return
+      const turn = generation, expectedScope = scope()
+      if (current.target.kind === 'inbox') {
+        try {
+          await rest('/attention/mark-read', { method: 'POST', body: { message_id: current.target.id }, timeoutMs: 10000 })
+        } catch {
+          if (!disposed && turn === generation && expectedScope === scope()) publish({ error: '未能保存已读状态，请重试；其它客户端的提醒仍保留。' })
+          return
+        }
+        if (disposed || turn !== generation || expectedScope !== scope()) return
+      }
       const key = `seen:${keyFor()}`
       persist(key, { ...(readPersist(key) || {}), [item.attention_id]: item.revision })
       publish({ items: visible() })
+      if (current.target.kind === 'inbox') await poll()
     },
     dispose: () => { disposed = true; generation += 1; detailFlights.clear(); listeners.clear() }
   }
@@ -378,7 +389,7 @@ export default {
   id: 'agent-comm-attention',
   name: '协作待办',
   description: '持久待办、纯提醒和 Hermes 原生对话恢复',
-  defaultEnabled: false,
+  defaultEnabled: true,
   register(ctx) {
     const scope = () => JSON.stringify([host.state.connectionId?.get() || '', host.state.profile.get()])
     const systemAllowed = () => Boolean(globalThis.document && (document.hidden || (typeof document.hasFocus === 'function' && !document.hasFocus())))
@@ -493,6 +504,7 @@ export default {
       details.task?.scope ? h('section', null, h('h3', null, '当前委托范围'), facts(details.task.scope)) : null,
       details.operation ? h('section', null, h('h3', null, '待处理动作'), facts(details.operation)) : null,
       details.contact ? h('section', null, h('h3', null, '联系人信息'), facts(details.contact)) : null,
+      details.contact_request ? h('section', null, h('h3', null, '好友请求'), facts(details.contact_request)) : null,
       details.collaboration ? h('section', null, h('h3', null, '当前协作方案'), facts(details.collaboration)) : null,
       details.peer_message ? h('section', null, h('h3', null, '对端来信（待核实内容）'),
         h('blockquote', { style: textStyle }, details.peer_message.text),

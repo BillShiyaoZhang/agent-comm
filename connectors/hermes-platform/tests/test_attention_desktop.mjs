@@ -52,6 +52,49 @@ test('pagination produces one digest; replay and resolution never notify again',
   assert.equal(value.getSnapshot().items.find(x => x.attention_id === 'a').state, 'resolved')
 })
 
+test('friend requests are actionable on the local client and resolved updates clear them', async () => {
+  const request = { ...item('friend-1'), kind: 'friend_request_received', target: { kind: 'contact', id: 'request-1' } }
+  const queue = [page([request], 1), page([{ ...request, revision: 2, state: 'resolved' }], 2)]
+  const { value, attempts } = controller(async () => queue.shift())
+  await value.poll()
+  assert.equal(value.getSnapshot().error, '')
+  assert.equal(value.isPending(request), true)
+  assert.equal(attempts.length, 1)
+  await value.poll()
+  assert.equal(value.isPending(value.getSnapshot().items[0]), false)
+})
+
+test('marking an inbox message read saves agent state before clearing local notifications', async () => {
+  const message = { ...item('mail-1'), kind: 'peer_message_received', target: { kind: 'inbox', id: 'message-1' } }
+  let saved = false
+  const { value } = controller(async (path, options) => {
+    if (path === '/attention/mark-read') {
+      assert.equal(options.method, 'POST')
+      assert.equal(options.body.message_id, 'message-1')
+      saved = true
+      return { message_id: 'message-1', status: 'read' }
+    }
+    return page([{ ...message, revision: saved ? 2 : 1, state: saved ? 'resolved' : 'open' }], saved ? 2 : 1)
+  })
+  await value.poll()
+  await value.markRead(message)
+  assert.equal(saved, true)
+  assert.equal(value.getSnapshot().items[0].state, 'resolved')
+  assert.equal(value.isUnread(value.getSnapshot().items[0]), false)
+})
+
+test('failed agent read mutation keeps the message unread for retry', async () => {
+  const message = { ...item('mail-1'), target: { kind: 'inbox', id: 'message-1' } }
+  const { value } = controller(async path => {
+    if (path === '/attention/mark-read') throw new Error('offline')
+    return page([message], 1)
+  })
+  await value.poll()
+  await value.markRead(message)
+  assert.equal(value.isUnread(message), true)
+  assert.ok(value.getSnapshot().error)
+})
+
 test('failed poll keeps durable projection and retry notifies newly observed item', async () => {
   let calls = 0
   const { value, attempts } = controller(async () => { calls += 1; if (calls === 2) throw new Error('offline'); return page([item('a', calls)], calls) })

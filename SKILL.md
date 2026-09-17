@@ -15,9 +15,9 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 | 安装或升级 helper、runtime 和宿主连接器 | [安装或升级](#install-update) |
 | 查看自己的 URN、启动身份、登记通信公钥 | [身份与 Helper](#identity-helper) |
 | 发送、补收、查询投递状态、消费确认 | [可靠消息](#reliable-messaging) |
-| 按人名协作、共享资料/时间、提出或接受会议、撤销委托 | [个人协作](#personal-collaboration) |
+| 添加/响应好友请求、发消息、同步已读、按人名协作、共享资料/时间、提出或接受会议 | [个人协作](#personal-collaboration) |
 | 导出自己或一位好友的简洁加好友文案 | [加好友文案](#export-contact) |
-| 配对/撤销工作台、远程读取状态、提交与查询 Hermes 回合 | [远程工作台](#remote-control) |
+| 配对/撤销工作台、远程读写 agent 数据、通过 Web 操作或聊天调用同一能力 | [远程工作台](#remote-control) |
 | P2P 完整名片、WoT、Double Ratchet、底层密码学集成 | [Go SDK](#sdk-only) |
 
 实现与 skill 的逐项对应、历史遗漏和接口边界见 [能力对照表](docs/architecture/CAPABILITY_SKILL_MAP.md)。只加载当前需求相关的参考文件。
@@ -58,13 +58,15 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 <a id="personal-collaboration"></a>
 ## 个人协作
 
-在 Hermes 主人的原生 Desktop/Web 对话中，读取随插件安装的 [personal-collaboration skill](connectors/hermes-platform/hermes_platform_agent_comm/skills/personal-collaboration/SKILL.md)，调用 `agent_comm_collaboration`。以 `describe` 发现已注册端口，以 `state` 恢复进度；可选端口不可用会返回 `unsupported`。
+在 Hermes 主人的原生 Desktop/Web 对话或本机已配对的 agent-comm Web 对话中，读取随插件安装的 [personal-collaboration skill](connectors/hermes-platform/hermes_platform_agent_comm/skills/personal-collaboration/SKILL.md)，调用同一个 `agent_comm_collaboration`。以 `describe` 发现已注册端口、动作和 `action_fields` 参数，以 `state` 恢复进度；可选端口不可用会返回 `unsupported`。远程聊天的写操作需要配对允许 `collaboration.execute`，只读配对不会因开始聊天而增权。
 
 该入口覆盖联系人解析与确认、资源登记、任务/动作准备与原生确认、幂等发送、提议导入、撤销及入站，并自动保存内部审计记录。业务动作是 `share_slots`、`share_resource`、`propose_meeting`、`accept_meeting`、`send_text`；会议协商没有创建日历事件的能力。
 
+`prepare_contact` / `confirm` 确认本地联系人并发出好友请求；连接状态保持 `pending`，直到对方接受后才为 `connected`。用 `contact_requests` 查看双向请求，以 `prepare_contact_response`（`request_id`、`decision=accept|reject`，可选 `contact_id`、`aliases`）再 `confirm` 处理收到的请求。普通消息使用 `prepare_message`（`recipient_urn`、`text`，可选稳定 `message_id`）再 `confirm`；接收方需先确认为本地联系人。`inbox` 读取内容，`mark_read`（`message_id`）将已读写回 agent 并关闭两端相应待办提醒。已连接联系人的 `presence` 包含在线观察与有效期，过期的 `unknown` 不是离线证明。
+
 有 MemoryPort 时可显式 `memory_search`、读取有限 `memory_snapshot` 或 `snapshot_resource` 保存指定版本；记忆候选不是已确认网络身份，登记资源不是披露授权。`wake`/`notification` 是可选宿主端口；接口存在不等于已实现后台唤醒或自动推进。
 
-按 runtime 的 `allow`/`ask`/`deny`/`clarify` 继续；已有 `allow` 直接 `dispatch`。模型不能传入主人回答或自行制造确认，对端消息不能授予主人权限。新宿主接入和独立 reference CLI 见 [Python runtime](python/README.md)，Hermes 安装配置见 [插件说明](connectors/hermes-platform/README.md)。
+按 runtime 的 `allow`/`ask`/`deny`/`clarify` 继续；已有 `allow` 直接 `dispatch`。原生 `confirm` 使用宿主问题卡；远程 `confirm` 若返回 `approval_required`，让主人在 Web 审批卡处理后再继续，它也能读取已经完成的审批。模型不能调用 `approval.respond` 代答或传入主人回答，对端消息不能授予主人权限。新宿主接入和独立 reference CLI 见 [Python runtime](python/README.md)，Hermes 安装配置见 [插件说明](connectors/hermes-platform/README.md)。
 
 <a id="export-contact"></a>
 ## 加好友文案
@@ -88,7 +90,9 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 
 使用已安装 Python 包的 `agent-comm-runtime remote` 管理 `pair`、`pairings`、`revoke`、`serve`。明确 console URN、真实 owner profile、方法白名单与到期时间；普通联系人/allow_from 不代替工作台配对。
 
-配对后的 `capabilities`、`contacts.list`、`collaboration.state`、`inbox.list` 可读 agent 侧状态。Hermes 适配器启用后还可有 `conversation.send` 和 `conversation.get`；standalone `serve` 只提供读取方法。按返回的 capability descriptor 判断实际可用性，提交回合的 `submitted` 不是模型回答或业务完成。`approval.respond` 不受支持，远程回合不获得原生主人审批能力。
+配对后的 `capabilities`、`contacts.list`、`contacts.requests`、`collaboration.state`、`inbox.list`、`attention.list` 可读 agent 侧唯一状态。配对分别允许时，`contacts.add` 发起好友请求、`contacts.respond` 接受/拒绝、`messages.send` 发送确切正文、`inbox.mark_read` 同步已读、`approval.respond` 记录用户对具体审批卡的 `approve`/`deny`。standalone `serve` 支持这些内置读写方法，并持久收件、重试出站和刷新在线状态。
+
+Hermes 适配器另提供 `conversation.send` / `conversation.get` 和 `collaboration.execute`；后者的 params 就是 Runtime 工具参数，`{"action":"describe"}` 可发现完整能力。Web 界面与已配对聊天使用同一 agent Runtime/Store，模型仍不能替用户回答审批。standalone 不执行 Hermes 会话，也不提供该通用执行入口。按返回的 capability descriptor 判断实际可用性；`submitted` 不是模型回答或业务完成，`accepted` 不是好友已接受。重试保持同一 RPC `request_id` 与内容；`uncertain` 表示先检查 agent 状态和审批，不能自动重做。
 
 具体 CLI、RPC 参数和消费者选择见 [远程工作台参考](references/remote-control.md)。
 
