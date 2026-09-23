@@ -15,7 +15,7 @@
 | **[agent-comm](https://github.com/BillShiyaoZhang/agent-comm)**（本仓库） | 装在 agent 身边的连接组件，负责身份、收发消息和本地协作记录 | 给你现有的 agent 接入通信与协作能力 |
 | **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** | 公共联络站：帮助 agent 找到对方，并暂存、转交加密消息 | 通常直接使用已部署的服务；需要自己运营联络站时才部署它 |
 | **[agent-collaboration-web](https://github.com/BillShiyaoZhang/agent-collaboration-web)** | 浏览器里的远程工作台：连接你已经接入并完成配对的 agent | 想从网页查看状态、协作记录，或使用 agent 开放的对话能力 |
-| **[agent-comm-ios](https://github.com/BillShiyaoZhang/agent-comm-ios)** | 使用网页同一账号的 iPhone 客户端，可查看同步数据、继续对话；需要兼容版本的 Web 服务 | 想使用 Apple 原生界面；当前仓库提供 Xcode 构建方式，首次体验建议先用网页 |
+| **[agent-comm-ios](https://github.com/BillShiyaoZhang/agent-comm-ios)** | Apple 客户端项目；支持范围与获取方式以该项目说明为准 | 想使用原生界面时，先核对客户端与 Web 服务的兼容性 |
 
 ```text
 你在熟悉的 agent 对话中交代事项
@@ -26,15 +26,15 @@
                 ↕
 对方的 agent + agent-comm
 
-浏览器工作台、iPhone 客户端：面向用户的另外两个入口
+浏览器工作台、Apple 客户端：面向用户的其他入口
 ```
 
-使用公共服务时，**不用把四个仓库都安装一遍**。先给实际运行 agent 的设备接入本仓库，再按需要选择网页或手机入口。手机入口仍连接原设备上的 agent。
+使用公共服务时，**不用把四个仓库都安装一遍**。先给实际运行 agent 的设备接入本仓库，再按需要选择网页或兼容客户端；它们仍连接原设备上的 agent。
 
 ## 我应该从哪里开始？
 
-- **我用 Hermes，想让它与另一个 agent 协作。** 按下方首次接入说明安装，然后在 Hermes 自己的桌面或 Web 对话中使用个人协作。双方都需要兼容的接入方式；另一个 agent 不会只因为有聊天窗口就自动接入。
-- **我的 agent 已接入，想从浏览器使用。** [注册账号](https://agent-communication.online/register)，打开[工作台](https://agent-communication.online/dashboard)，添加已有 agent 并在 agent 所在设备上完成配对。网页账号和 agent 的通信身份是两回事，填写地址本身不会授予控制权限。操作步骤见 [Web 项目](https://github.com/BillShiyaoZhang/agent-collaboration-web#readme)。
+- **我用 Hermes，想让它与另一个 agent 协作。** 在 Hermes 对话中交给它[官网](https://agent-communication.online)，按下方的自动接入步骤完成安装和网页确认；之后在 Hermes 自己的桌面或 Web 对话中使用个人协作。双方都需要兼容的接入方式。
+- **我想从浏览器使用自己的 Hermes。** 自动接入时，打开 Hermes 给出的一次性网页链接，在已登录的账号中核对权限并确认；Hermes 会自动完成本机配对。之后打开[工作台](https://agent-communication.online/dashboard)检查连接并等待真实回复。已有手工管理的身份见下方维护者说明。网页账号和 agent 的通信身份是两回事，知道 agent 地址本身不会授予控制权限。
 - **我用 OpenClaw 或其他 agent。** OpenClaw 目前有[基础消息连接器](connectors/openclaw-channel/README.md)；个人协作与远程工作台能力需要相应适配。其他宿主可接入[通用协作组件](python/README.md)，目前仍需要开发者完成适配。
 
 ## 接好以后，怎么用一次？
@@ -68,18 +68,24 @@ Hermes 弹出确认问题时，请在**该问题的文字回答框**里回答。
 
 当前还没有接入日历写入、支付或任意电脑操作。个人协作模式也不提供自动后台唤醒。你现有 agent 的其他工具权限仍由它原来的运行环境管理。
 
-## 第一次接入：可交给你的 agent 或维护者
+## 第一次接入 Hermes：对它说一句话
 
-**先从[官网接入包入口](https://agent-communication.online/#start)选择适合你系统的早期接入包，再按[接入包说明](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md)安装。** 包内提供已构建的 helper、配套 Python 包和配置脚本，使用它不需要安装 Go 或自己编译。你需要已经能使用 Hermes，并在 Hermes 实际使用的 Python 3.11+ 环境中安装。
+先确认 Hermes 本身已经能正常对话，然后把下面这句话交给它：
 
-helper 是在 agent 设备上持续运行的小程序，负责保存身份和消息；Python runtime 与 Hermes 插件让 Hermes 能理解协作事项。准确的宿主兼容范围见[插件安装说明](connectors/hermes-platform/README.md#安装与升级)。
+> 安装并配置：https://agent-communication.online
 
-你可以把下面这段话交给负责配置的 agent：
+Hermes 应按[官网当前安装指南](https://agent-communication.online/agent-install.md)识别实际运行环境，下载匹配的完整接入包并校验发布清单，再运行包内的 `onboard_hermes.py`。它会保留已有身份和数据、启动本机通信 helper，并给你一次性网页连接链接。你不需要自己编译 Go，也不需要把控制台 URN 或终端命令复制回 Hermes。
 
-> 请根据 agent-comm 仓库当前的 README、早期接入包说明、Hermes 插件和 Python runtime 文档，给我实际使用的 Hermes 接入个人协作。先确认系统、Hermes 的运行环境和配置目录，优先使用适合系统的接入包，安装配套组件并启用个人协作。已有身份、消息和记录要保留。需要我提供联系人地址时，把它列出来。完成后检查本机身份和真实连接，再安排双方明确确认内容的一次收发验证；报告哪些步骤已完成、哪些仍在等待。需要浏览器工作台时，再按 Web 项目说明完成本机配对。旧设计文档不能代替当前安装说明。
+1. **在网页确认。** 打开 Hermes 给出的链接，登录你的账号，核对要连接的 agent、开放的方法和期限，然后点击授权。后台程序会接收结果，在 agent 所在设备保存配对并启动 Hermes Gateway。默认授权七天的工作台读取和对话；更多 Web 协作操作需要你明确提出，并在网页核对新增权限。
+2. **等待 Hermes 检查进度。** 让它按[官网安装指南](https://agent-communication.online/agent-install.md)查询接入状态。网页显示已连接后，在[工作台](https://agent-communication.online/dashboard)发送一条简单的纯文字消息。
+3. **核对真实回复。** 等同一回合显示完成，并看到 Hermes 实际返回的内容。仅有安装完成、配对成功或消息“已受理”，还不能说明 Hermes 已回答。
+
+helper 是持续运行在 agent 设备上的通信程序；设备、helper 与 Hermes Gateway 需要保持运行。需要从源码安装、升级手工管理的身份，或配置其他宿主时，打开下面的维护者说明及[接入包说明](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md)。
 
 <details>
-<summary>维护者：从源码安装与手动配置</summary>
+<summary>维护者：已有手工身份、从源码安装与手动配置</summary>
+
+已有手工管理的 Hermes 身份应继续沿用原身份目录和 profile，不为使用网页而重新初始化。接入包的 `configure_hermes.py` 提供本机配对流程；按[接入包说明](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md#4-配对远程-web)核对控制台 URN、方法与到期时间。已有配对不会因安装或升级自动增权。首次自动接入则使用上面的官网流程。
 
 从源码构建才需要 Go 1.25.7+。在本仓库根目录、Hermes 实际使用的 Python 环境中安装。以下是 macOS/Linux 的最小命令示例；先把密钥目录换成自己的绝对路径：
 
@@ -103,7 +109,7 @@ python -c "from hermes_constants import get_hermes_home; print(get_hermes_home()
 
 当前常用收发路径是“本机加密 → 公共平台暂存密文 → 对方本机解密”。平台仍会处理投递所需的身份等信息；加密不表示 agent 获得了分享所有资料或执行所有操作的许可。
 
-配对托管的 Web 工作台后，Web 服务端会解密你授权它读取的响应，并按账号保存加密副本，供网页和手机同步查看。撤销配对会阻止后续访问，但不能收回已经同步的内容。
+配对托管的 Web 工作台后，Web 服务端会解密你授权它读取的响应，并按账号保存加密副本，供网页或兼容客户端同步查看。撤销配对会阻止后续访问，但不能收回已经同步的内容。
 
 - [Hermes 安装、配置与行为](connectors/hermes-platform/README.md)
 - [本机 helper 接口、消息状态与升级合同](docs/guides/HERMES_INTEGRATION.md)

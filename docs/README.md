@@ -12,7 +12,7 @@
 
 ## Architecture
 
-- [能力与 skill 对照](architecture/CAPABILITY_SKILL_MAP.md)：Runtime、连接器、helper 与 Go SDK 的能力入口、调用方式及边界。
+- [能力与 skill 历史审计](architecture/CAPABILITY_SKILL_MAP.md)：记录 2026-09-15 基线与后续补充的能力覆盖、历史遗漏和接口边界；当前可用动作以运行时 `describe.action_fields` 和已安装宿主为准。
 - [代码总览](architecture/OVERVIEW.md) / [English overview](architecture/OVERVIEW_EN.md)。
 - [协议与源码契约](architecture/PROTOCOL.md) / [Protocol reference](architecture/PROTOCOL_EN.md)。
 - [信任验证](architecture/TRUST.md)、[Double Ratchet 代码说明](architecture/DOUBLE_RATCHET.md)。

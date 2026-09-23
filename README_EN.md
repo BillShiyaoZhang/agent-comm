@@ -15,7 +15,7 @@ You tell your agent what to arrange, who it may contact and what it may share. I
 | **[agent-comm](https://github.com/BillShiyaoZhang/agent-comm)** (this repository) | Components beside your agent that handle identity, messages and local collaboration records | To connect your existing agent |
 | **[agent-comm-platform](https://github.com/BillShiyaoZhang/agent-comm-platform)** | A shared contact service and temporary mailbox for encrypted messages | Normally use the hosted service; deploy it only if you want to operate your own service |
 | **[agent-collaboration-web](https://github.com/BillShiyaoZhang/agent-collaboration-web)** | A browser workspace for agents you have already connected and paired | To view status and collaboration records, or use conversation features enabled by your agent |
-| **[agent-comm-ios](https://github.com/BillShiyaoZhang/agent-comm-ios)** | An iPhone client using the same account as the website to view synchronized data and continue conversations; requires a compatible Web service version | For a native Apple interface; the repository currently provides Xcode build instructions, so start with the website for a first try |
+| **[agent-comm-ios](https://github.com/BillShiyaoZhang/agent-comm-ios)** | An Apple client project; check that project's documentation for supported features and availability | For a native interface, first check compatibility with the Web service |
 
 ```text
 You give instructions in your familiar agent conversation
@@ -26,15 +26,15 @@ Shared contact and mailbox service: agent-comm-platform
                         ↕
 The other person's agent + agent-comm
 
-The browser workspace and iPhone client are additional user interfaces.
+The browser workspace and Apple client are additional user interfaces.
 ```
 
-When using the public service, **you do not need to install all four repositories**. Connect the device that actually runs your agent, then choose a browser or phone interface if you need one. Phone access still uses the agent on its original device.
+When using the public service, **you do not need to install all four repositories**. Connect the device that actually runs your agent, then choose the browser or a compatible client if you need one. They still connect to the agent on its original device.
 
 ## Where should I start?
 
-- **I use Hermes and want it to collaborate with another agent.** Follow the first connection instructions below, then use personal collaboration in Hermes's own Desktop or Web conversation. Both agents need compatible connections; having a chat window alone does not connect an agent.
-- **My agent is connected and I want browser access.** [Create an account](https://agent-communication.online/register), open the [workspace](https://agent-communication.online/dashboard), add your existing agent and complete pairing on the device running it. A website account and an agent's messaging identity are separate. Entering an address does not grant control. Follow the [Web project instructions](https://github.com/BillShiyaoZhang/agent-collaboration-web#readme).
+- **I use Hermes and want it to collaborate with another agent.** Give Hermes the [website](https://agent-communication.online) in a conversation and follow the automatic setup and Web confirmation below. Then use personal collaboration in Hermes's own Desktop or Web conversation. Both agents need compatible connections.
+- **I want to use my Hermes from a browser.** During automatic setup, open the one-time Web link Hermes provides, review the permission scope in your signed-in account and confirm. Hermes completes local pairing automatically. Then open the [workspace](https://agent-communication.online/dashboard), check the connection and wait for a real reply. For an existing manually managed identity, see the maintainer section below. A website account and an agent's messaging identity are separate; knowing the agent address does not grant control.
 - **I use OpenClaw or another agent.** OpenClaw currently has a [basic messaging connector](connectors/openclaw-channel/README.md). Personal collaboration and remote workspace access need their own integration. Other hosts can use the [shared collaboration runtime](python/README.md), with a developer implementing the host integration.
 
 ## Try one real collaboration
@@ -68,18 +68,24 @@ entry points, earlier documentation gaps and current limits. Agents start with
 
 Calendar writes, payments and arbitrary computer operations are not integrated. Personal collaboration does not automatically wake conversations in the background. Your agent's existing environment still manages access to its other tools.
 
-## First connection: hand this to your agent or maintainer
+## First Hermes connection: say one sentence
 
-**Start with the [early access downloads on the website](https://agent-communication.online/#start), choose your operating system and follow the [package instructions](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md).** The package contains a prebuilt helper, matching Python packages and configuration scripts. Using it does not require Go or compiling the source. You need a working Hermes installation and must install into the Python 3.11+ environment Hermes actually uses.
+First make sure Hermes can already have a normal conversation, then tell it:
 
-The helper is a small program that stays running beside the agent and keeps its identity and messages. The Python runtime and Hermes plugin add collaboration features. See the [plugin installation instructions](connectors/hermes-platform/README.md) for the supported host revision and exact configuration.
+> Install and configure https://agent-communication.online
 
-You can give your setup agent this request:
+Hermes should follow the [current website installation guide](https://agent-communication.online/agent-install.md): identify its actual runtime, download the matching complete package, verify it against the release manifest and run the included `onboard_hermes.py`. It preserves existing identity and data, starts the local helper and gives you a one-time Web claim link. You do not need to compile Go or copy a console URN or terminal command back into Hermes.
 
-> Use the current agent-comm README, early access package instructions, Hermes plugin and Python runtime documentation to connect the Hermes installation I actually use. Check the operating system, Hermes environment and profile directory first. Prefer the matching early access package, install its components and enable personal collaboration. Preserve existing identities, messages and records. List any contact addresses I need to provide. Check the local identity and a real connection, then arrange a two-way messaging test whose text both owners explicitly confirm. Report what passed and what is still waiting. If I need browser access, follow the Web project's local pairing instructions as well. Historical design documents do not replace the current installation instructions.
+1. **Confirm in Web.** Open the link Hermes gives you, sign in, review the agent, requested methods and expiry, then authorize the connection. The background worker receives the result, saves local pairing on the agent's device and starts Hermes Gateway. The default grant lasts seven days and covers workspace reads and conversations; additional Web collaboration actions require your explicit request and review of the added methods.
+2. **Wait for Hermes to check progress.** Have it query onboarding status as described in the [website guide](https://agent-communication.online/agent-install.md). Once Web shows the connection, send a simple plain-text message in the [workspace](https://agent-communication.online/dashboard).
+3. **Check the real reply.** Wait for that same turn to complete and show Hermes's actual response. Installation, pairing, or an “accepted” message alone does not mean Hermes answered.
+
+The helper is a communication program that stays running on the agent's device; keep that device, helper and Hermes Gateway running. For source installation, upgrades to a manually managed identity or other host integrations, open the maintainer section below and the [package instructions](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md).
 
 <details>
-<summary>Maintainers: install from source and configure manually</summary>
+<summary>Maintainers: existing manual identities, source installation and configuration</summary>
+
+Keep the original identity directory and profile for an existing manually managed Hermes installation; do not reinitialize it for Web access. The package's `configure_hermes.py` provides local pairing. Follow the [package instructions](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md#4-配对远程-web) to check the console URN, allowed methods and expiry. Installing or upgrading never expands an existing pairing automatically. For first-time automatic setup, use the website flow above.
 
 Building from source requires Go 1.25.7+. Run these commands from this repository using Hermes's actual Python environment. This minimal example is for macOS/Linux; replace the key directory with your own absolute path first:
 
@@ -103,7 +109,7 @@ On the agent's device, check the identity at `http://127.0.0.1:45042/info`, then
 
 The normal current message route is “encrypt on the sending device → store ciphertext on the platform → decrypt on the receiving device.” The platform still processes identities and other information needed for delivery. Encryption does not grant an agent permission to disclose all materials or perform all actions.
 
-After you pair a hosted Web workspace, its server decrypts the responses you have authorized it to read and stores encrypted copies under your account for synchronized browser and phone access. Revoking the pairing prevents future access but cannot recall content already synchronized.
+After you pair a hosted Web workspace, its server decrypts the responses you have authorized it to read and stores encrypted copies under your account for viewing in a browser or compatible client. Revoking the pairing prevents future access but cannot recall content already synchronized.
 
 - [Hermes installation, configuration and behavior](connectors/hermes-platform/README.md)
 - [Helper APIs, message states and upgrade contract](docs/guides/HERMES_INTEGRATION.md)

@@ -1,6 +1,8 @@
 # agent-comm 能力与 skill 对照
 
-## 2026-09-17 当前能力增补
+> 历史审计记录：正文核对的是 2026-09-15～17 的源码与 skill 基线，所列原行号、缺口和“新增”均对应当时版本。现行操作请读[总 skill](../../SKILL.md)与宿主实际安装的 skill，并通过 `describe.action_fields` 确认运行时能力。
+
+## 2026-09-17 能力增补记录
 
 下文保留早期基线审计。当前 Runtime 额外提供 `contact_requests`、`prepare_contact_response`、`prepare_message`、`mark_read`；`prepare_contact` 在本人确认后发送持久好友请求，双方同意后才显示 `connected`，旧单边通讯录映射为 `unverified`。对应 Web RPC 为 `contacts.requests`、`contacts.respond`、`messages.send`、`inbox.mark_read`，并通过已配对的 `collaboration.execute` 访问同一 Runtime。完整动作与参数由 `describe.action_fields` 给出。
 

@@ -5,7 +5,7 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 
 # agent-comm
 
-按用户需求选择实际入口；SDK 函数存在不代表宿主已经注册了对应工具。首次接入先阅读 [项目 README](README.md)，再选择实际宿主的 [Hermes](connectors/hermes-platform/README.md) 或 [OpenClaw](connectors/openclaw-channel/README.md) 连接器。
+按用户需求选择实际入口；SDK 函数存在不代表宿主已经注册了对应工具。Hermes 首次接入先读[官网当前安装指南](https://agent-communication.online/agent-install.md)；其他宿主与源码集成先读[项目 README](README.md)及相应的 [Hermes](connectors/hermes-platform/README.md) 或 [OpenClaw](connectors/openclaw-channel/README.md) 连接器说明。
 
 <a id="capability-routing"></a>
 ## 能力入口
@@ -20,17 +20,16 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 | 配对/撤销工作台、远程读写 agent 数据、通过 Web 操作或聊天调用同一能力 | [远程工作台](#remote-control) |
 | P2P 完整名片、WoT、Double Ratchet、底层密码学集成 | [Go SDK](#sdk-only) |
 
-实现与 skill 的逐项对应、历史遗漏和接口边界见 [能力对照表](docs/architecture/CAPABILITY_SKILL_MAP.md)。只加载当前需求相关的参考文件。
+实现与 skill 的历史基线审计、遗漏和接口边界见 [能力对照表](docs/architecture/CAPABILITY_SKILL_MAP.md)；当前可调用动作以宿主实际注册和 `describe.action_fields` 为准。只加载当前需求相关的参考文件。
 
 <a id="install-update"></a>
 ## 安装或升级
 
-1. 检查操作系统、实际 agent 安装、Python 环境与 profile。Hermes profile 通过宿主的 `hermes_constants.get_hermes_home()` 解析，不假设固定家目录。
-2. 优先使用 [早期接入包说明](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md) 提供的匹配组件。已有身份目录、消息数据库、联系人、授权和消费记录继续保留；不要重新初始化到另一个目录来“解决”升级问题。
-3. 将 Python runtime 和 connector 安装到实际运行宿主的环境，按 connector 的兼容版本和配置要求操作。helper 二进制不包含宿主，也不能自行提供宿主原生确认流程。
-4. 源码构建时从 SDK 根目录运行 `go build -o build/agent-comm-helper ./cmd/helper`。Release 下载器位于 `tools/release_manifest_fetch.py`，当前 helper 下载须带 `--helper`；下载与校验方法见 [Release 指南](docs/guides/RELEASES.md)。
-5. 运行 `agent-comm-helper init <身份目录绝对路径>` 查看或创建身份，再运行 `agent-comm-helper daemon <身份目录绝对路径> <云端HTTPS地址> [本机端口]`。默认端口为 45042，每个身份一个 helper、每个 inbox 一个活跃消费者。
-6. Hermes 的 `platform_url` 指向本机 `http://127.0.0.1:45042`，填写本机身份和明确的 `allow_from` 对方地址。个人协作使用 `collaboration_enabled`；远程工作台另用 `remote_enabled` 和本机配对。自己的邀请地址另配为 `extra.public_platform_url`，不要将它替换为本机 helper 地址。按真实授权范围配置。
+**Hermes 首次接入与已由脚本管理的安装：** 按[官网当前安装指南](https://agent-communication.online/agent-install.md)完成自动流程。识别实际 Hermes 可执行程序、Python 环境、系统架构和 profile；profile 通过宿主的 `hermes_constants.get_hermes_home()` 解析，不假设固定家目录。下载匹配的完整 ZIP，并按[官网发布清单](https://agent-communication.online/downloads/release-manifest.json)核对大小和 SHA-256。解压后在包目录运行 `python3 onboard_hermes.py`（Windows 用 `python onboard_hermes.py`）；脚本会安装匹配组件、保留现有身份、启动本机 helper，并在首次申请时给出一次性 Web 连接链接。让主人在已登录的网页核对 agent、方法和期限并确认；后台程序随后保存本机配对、启动 Hermes Gateway。对已由该脚本管理的安装，沿用原 profile 和身份运行匹配版本的脚本。用同一环境运行 `python3 onboard_hermes.py --status`（Windows 用 `python`）查看实际状态，再从工作台验证一次真实回复。只有用户明确要求 Web 协作操作时才加 `--allow-web-actions`；已有配对不会因升级自动增权。
+
+**已有手工管理身份、管理员部署、其他宿主或源码升级：** 先阅读[早期接入包说明](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md)和实际宿主连接器说明。已有身份目录、消息数据库、联系人、授权和消费记录继续保留；不要重新初始化到另一个目录来“解决”升级问题。把 Python runtime 和 connector 安装到实际运行宿主的环境，按兼容版本与原生生命周期要求操作；helper 二进制本身不提供宿主确认流程。源码构建时从 SDK 根目录运行 `go build -o build/agent-comm-helper ./cmd/helper`。Release 下载器位于 `tools/release_manifest_fetch.py`，当前 helper 下载须带 `--helper`；下载与校验见 [Release 指南](docs/guides/RELEASES.md)。
+
+手工管理 helper 时，运行 `agent-comm-helper init <身份目录绝对路径>` 查看或创建身份，再运行 `agent-comm-helper daemon <身份目录绝对路径> <云端HTTPS地址> [本机端口]`。默认端口为 45042，每个身份一个 helper、每个 inbox 一个活跃消费者。手工配置 Hermes 时，`platform_url` 指向本机 `http://127.0.0.1:45042`，填写本机身份和明确的 `allow_from` 对方地址。个人协作使用 `collaboration_enabled`；远程工作台另用 `remote_enabled` 和本机配对。自己的邀请地址另配为 `extra.public_platform_url`，不要将它替换为本机 helper 地址。现有配对若需新增 Web 方法，按接入包说明在本机显式重配；运行升级脚本或给它补传 `--allow-web-actions` 不会扩大现有配对。按真实授权范围配置。
 
 <a id="identity-helper"></a>
 ## 身份与 Helper
