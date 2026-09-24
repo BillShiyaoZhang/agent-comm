@@ -45,6 +45,8 @@ func main() {
 		runV2PinPeer()
 	case "v2-pin-policy-root":
 		runV2PinPolicyRoot()
+	case "v2-ensure-policy-root":
+		runV2EnsurePolicyRoot()
 	case "v2-allow-compliance":
 		runV2AllowCompliance()
 	case "v2-disallow-compliance":
@@ -79,6 +81,22 @@ func runV2PinPolicyRoot() {
 	pub, err := hex.DecodeString(os.Args[3])
 	if err == nil {
 		err = v2.PinPolicyRoot(os.Args[2], pub, os.Args[4], os.Args[5])
+	}
+	if err != nil {
+		printError(err.Error())
+		os.Exit(1)
+	}
+	printResult(Response{"pinned": true, "policy_root_public_key": os.Args[3], "platform_id": os.Args[4]})
+}
+
+func runV2EnsurePolicyRoot() {
+	if len(os.Args) != 6 {
+		printError("Usage: agent-comm-helper v2-ensure-policy-root <keys_dir> <root_public_key_hex> <expected_platform_peer_id> <trusted_release_note>")
+		os.Exit(1)
+	}
+	pub, err := hex.DecodeString(os.Args[3])
+	if err == nil {
+		err = v2.EnsurePolicyRoot(os.Args[2], pub, os.Args[4], os.Args[5])
 	}
 	if err != nil {
 		printError(err.Error())

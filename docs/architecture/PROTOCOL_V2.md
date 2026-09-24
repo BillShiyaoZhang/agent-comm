@@ -11,9 +11,9 @@ agent-comm-helper v2-pin-policy-root <keys_dir> <root_public_key_hex> <expected_
 agent-comm-helper v2-pin-peer <keys_dir> <peer_urn> <peer_ed25519_public_key_hex> <independent_verification_note>
 ```
 
-旧版只固定根公钥、没有平台 ID 的 pin 文件无法启用 v2；独立核对 PeerID 后可用上面的命令、相同根公钥为旧文件补上 ID，不能从 bootstrap 自动补齐，也不能覆盖不同根或已有平台 ID。安装和 Web 配对脚本不自动固定策略根或平台 ID；新 helper 在缺少 pin 时拒绝普通消息发送。发布应先部署签名 `private` 兼容策略并独立分发根与 PeerID，再升级 helper。
+旧版只固定根公钥、没有平台 ID 的 pin 文件无法启用 v2；独立核对 PeerID 后可用上面的命令、相同根公钥为旧文件补上 ID，不能从 bootstrap 自动补齐，也不能覆盖不同根或已有平台 ID。v2 完整接入包可把经可信发布渠道核对的公开根和 PeerID 放入校验清单覆盖的 `policy-trust.json`，安装脚本以 `v2-ensure-policy-root` 固定到原身份目录；同值重装幂等，异值拒绝且不自动轮换。没有该文件的旧安装包不能声称已固定。新 helper 缺少 pin 时拒绝普通消息发送。发布应先部署签名 `private` 兼容策略并独立分发根与 PeerID，再升级 helper。
 
-两个命令均拒绝空核对记录和覆盖已有不同密钥。保留原身份目录和 `mailbox.db`；不要重新初始化身份。默认只允许 `private`。先在本机 `GET /api/v2/disclosure` 查看经固定根验签的 `platform_id`、`mode`、`policy_epoch`、`policy_hash`、`gateway_key_id`、`platform_can_decrypt`、有效期与隔离队列数量。未知模式或解密能力返回 `null`，不是 `false`。主人核对**这一份精确策略**并同意网关解密后，在**每一端**执行：
+两个手工 pin 命令均拒绝空核对记录和覆盖已有不同密钥。保留原身份目录和 `mailbox.db`；不要重新初始化身份。默认只允许 `private`。先在本机 `GET /api/v2/disclosure` 查看 daemon 实际加载的公开 `policy_root_public_key`，以及经该根验签的 `platform_id`、`mode`、`policy_epoch`、`policy_hash`、`gateway_key_id`、`platform_can_decrypt`、有效期与隔离队列数量。根未配置时 `policy_root_public_key=null`；未经验证的模式或解密能力也为 `null`，不是 `false`。主人核对**这一份精确策略**并同意网关解密后，在**每一端**执行：
 
 ```text
 agent-comm-helper v2-allow-compliance <keys_dir> <disclosure.policy_hash> <explicit_authorization_note>

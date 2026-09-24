@@ -10,9 +10,8 @@ on:
         required: true
         type: string
       deployment_ref:
-        description: Deploy repository commit or ref whose nested SDK matches this tag
+        description: Exact 40-character Deploy commit SHA whose nested SDK matches this tag
         required: true
-        default: main
         type: string
 
 permissions:
@@ -29,7 +28,7 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       sdk_sha: ${{ steps.release.outputs.sdk_sha }}
       prerelease: ${{ steps.release.outputs.prerelease }}
-      deployment_ref: ${{ steps.release.outputs.deployment_ref }}
+      deployment_sha: ${{ steps.release.outputs.deployment_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -149,7 +148,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: BillShiyaoZhang/agent-collaboration-deploy
-          ref: ${{ needs.resolve.outputs.deployment_ref }}
+          ref: ${{ needs.resolve.outputs.deployment_sha }}
           submodules: recursive
           path: deploy
           persist-credentials: false

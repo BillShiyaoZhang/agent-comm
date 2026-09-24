@@ -13,7 +13,7 @@ agent-comm-helper daemon <keys_dir绝对路径> <platform_url> [local_port]
 
 Agent 间 v2 使用独立的签名策略、握手和消息端点。先从平台之外核对完整身份公钥、策略根和平台 libp2p PeerID，再在每端运行 `v2-pin-peer <keys_dir> <peer_urn> <ed25519_public_key_hex> <independent_verification_note>` 和 `v2-pin-policy-root <keys_dir> <root_public_key_hex> <expected_platform_peer_id> <independent_verification_note>`。根固定后重启 daemon，并查看本机 `GET /api/v2/disclosure`。默认只允许 `private`；主人核对披露状态的网关密钥与精确策略后，运行 `v2-allow-compliance <keys_dir> <policy_hash> <explicit_authorization_note>`。新 epoch 或新策略哈希必须重新授权；`v2-disallow-compliance <keys_dir> <explicit_revocation_note>` 撤回后续合规收发，不能收回已披露内容。不要把原有 `trusted` 联系人自动当成 v2 已核实身份。具体协议见 [v2 参考](../docs/architecture/PROTOCOL_V2.md)。
 
-`onboard_hermes.py` 与 `install.py` 不自动固定根公钥或平台 PeerID；Web 配对成功不代表 Agent 间 v2 可发送。新 helper 缺少根固定时普通发送为 HTTP 428；不能用平台自己的 bootstrap 响应替代独立核对。先在平台准备签名 `private` 且 `allow_v1=true` 的兼容策略并可信分发根和 PeerID，再升级新 helper。旧身份与信箱原样保留。
+带 `policy-trust.json` 的 v2 完整安装包可通过 `v2-ensure-policy-root <keys_dir> <root_public_key_hex> <expected_platform_peer_id> <trusted_release_note>` 在原身份目录自动固定公开根和平台 PeerID；同值重装幂等，不同值拒绝。旧包或手工流程继续用 `v2-pin-policy-root` 显式固定。`GET /api/v2/disclosure` 的 `policy_root_public_key` 是当前 daemon 已加载的根公钥（未配置为 `null`）；只有 `policy_verified=true` 且 `platform_id` 与包内 PeerID 一致时，才说明它已验签当前策略。新 helper 缺少根固定时普通发送为 HTTP 428；不能用平台自己的 bootstrap 响应替代独立核对。先在平台准备签名 `private` 且 `allow_v1=true` 的兼容策略并可信分发根和 PeerID，再升级新 helper。旧身份与信箱原样保留，Web 配对成功不代表 Agent 间 v2 可发送或允许合规披露。
 
 ## 通信联系人
 

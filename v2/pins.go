@@ -211,6 +211,26 @@ func PinPolicyRoot(keysDir string, public ed25519.PublicKey, platformID, verific
 	return file.Sync()
 }
 
+// EnsurePolicyRoot is for an installer carrying independently verified,
+// release-pinned trust material. Reinstalling the exact same root and platform
+// is safe; a different root or platform is never treated as an upgrade.
+// Existing verification notes are preserved rather than replaced by a later
+// installer invocation.
+func EnsurePolicyRoot(keysDir string, public ed25519.PublicKey, platformID, verificationNote string) error {
+	if len(public) != ed25519.PublicKeySize || platformID == "" || len(platformID) > 256 || strings.TrimSpace(platformID) != platformID || strings.ContainsAny(platformID, " \t\r\n") || strings.TrimSpace(verificationNote) == "" {
+		return errors.New("independently verified policy root, platform ID and note required")
+	}
+	if err := PinPolicyRoot(keysDir, public, platformID, verificationNote); err == nil {
+		return nil
+	} else {
+		pin, loadErr := LoadPolicyRootPin(keysDir)
+		if loadErr == nil && ed25519.PublicKey(pin.PublicKey).Equal(public) && pin.PlatformID == platformID {
+			return nil
+		}
+		return err
+	}
+}
+
 func LoadPolicyRootPin(keysDir string) (*RootPin, error) {
 	data, err := os.ReadFile(rootPinPath(keysDir))
 	if err != nil {

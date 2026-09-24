@@ -11,13 +11,13 @@
 - `SHA256SUMS` 和 `release-manifest.json`：文件大小、SHA256、类型及平台信息。
 - `early-access-manifest.json`：完整接入包与源码 ZIP 的校验信息、包版本和源码提交；同步官网时将它保存为官网的 `downloads/release-manifest.json`。
 
-工作流从 `cmd/helper` 编译二进制、构建两个 wheel，并复用部署仓库的打包器生成完整接入包，再组装文档包和校验清单。SDK 下载器使用的资产清单与接入包清单分别保存；不提交构建产物到源仓库。
+工作流从 `cmd/helper` 编译二进制、构建两个 wheel，并复用部署仓库的打包器生成完整接入包，再组装文档包和校验清单。v2 包的公开策略根与平台 PeerID 只从部署仓库固定提交中的 `tools/release/trust/<tag>.json` 取得；组装时逐一核对四个平台 ZIP 内同名字节和内部 SHA256 清单，并把信任文件及根公钥摘要写入早期接入和 GitHub Release 清单。SDK 下载器使用的资产清单与接入包清单分别保存；不提交构建产物到源仓库。
 
 ## 变更时检查
 
 1. 移动文档时同步文档包清单和本地/GitHub 链接，保持根 `SKILL.md` / `SKILL_EN.md` 安装入口稳定。
 2. 检查 manifest 的平台名、文件名与下载器匹配。构建测试通过不等于远程 Release 已发布。
 3. Python runtime 和宿主 connector 发布 wheel，并随完整接入 ZIP 提供。安装命令与宿主依赖见各包 README；Hermes 需预先安装。
-4. 先推送 SDK 提交，再更新并推送 Platform 和部署仓库的固定提交，最后给该 SDK 提交打 tag 并发布；手动发布填写匹配的 `deployment_ref`。协议变更需按迁移指南验证已有状态。
+4. 先推送 SDK 提交，再更新并推送 Platform 和部署仓库的固定提交，最后给该 SDK 提交打 tag 并发布；手动发布的 `deployment_ref` 必须填写匹配的部署仓库完整 40 位提交 SHA。标签触发的流程会在开始时固定部署仓库 `main` 的精确 SHA。协议变更需按迁移指南验证已有状态。
 
 二进制构建、校验和及文档打包已经实现，旧“待开发 CI”路线图不再维护。

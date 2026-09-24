@@ -17,8 +17,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from urllib.error import HTTPError
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 import zipfile
 
@@ -38,6 +39,9 @@ DOCS = {"README.md", "README_EN.md", "SKILL.md", "SKILL_EN.md", "python/README.m
         "connectors/README.md", "connectors/hermes-platform/README.md",
         "connectors/openclaw-channel/README.md", "examples/README.md", "tests/README.md",
         "tools/README.md", "connectors/hermes-platform/hermes_platform_agent_comm/skills/personal-collaboration/SKILL.md"}
+POLICY_TRUST_FIELDS = {"schema_version", "release", "platform_origin", "platform_peer_id",
+                       "policy_root_public_key_hex", "verification_note"}
+DEPLOYMENT_REMOTE = "https://github.com/BillShiyaoZhang/agent-collaboration-deploy.git"
 
 
 def git(repo, *args):
@@ -52,18 +56,32 @@ def validate_tag(tag):
     return bool(match.group(4))
 
 
+def resolve_deployment_sha(deployment_ref, event):
+    """Resolve the deploy source once, before jobs can observe a newer main."""
+    if event == "workflow_dispatch":
+        if not re.fullmatch(r"[0-9a-f]{40}", deployment_ref):
+            raise ValueError("Manual releases require an exact 40-character deployment commit SHA")
+        return deployment_ref
+    if deployment_ref != "main":
+        raise ValueError("Tag-triggered releases must resolve deployment main")
+    output = subprocess.check_output(
+        ["git", "ls-remote", "--exit-code", DEPLOYMENT_REMOTE, "refs/heads/main"], text=True)
+    match = re.fullmatch(r"([0-9a-f]{40})\trefs/heads/main\n?", output)
+    if not match:
+        raise ValueError("Could not resolve the exact deployment main commit")
+    return match.group(1)
+
+
 def resolve_release(repo, tag, deployment_ref, event, expected_sha):
     prerelease = validate_tag(tag)
     if event not in {"push", "workflow_dispatch"}:
         raise ValueError("Unsupported release event")
-    if not deployment_ref or deployment_ref.startswith("-") or any(c.isspace() for c in deployment_ref):
-        raise ValueError("deployment_ref must be a commit or Git ref")
-    subprocess.run(["git", "check-ref-format", "--allow-onelevel", deployment_ref], check=True)
     sdk_sha = git(repo, "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
     if event == "push" and sdk_sha != git(repo, "rev-parse", "--verify", f"{expected_sha}^{{commit}}"):
         raise ValueError("Tag commit differs from the triggering push")
+    deployment_sha = resolve_deployment_sha(deployment_ref, event)
     return {"tag": tag, "sdk_sha": sdk_sha, "prerelease": str(prerelease).lower(),
-            "deployment_ref": deployment_ref}
+            "deployment_sha": deployment_sha}
 
 
 def source_identity(sdk, deployment, sdk_sha):
@@ -96,6 +114,62 @@ def require_regular(path):
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"Expected a regular release asset: {path}")
     return path
+
+
+def reviewed_policy_trust(deployment, tag):
+    """Read public anchors from the exact committed deployment source, never the Platform."""
+    validate_tag(tag)
+    relative = f"tools/release/trust/{tag}.json"
+    require_regular(deployment / relative)
+    raw = subprocess.check_output(["git", "-c", "safe.directory=" + deployment.resolve().as_posix(),
+                                   "-C", str(deployment), "show", f"HEAD:{relative}"])
+    if len(raw) > 8192:
+        raise ValueError("Reviewed policy trust file is too large")
+    try:
+        trust = json.loads(raw)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ValueError("Invalid reviewed policy trust JSON") from exc
+    if (not isinstance(trust, dict) or set(trust) != POLICY_TRUST_FIELDS
+            or trust.get("schema_version") != 1 or trust.get("release") != tag):
+        raise ValueError("Policy trust schema or release tag mismatch")
+    root = trust["policy_root_public_key_hex"]
+    peer = trust["platform_peer_id"]
+    origin = trust["platform_origin"]
+    note = trust["verification_note"]
+    if not isinstance(root, str) or not re.fullmatch(r"[0-9a-f]{64}", root):
+        raise ValueError("Invalid reviewed policy root public key")
+    if not isinstance(peer, str) or not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,80}", peer):
+        raise ValueError("Invalid reviewed Platform Peer ID")
+    if not isinstance(origin, str):
+        raise ValueError("Invalid reviewed Platform origin")
+    parsed = urlsplit(origin)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path or parsed.query or parsed.fragment or origin != f"https://{parsed.netloc}"):
+        raise ValueError("Invalid reviewed Platform origin")
+    if (not isinstance(note, str) or not note.strip() or note != note.strip() or len(note) > 512
+            or any(ord(char) < 32 or ord(char) == 127 for char in note)):
+        raise ValueError("Invalid reviewed trust provenance")
+    metadata = {"release": tag, "file": "policy-trust.json",
+                "file_sha256": hashlib.sha256(raw).hexdigest(),
+                "root_public_key_sha256": hashlib.sha256(bytes.fromhex(root)).hexdigest(),
+                "platform_peer_id": peer, "platform_origin": origin}
+    return raw, metadata
+
+
+def verify_bundle_policy_trust(bundle, expected, tag):
+    """Check the installed bytes and inner checksum in every platform ZIP."""
+    with zipfile.ZipFile(require_regular(bundle)) as archive:
+        names = archive.namelist()
+        if names.count("policy-trust.json") != 1 or names.count("SHA256SUMS.json") != 1:
+            raise ValueError(f"Missing or duplicate policy trust metadata: {bundle.name}")
+        actual = archive.read("policy-trust.json")
+        if actual != expected:
+            raise ValueError(f"Policy trust bytes differ from reviewed source: {bundle.name}")
+        checksums = json.loads(archive.read("SHA256SUMS.json"))
+        if (not isinstance(checksums, dict) or checksums.get("release") != tag
+                or not isinstance(checksums.get("files"), dict)
+                or checksums["files"].get("policy-trust.json") != hashlib.sha256(actual).hexdigest()):
+            raise ValueError(f"Policy trust is not covered by this bundle checksum: {bundle.name}")
 
 
 def verify_helper(path, operating_system, architecture, sdk_sha):
@@ -139,7 +213,7 @@ def classify(name):
     return {"kind": known[name]}
 
 
-def write_manifest(output, *, tag, repository, sdk_sha, deployment_sha, early):
+def write_manifest(output, *, tag, repository, sdk_sha, deployment_sha, early, policy_trust=None):
     validate_tag(tag)
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("Invalid GitHub repository")
@@ -160,6 +234,8 @@ def write_manifest(output, *, tag, repository, sdk_sha, deployment_sha, early):
                 "source_heads": early["source_heads"], "packages": early["packages"],
                 "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "checksum_file": "SHA256SUMS", "assets": assets}
+    if policy_trust is not None:
+        manifest["policy_trust"] = policy_trust
     (output / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
 
@@ -168,6 +244,7 @@ def assemble(sdk, deployment, artifacts, output, tag, sdk_sha, repository):
     validate_tag(tag)
     require_regular(sdk / "docs" / "releases" / f"{tag}.md")
     deployment_sha = source_identity(sdk, deployment, sdk_sha)
+    trust_bytes, trust_metadata = reviewed_policy_trust(deployment, tag)
     if output.exists() and any(output.iterdir()):
         raise ValueError("Release output must be empty")
     wheels = {}
@@ -193,14 +270,21 @@ def assemble(sdk, deployment, artifacts, output, tag, sdk_sha, repository):
     bundles = deployment / "build" / "github-bundles"
     if bundles.exists() and any(bundles.iterdir()):
         raise ValueError("Installation bundle output must be empty")
-    subprocess.run([sys.executable, str(deployment / "tools/release/build_early_access.py"),
-                    "--release", tag, "--helper-dir", str(helpers), "--output-dir", str(bundles)], check=True)
+    with tempfile.TemporaryDirectory(prefix="release-trust-", dir=deployment / "build") as temporary:
+        trust_path = Path(temporary) / f"{tag}.json"
+        trust_path.write_bytes(trust_bytes)
+        subprocess.run([sys.executable, str(deployment / "tools/release/build_early_access.py"),
+                        "--release", tag, "--helper-dir", str(helpers), "--output-dir", str(bundles),
+                        "--policy-trust", str(trust_path)], check=True)
     early = json.loads((bundles / "release-manifest.json").read_text(encoding="utf-8"))
     if (early.get("release") != tag or early.get("source_heads", {}).get(".") != deployment_sha
             or early.get("source_heads", {}).get("agent-comm-platform/agent-comm") != sdk_sha):
         raise ValueError("Installation bundle source identity mismatch")
     if set(early.get("files", {})) != BUNDLES | {SOURCE_BUNDLE}:
         raise ValueError("Expected four complete installation ZIPs and one source ZIP")
+    for name in BUNDLES:
+        verify_bundle_policy_trust(bundles / name, trust_bytes, tag)
+    early["policy_trust"] = trust_metadata
     output.mkdir(parents=True, exist_ok=True)
     for name in sorted(expected):
         shutil.copyfile(artifacts / name, output / name)
@@ -209,11 +293,11 @@ def assemble(sdk, deployment, artifacts, output, tag, sdk_sha, repository):
         if sha(path) != entry["sha256"] or path.stat().st_size != entry["bytes"]:
             raise ValueError(f"Installation bundle checksum mismatch: {name}")
         shutil.copyfile(path, output / name)
-    shutil.copyfile(bundles / "release-manifest.json", output / "early-access-manifest.json")
+    (output / "early-access-manifest.json").write_text(json.dumps(early, indent=2) + "\n", encoding="utf-8")
     shutil.copyfile(require_regular(sdk / "tools/release_manifest_fetch.py"), output / "release_manifest_fetch.py")
     package_docs(sdk, output / "agent-comm-docs.zip")
     manifest = write_manifest(output, tag=tag, repository=repository, sdk_sha=sdk_sha,
-                              deployment_sha=deployment_sha, early=early)
+                              deployment_sha=deployment_sha, early=early, policy_trust=trust_metadata)
     print(json.dumps({"tag": tag, "sdk_sha": sdk_sha, "deployment_sha": deployment_sha,
                       "packages": early["packages"], "assets": [a["name"] for a in manifest["assets"]]}, indent=2))
 

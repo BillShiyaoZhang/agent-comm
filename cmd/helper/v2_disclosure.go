@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -13,6 +14,7 @@ import (
 type DisclosureStatus struct {
 	State                     string  `json:"state"`
 	PolicyVerified            bool    `json:"policy_verified"`
+	PolicyRootPublicKey       *string `json:"policy_root_public_key"`
 	PlatformID                *string `json:"platform_id"`
 	Mode                      *string `json:"mode"`
 	PolicyEpoch               *uint64 `json:"policy_epoch"`
@@ -45,6 +47,8 @@ func (ds *DaemonServer) disclosureStatus() (DisclosureStatus, error) {
 	if ds.v2 == nil {
 		return state, nil
 	}
+	rootHex := hex.EncodeToString(ds.v2.root)
+	state.PolicyRootPublicKey = &rootHex
 	state.State = "policy_unavailable"
 	state.LegacySendCode = "policy_unavailable"
 	policy := ds.v2.currentPolicy()

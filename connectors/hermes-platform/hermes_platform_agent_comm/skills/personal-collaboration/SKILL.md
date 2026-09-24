@@ -23,9 +23,12 @@ for gateway decryption. Never run `v2-allow-compliance` on the model's initiativ
 it requires the owner's explicit decision for the current policy hash. Revocation
 through `v2-disallow-compliance` stops later compliance work but cannot retract
 already disclosed plaintext. Preserve the existing identity and helper mailbox.
-The standard Hermes install/pairing script does not pin the v2 policy root or
-platform PeerID. Provision both through an independent trusted deployment path;
-the platform's own bootstrap response is not an independent identity check.
+A v2 complete Hermes bundle can pin its release-verified public policy root and
+platform PeerID to the existing identity before the helper starts. Check that
+the running helper's disclosure reports that root, a verified policy and the
+expected platform ID before relying on v2. Older bundles and manually managed
+helpers require a separate trusted pin. The platform's own bootstrap response
+is not an independent identity check.
 
 ## Export a friend invitation
 

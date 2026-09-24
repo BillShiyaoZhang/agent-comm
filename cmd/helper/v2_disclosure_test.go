@@ -70,7 +70,7 @@ func TestDisclosureAndLegacyCutover(t *testing.T) {
 	ds := &DaemonServer{agent: &agent.Agent{Keys: keys}, mailbox: mail, outgoing: make(chan struct{}, 1)}
 	store := StoreRequest{MessageID: "legacy-1", RecipientURN: keys.Ed25519.URN(), MessageFields: MessageFields{Text: "old"}}
 	code, state := helperRequest(t, ds, http.MethodGet, "/api/v2/disclosure", nil)
-	if code != http.StatusOK || state["state"] != "legacy_unconfigured" || state["legacy_send_code"] != "policy_root_required" || state["platform_can_decrypt"] != nil || state["platform_id"] != nil || state["gateway_key_id"] != nil {
+	if code != http.StatusOK || state["state"] != "legacy_unconfigured" || state["legacy_send_code"] != "policy_root_required" || state["platform_can_decrypt"] != nil || state["platform_id"] != nil || state["gateway_key_id"] != nil || state["policy_root_public_key"] != nil {
 		t.Fatalf("unknown policy was reported as known: %d %+v", code, state)
 	}
 	code, result := helperRequest(t, ds, http.MethodPost, "/api/v1/mq/store", store)
@@ -90,7 +90,7 @@ func TestDisclosureAndLegacyCutover(t *testing.T) {
 	}
 	ds.v2 = &v2Engine{ds: ds, client: &v2.HTTPClient{ExpectedPlatformID: "platform"}, root: rootPub, keysDir: keysDir}
 	code, state = helperRequest(t, ds, http.MethodGet, "/api/v2/disclosure", nil)
-	if code != http.StatusOK || state["state"] != "policy_unavailable" || state["platform_can_decrypt"] != nil {
+	if code != http.StatusOK || state["state"] != "policy_unavailable" || state["platform_can_decrypt"] != nil || state["policy_root_public_key"] != hex.EncodeToString(rootPub) {
 		t.Fatalf("unfetched policy was treated as verified: %d %+v", code, state)
 	}
 	code, result = helperRequest(t, ds, http.MethodPost, "/api/v1/mq/store", store)
@@ -103,7 +103,7 @@ func TestDisclosureAndLegacyCutover(t *testing.T) {
 	}
 	ds.v2.policy = private
 	code, state = helperRequest(t, ds, http.MethodGet, "/api/v2/disclosure", nil)
-	if code != http.StatusOK || state["state"] != "ready" || state["mode"] != "private" || state["platform_can_decrypt"] != false || state["policy_verified"] != true || state["platform_id"] != "platform" || state["gateway_key_id"] != nil || state["expires_at"] == nil {
+	if code != http.StatusOK || state["state"] != "ready" || state["mode"] != "private" || state["platform_can_decrypt"] != false || state["policy_verified"] != true || state["policy_root_public_key"] != hex.EncodeToString(rootPub) || state["platform_id"] != "platform" || state["gateway_key_id"] != nil || state["expires_at"] == nil {
 		t.Fatalf("private disclosure incorrect: %d %+v", code, state)
 	}
 	code, result = helperRequest(t, ds, http.MethodPost, "/api/v1/mq/store", StoreRequest{MessageID: "legacy-2", RecipientURN: keys.Ed25519.URN(), MessageFields: MessageFields{Text: "blocked"}})

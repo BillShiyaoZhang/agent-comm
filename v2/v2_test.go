@@ -327,6 +327,74 @@ func TestAttachPlatformIDToLegacyRootPin(t *testing.T) {
 	}
 }
 
+func TestEnsurePolicyRootPreservesExactPinAndRejectsRotation(t *testing.T) {
+	dir := t.TempDir()
+	root, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsurePolicyRoot(dir, root, "platform-a", "release-a verified out of band"); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := os.ReadFile(rootPinPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsurePolicyRoot(dir, root, "platform-a", "release-b retry"); err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := os.ReadFile(rootPinPath(dir))
+	if err != nil || !bytes.Equal(initial, repeated) {
+		t.Fatal("exact reinstall changed the original trust record", err)
+	}
+	for _, candidate := range []struct {
+		name     string
+		root     ed25519.PublicKey
+		platform string
+		note     string
+	}{
+		{"different root", other, "platform-a", "release-c"},
+		{"different platform", root, "platform-b", "release-c"},
+		{"missing provenance", root, "platform-a", ""},
+	} {
+		t.Run(candidate.name, func(t *testing.T) {
+			if err := EnsurePolicyRoot(dir, candidate.root, candidate.platform, candidate.note); err == nil {
+				t.Fatal("unsafe installer trust update accepted")
+			}
+			current, err := os.ReadFile(rootPinPath(dir))
+			if err != nil || !bytes.Equal(initial, current) {
+				t.Fatal("failed installer trust update changed the pin", err)
+			}
+		})
+	}
+}
+
+func TestEnsurePolicyRootCanAttachVerifiedPlatformToLegacyRootOnly(t *testing.T) {
+	dir := t.TempDir()
+	root, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := Canonical(RootPin{PublicKey: root, VerificationNote: "earlier independently checked root", VerifiedAt: time.Now().Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rootPinPath(dir), old, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsurePolicyRoot(dir, root, "platform-a", "release-a verified platform"); err != nil {
+		t.Fatal(err)
+	}
+	pin, err := LoadPolicyRootPin(dir)
+	if err != nil || pin.PlatformID != "platform-a" || !ed25519.PublicKey(pin.PublicKey).Equal(root) {
+		t.Fatal("legacy root-only pin was not safely completed", err)
+	}
+}
+
 func TestFetchPolicyRequiresIndependentPlatformPin(t *testing.T) {
 	policy, _, _ := testPolicy(t, ModePrivate)
 	root, rootPrivate, err := ed25519.GenerateKey(rand.Reader)
