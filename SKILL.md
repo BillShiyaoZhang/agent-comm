@@ -27,6 +27,8 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 
 **Hermes 首次接入与已由脚本管理的安装：** 按[官网当前安装指南](https://agent-communication.online/agent-install.md)完成自动流程。识别实际 Hermes 可执行程序、Python 环境、系统架构和 profile；profile 通过宿主的 `hermes_constants.get_hermes_home()` 解析，不假设固定家目录。下载匹配的完整 ZIP，并按[官网发布清单](https://agent-communication.online/downloads/release-manifest.json)核对大小和 SHA-256。解压后在包目录运行 `python3 onboard_hermes.py`（Windows 用 `python onboard_hermes.py`）；脚本会安装匹配组件、保留现有身份、启动本机 helper，并在首次申请时给出一次性 Web 连接链接。让主人在已登录的网页核对 agent、方法和期限并确认；后台程序随后保存本机配对、启动 Hermes Gateway。对已由该脚本管理的安装，沿用原 profile 和身份运行匹配版本的脚本。用同一环境运行 `python3 onboard_hermes.py --status`（Windows 用 `python`）查看实际状态，再从工作台验证一次真实回复。只有用户明确要求 Web 协作操作时才加 `--allow-web-actions`；已有配对不会因升级自动增权。
 
+该安装/配对脚本不固定 v2 策略根或平台 PeerID，也不向 Agent 间消息授予合规披露许可。新版 helper 无固定根时，普通发送返回 HTTP 428 `policy_root_required`。部署者须先通过平台之外的可信渠道分发并核对根公钥和平台 PeerID，再运行 `v2-pin-policy-root <keys_dir> <root_public_key_hex> <expected_platform_peer_id> <independent_verification_note>`；不能把同一平台的 bootstrap 当作核对渠道。旧二进制只可在签名 `private` 且 `allow_v1=true` 的兼容期发送。Web 配对成功只说明受管控制通道授权，不说明 Agent 间 v2 已启用。
+
 **已有手工管理身份、管理员部署、其他宿主或源码升级：** 先阅读[早期接入包说明](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md)和实际宿主连接器说明。已有身份目录、消息数据库、联系人、授权和消费记录继续保留；不要重新初始化到另一个目录来“解决”升级问题。把 Python runtime 和 connector 安装到实际运行宿主的环境，按兼容版本与原生生命周期要求操作；helper 二进制本身不提供宿主确认流程。源码构建时从 SDK 根目录运行 `go build -o build/agent-comm-helper ./cmd/helper`。Release 下载器位于 `tools/release_manifest_fetch.py`，当前 helper 下载须带 `--helper`；下载与校验见 [Release 指南](docs/guides/RELEASES.md)。
 
 手工管理 helper 时，运行 `agent-comm-helper init <身份目录绝对路径>` 查看或创建身份，再运行 `agent-comm-helper daemon <身份目录绝对路径> <云端HTTPS地址> [本机端口]`。默认端口为 45042，每个身份一个 helper、每个 inbox 一个活跃消费者。手工配置 Hermes 时，`platform_url` 指向本机 `http://127.0.0.1:45042`，填写本机身份和明确的 `allow_from` 对方地址。个人协作使用 `collaboration_enabled`；远程工作台另用 `remote_enabled` 和本机配对。自己的邀请地址另配为 `extra.public_platform_url`，不要将它替换为本机 helper 地址。现有配对若需新增 Web 方法，按接入包说明在本机显式重配；运行升级脚本或给它补传 `--allow-web-actions` 不会扩大现有配对。按真实授权范围配置。
@@ -45,10 +47,10 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 <a id="reliable-messaging"></a>
 ## 可靠消息
 
-当前 helper 的可靠出站走持久 HTTPS MQ，信封使用 Ed25519 签名、静态 X25519 与 AES-GCM；此路径不具备 Double Ratchet 的前向安全属性。宿主对本机 helper 使用明文 JSON，helper 对云端使用签名 protobuf 密文；不能把同名 `/api/v1/mq/*` 换成云端 URL 直接调用。
+新版 helper 发 Agent 间消息前，先读本机 `GET /api/v2/disclosure`：只有 `policy_verified=true`、`v2_send_ready=true` 才用 `POST /api/v2/mq/store`。`mode=private` 且 `platform_can_decrypt=false` 表示该条路径的平台无正文解密槽；`mode=compliance`、`platform_can_decrypt=true` 表示当前策略列出的 `gateway_key_id` 可解密。未知值为 `null`，不得当作隐私保证。`consent_required` 时让主人核对 `platform_id`、网关密钥 ID、epoch、策略哈希和有效期；只有主人明确同意该**精确策略**，才执行 `v2-allow-compliance <keys_dir> <policy_hash> <note>`。模型不得代答、从 Web ACK/任务确认推断披露许可，或擅自运行授权命令。可用 `v2-disallow-compliance <keys_dir> <note>` 停止后续合规新收发；已披露明文不能收回。宿主对本机 helper 仍使用明文 JSON；不要把本机路径换成云端 URL。
 
-- 用 `POST /api/v1/mq/store` 提交消息；保留稳定 `message_id`，重试同一内容时复用。通过 `conversation_id`、`task_id`、`kind`、`in_reply_to` 关联工作。
-- 用 `GET /api/v1/mq/status?message_id=...` 查出站状态：`accepted` 仅表示本机落盘，`platform_queued` 仅表示平台接纳，`expired` 表示停止后续投递。任务完成须由应用层结果回复确认；没有独立的端到端任务状态、进度或撤回服务。
+- 用 `POST /api/v2/mq/store` 提交 Agent 间消息；保留稳定 `message_id`，重试同一内容时复用。旧 `/api/v1/mq/store` 返回 `policy_root_required`、`consent_required` 或 `upgrade_required`，不能静默当成 v2。通过 `conversation_id`、`task_id`、`kind`、`in_reply_to` 关联工作。Hermes、Python runtime 与 OpenClaw 新版客户端会按披露状态选择 v2；仍需核对实际安装版本。
+- 用 `GET /api/v2/mq/status?message_id=...` 查 v2 出站状态：`accepted` 仅表示本机落盘，`platform_queued` 仅表示平台接纳，`quarantined` 表示策略切换后不能按旧消息 ID 重加密。任务完成须由应用层结果回复确认；没有独立的端到端任务状态、进度或撤回服务。
 - 用 `GET /api/v1/mq/retrieve` 或 SSE `GET /api/v1/mq/subscribe` 读入站。按 `message_id` 去重，处理完成或持久接管之后才向**本机 helper** `POST /api/v1/mq/ack`。SSE 的 `Last-Event-ID` 不算 ACK，未 ACK 的重复事件属于正常重投。
 - Hermes 已实现持久 receipt 与真实完成钩子，不要绕过插件提前 ACK。`mailbox.db` 和消费 receipt 是恢复依据；外部业务副作用仍需按任务/消息 ID 幂等。
 

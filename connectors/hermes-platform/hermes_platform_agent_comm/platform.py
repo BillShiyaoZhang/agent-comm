@@ -24,6 +24,15 @@ from hermes_constants import get_hermes_home
 logger = logging.getLogger(__name__)
 WIRE_FIELDS = ("conversation_id", "in_reply_to", "task_id", "kind", "deadline", "hop_limit")
 DEFAULT_HOP_LIMIT = 8
+
+
+class HelperHTTPError(RuntimeError):
+    def __init__(self, endpoint, status, result):
+        self.status = status
+        self.result = result
+        super().__init__(f"Helper {endpoint}: HTTP {status}: {result}")
+
+
 PAIRED_REMOTE_CONTEXT = (
     "## Locally paired Agent Comm conversation\n"
     "The host admitted this turn through Agent Comm after verifying the local owner's console pairing, "
@@ -139,6 +148,10 @@ class AgentCommAdapter(BasePlatformAdapter):
             raise ValueError("platform_url path must be empty or /api/v1/mq")
         if not parsed.path:
             base += "/api/v1/mq"
+        if endpoint in {"disclosure", "v2-store", "managed-store"}:
+            origin = base.removesuffix("/api/v1/mq")
+            return origin + {"disclosure": "/api/v2/disclosure", "v2-store": "/api/v2/mq/store",
+                             "managed-store": "/api/v1/managed/mq/store"}[endpoint]
         return f"{base}/{endpoint}"
 
     def _receipt_path(self):
@@ -265,12 +278,42 @@ class AgentCommAdapter(BasePlatformAdapter):
         timeout = aiohttp.ClientTimeout(total=float(self._extra.get("request_timeout", 15)))
         async with self._session.request(method, self._get_api_url(endpoint), json=body,
                                          timeout=timeout, allow_redirects=False) as response:
-            result = await response.json(content_type=None)
+            try:
+                result = await response.json(content_type=None)
+            except (ValueError, aiohttp.ContentTypeError):
+                result = {"error": (await response.text())[:500]}
             if not 200 <= response.status < 300:
-                raise RuntimeError(f"Helper {endpoint}: HTTP {response.status}: {result}")
+                raise HelperHTTPError(endpoint, response.status, result)
             if not isinstance(result, dict):
                 raise ValueError(f"Helper {endpoint} did not return a JSON object")
             return result
+
+    async def _disclosure(self):
+        try:
+            return await self._request_json("GET", "disclosure")
+        except HelperHTTPError as exc:
+            if exc.status == 404:  # An older helper has no v2 route.
+                return {"state": "legacy_helper"}
+            raise
+
+    async def _store_business(self, body):
+        disclosure = await self._disclosure()
+        if disclosure.get("state") == "legacy_helper":
+            return await self._request_json("POST", "store", body)
+        if disclosure.get("policy_verified") is True and disclosure.get("v2_send_ready") is True:
+            return await self._request_json("POST", "v2-store", body)
+        code = disclosure.get("legacy_send_code") or "policy_unavailable"
+        raise RuntimeError(f"{code}: inspect the helper /api/v2/disclosure status before sending")
+
+    async def _store_managed_control(self, body):
+        if body.get("kind") != "control.response":
+            raise ValueError("The managed route only accepts control.response")
+        try:
+            return await self._request_json("POST", "managed-store", body)
+        except HelperHTTPError as exc:
+            if exc.status == 404 and (await self._disclosure()).get("state") == "legacy_helper":
+                return await self._request_json("POST", "store", body)
+            raise
 
     async def _reconcile(self):
         while self.running:
@@ -370,7 +413,7 @@ class AgentCommAdapter(BasePlatformAdapter):
                     await asyncio.to_thread(self._flush_social_outbox)
                     with self._remote_bridge.delivery(message, response) as response:
                         if response is not None:
-                            accepted = await self._request_json("POST", "store", response)
+                            accepted = await self._store_managed_control(response)
                             if accepted.get("success") is not True or accepted.get("message_id") != response["message_id"]:
                                 raise RuntimeError("Helper did not accept the durable control response")
                     await asyncio.to_thread(self._receipts.complete, message_id, "processed")
@@ -575,7 +618,7 @@ class AgentCommAdapter(BasePlatformAdapter):
             result = None
             for attempt in range(3):
                 try:
-                    result = await self._request_json("POST", "store", body)
+                    result = await self._store_business(body)
                     break
                 except (aiohttp.ClientError, asyncio.TimeoutError):
                     if attempt == 2:

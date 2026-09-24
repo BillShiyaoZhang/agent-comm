@@ -11,6 +11,10 @@ agent-comm-helper daemon <absolute_keys_dir> <platform_url> [local_port]
 
 `init` loads an existing identity or creates one if absent, returning `urn`, `peer_id`, `ed25519_pubkey`, and `x25519_pubkey`. Inspect existing configuration and expand `~`; do not change directories and create a new identity just to inspect it. `GET /info` returns `urn`, `peer_id`, `addrs`, and `status`, without the public platform URL. The default listener is `127.0.0.1:45042`. The helper polls at startup and every 5 seconds; it can start and queue retries while the cloud is unavailable.
 
+For Agent-to-Agent v2, independently verify the full peer Ed25519 key, policy signing root, and platform libp2p PeerID. Run `v2-pin-peer <keys_dir> <peer_urn> <ed25519_public_key_hex> <independent_verification_note>` and `v2-pin-policy-root <keys_dir> <root_public_key_hex> <expected_platform_peer_id> <independent_verification_note>` on each side. Restart the daemon, then inspect local `GET /api/v2/disclosure`. V2 defaults to private only. After the owner reviews the exact signed policy and gateway key, authorize it with `v2-allow-compliance <keys_dir> <policy_hash> <explicit_authorization_note>` on each side. Every new policy hash needs fresh authorization. `v2-disallow-compliance <keys_dir> <explicit_revocation_note>` stops subsequent compliance work; it cannot retract already disclosed plaintext. A legacy `trusted` contact is not automatically a verified v2 peer. See the [v2 protocol reference](../docs/architecture/PROTOCOL_V2.md).
+
+`onboard_hermes.py` and `install.py` do not pin the root or platform PeerID; successful Web pairing does not enable Agent-to-Agent v2. A new helper without the root pin rejects ordinary sends with HTTP 428. Do not treat the platform's own bootstrap response as independent verification. Provision a signed `private` policy with `allow_v1=true`, distribute the root and PeerID through a trusted channel, then upgrade the helper while preserving its identity and mailbox.
+
 ## Communication contacts
 
 `POST /api/v1/contacts` to the local helper accepts:
@@ -33,11 +37,15 @@ Paths below are relative to the **local helper URL**. Use `Content-Type: applica
 
 | Method/path | Request or result |
 | --- | --- |
-| `POST /api/v1/mq/store` | Message JSON below; HTTP 202 with `success`, `message_id`, `status` |
+| `POST /api/v1/mq/store` | On the new helper, ordinary legacy sends fail with 428 `policy_root_required`, 403 `consent_required`, or 409 `upgrade_required` in JSON |
 | `GET /api/v1/mq/status?message_id=...` | `message_id`, `status`, `attempts`, `last_error`; unknown ID returns 404 |
 | `GET /api/v1/mq/retrieve` | `{"messages":[...]}` for all locally unacknowledged inbound messages |
 | `GET /api/v1/mq/subscribe` | SSE `id: <message_id>`, `data: <inboundJSON>`; repeats pending messages on connection and every 5 seconds |
 | `POST /api/v1/mq/ack` | `{"message_ids":["request-001"]}`; returns `success` and newly `acked` count; repeated ACKs count as 0 |
+| `POST /api/v2/mq/store` | Agent-to-Agent v2; same message JSON, with explicit full peer key and policy root pins; HTTP 202 |
+| `GET /api/v2/mq/status?message_id=...` | V2 outbound status, policy hash, and verified receipt flag |
+| `GET /api/v2/disclosure` | Signed policy facts, platform decryptability, local consent, `legacy_send_code`, and quarantine counts; unknown facts are `null` |
+| `POST /api/v1/managed/mq/store` | Explicit paired Web `control.response` route, correlated with an existing v1 inbox request; platform separately verifies the active managed certificate |
 
 ```json
 {
@@ -56,6 +64,8 @@ Paths below are relative to the **local helper URL**. Use `Content-Type: applica
 Use the actual task deadline; omit optional correlation fields when unnecessary. `text` allows 262144 UTF-8 bytes; conversation/task/kind/in_reply_to each allow 256 bytes. A local message ID is 1–128 ASCII letters/digits or `._:-`; `hop_limit` is 0–64, default 8; `kind` defaults to `message`; deadlines are RFC3339. The same ID and request return the original status; changed content under the same ID returns 409. Omitting message_id generates one, but cross-request retries need a retained stable ID.
 
 Inbound `sender_urn` is transport-verified, with correlation fields preserved. Deduplicate and process or durably enqueue before acknowledging the local helper. The helper ACKs the platform after validation, decryption, and inbox persistence. Receiving SSE, beginning work, `Last-Event-ID`, or a model call returning does not justify an early ACK. See the [communication contract](../docs/guides/HERMES_INTEGRATION.md) for delivery and crash recovery semantics.
+
+Verified v2 inbound messages use the same local retrieve/SSE inbox and add per-message `mode`, `policy_epoch`, `gateway_key_id`, and `envelope_hash`. A compliance message without a valid receipt is neither persisted nor ACKed. Old v1 messages are never labeled verified v2. Pre-cutover immutable ciphertext is marked `quarantined` instead of being re-encrypted under its original message ID. The new helper does not silently convert `/api/v1/mq/store` to v2. Older binaries can use a signed private policy's temporary v1 compatibility window; provision the signed policy and trusted root distribution before rolling out the new helper. Preserve the identity directory and `mailbox.db`.
 
 ## Raw cryptography CLI
 

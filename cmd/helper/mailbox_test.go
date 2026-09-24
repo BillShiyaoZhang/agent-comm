@@ -69,9 +69,8 @@ func TestConcurrentOutboxWorkersUseCommittedCiphertextAndKeepSuccess(t *testing.
 	a, b := testDaemon(t, path), testDaemon(t, path)
 	f := &concurrentTransport{ready: make(chan struct{}, 2), prepareAllowed: make(chan struct{}), failureAllowed: make(chan struct{})}
 	a.transport, b.transport = f, f
-	w := localRequest(a, "POST", "/api/v1/mq/store", `{"recipient_urn":"urn:agent-comm:agent:bob","message_id":"concurrent-1","text":"hello"}`)
-	if w.Code != http.StatusAccepted {
-		t.Fatal(w.Code, w.Body.String())
+	if _, err := a.mailbox.accept(StoreRequest{MessageID: "concurrent-1", RecipientURN: "urn:agent-comm:agent:bob", MessageFields: MessageFields{Text: "hello"}}); err != nil {
+		t.Fatal(err)
 	}
 	results := make(chan error, 2)
 	for _, ds := range []*DaemonServer{a, b} {
@@ -155,8 +154,8 @@ func TestDaemonShutdownCancelsActiveSSE(t *testing.T) {
 func TestHelperCustomNamespaceAndRebindingProtection(t *testing.T) {
 	ds := testDaemon(t, filepath.Join(t.TempDir(), "mailbox.db"))
 	w := localRequest(ds, "POST", "/api/v1/mq/store", `{"recipient_urn":"urn:example:custom-agent:abc123","message_id":"custom-1","text":"hello"}`)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("custom namespace rejected: %d %s", w.Code, w.Body)
+	if w.Code != http.StatusPreconditionRequired {
+		t.Fatalf("custom namespace was misclassified: %d %s", w.Code, w.Body)
 	}
 	for _, urn := range []string{"urn:agent-comm:agent:", "urn:bad namespace:abc", "https://example.com"} {
 		body, _ := json.Marshal(StoreRequest{RecipientURN: urn, MessageFields: MessageFields{Text: "hi"}})
@@ -289,9 +288,12 @@ func TestOutboxRetryUsesPersistedEnvelopeAfterRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mailbox.db")
 	ds := testDaemon(t, path)
 	body := `{"recipient_urn":"urn:agent-comm:agent:bob","message_id":"retry-1","text":"hello","conversation_id":"c"}`
-	w := localRequest(ds, "POST", "/api/v1/mq/store", body)
-	if w.Code != 202 || !strings.Contains(w.Body.String(), `"status":"accepted"`) {
-		t.Fatal(w.Code, w.Body.String())
+	var request StoreRequest
+	if err := json.Unmarshal([]byte(body), &request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ds.mailbox.accept(request); err != nil {
+		t.Fatal(err)
 	}
 	f := &retryTransport{fail: true, mail: ds.mailbox, t: t}
 	ds.transport = f
@@ -314,30 +316,28 @@ func TestOutboxRetryUsesPersistedEnvelopeAfterRestart(t *testing.T) {
 	if f.prepared != 1 || len(f.sent) != 2 || !bytes.Equal(f.sent[0], f.sent[1]) {
 		t.Fatal("retry did not reuse exact envelope")
 	}
-	w = localRequest(ds, "GET", "/api/v1/mq/status?message_id=retry-1", "")
+	w := localRequest(ds, "GET", "/api/v1/mq/status?message_id=retry-1", "")
 	if !strings.Contains(w.Body.String(), `"status":"platform_queued"`) {
 		t.Fatal(w.Body.String())
 	}
-	w = localRequest(ds, "POST", "/api/v1/mq/store", body)
-	if w.Code != 202 {
-		t.Fatal(w.Code, w.Body.String())
+	if status, err := ds.mailbox.accept(request); err != nil || status != "platform_queued" {
+		t.Fatal("same legacy request did not preserve status", status, err)
 	}
-	w = localRequest(ds, "POST", "/api/v1/mq/store", strings.Replace(body, "hello", "changed", 1))
-	if w.Code != 409 {
-		t.Fatal("reused id changed content", w.Code)
+	request.Text = "changed"
+	if _, err := ds.mailbox.accept(request); !errors.Is(err, errMessageConflict) {
+		t.Fatal("reused id changed content", err)
 	}
 }
 
 func TestExpiredOutboxAndInvalidAPIRequests(t *testing.T) {
 	ds := testDaemon(t, filepath.Join(t.TempDir(), "mailbox.db"))
-	w := localRequest(ds, "POST", "/api/v1/mq/store", `{"recipient_urn":"urn:agent-comm:agent:bob","message_id":"expired-1","text":"hello","deadline":"2000-01-01T00:00:00Z"}`)
-	if w.Code != 202 {
-		t.Fatal(w.Code, w.Body.String())
+	if _, err := ds.mailbox.accept(StoreRequest{MessageID: "expired-1", RecipientURN: "urn:agent-comm:agent:bob", MessageFields: MessageFields{Text: "hello", Deadline: "2000-01-01T00:00:00Z"}}); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := ds.deliverNext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	w = localRequest(ds, "GET", "/api/v1/mq/status?message_id=expired-1", "")
+	w := localRequest(ds, "GET", "/api/v1/mq/status?message_id=expired-1", "")
 	if !strings.Contains(w.Body.String(), `"status":"expired"`) {
 		t.Fatal(w.Body.String())
 	}

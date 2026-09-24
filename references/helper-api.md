@@ -11,6 +11,10 @@ agent-comm-helper daemon <keys_dir绝对路径> <platform_url> [local_port]
 
 `init` 加载已有身份，目录不存在身份时创建；返回 `urn`、`peer_id`、`ed25519_pubkey`、`x25519_pubkey`。先检查现有配置并展开 `~`；不要为查看身份换目录生成新身份。`GET /info` 返回 `urn`、`peer_id`、`addrs`、`status`，不含公网 platform URL。helper 默认监听 `127.0.0.1:45042`。启动时补收，之后每 5 秒补拉；云端暂不可达仍可启动并排队重试。
 
+Agent 间 v2 使用独立的签名策略、握手和消息端点。先从平台之外核对完整身份公钥、策略根和平台 libp2p PeerID，再在每端运行 `v2-pin-peer <keys_dir> <peer_urn> <ed25519_public_key_hex> <independent_verification_note>` 和 `v2-pin-policy-root <keys_dir> <root_public_key_hex> <expected_platform_peer_id> <independent_verification_note>`。根固定后重启 daemon，并查看本机 `GET /api/v2/disclosure`。默认只允许 `private`；主人核对披露状态的网关密钥与精确策略后，运行 `v2-allow-compliance <keys_dir> <policy_hash> <explicit_authorization_note>`。新 epoch 或新策略哈希必须重新授权；`v2-disallow-compliance <keys_dir> <explicit_revocation_note>` 撤回后续合规收发，不能收回已披露内容。不要把原有 `trusted` 联系人自动当成 v2 已核实身份。具体协议见 [v2 参考](../docs/architecture/PROTOCOL_V2.md)。
+
+`onboard_hermes.py` 与 `install.py` 不自动固定根公钥或平台 PeerID；Web 配对成功不代表 Agent 间 v2 可发送。新 helper 缺少根固定时普通发送为 HTTP 428；不能用平台自己的 bootstrap 响应替代独立核对。先在平台准备签名 `private` 且 `allow_v1=true` 的兼容策略并可信分发根和 PeerID，再升级新 helper。旧身份与信箱原样保留。
+
 ## 通信联系人
 
 对本机 helper `POST /api/v1/contacts`，JSON 支持：
@@ -33,11 +37,15 @@ agent-comm-helper daemon <keys_dir绝对路径> <platform_url> [local_port]
 
 | 方法/路径 | 请求或结果 |
 | --- | --- |
-| `POST /api/v1/mq/store` | 下方消息 JSON；HTTP 202，返回 `success`、`message_id`、`status` |
+| `POST /api/v1/mq/store` | 新版 helper 的普通旧入口返回机器可读迁移错误；无根 428 `policy_root_required`，未授权合规 403 `consent_required`，其余 v2 策略 409 `upgrade_required` |
 | `GET /api/v1/mq/status?message_id=...` | `message_id`、`status`、`attempts`、`last_error`；未知 ID 为 404 |
 | `GET /api/v1/mq/retrieve` | `{"messages":[...]}`，全部未本地 ACK 入站 |
 | `GET /api/v1/mq/subscribe` | SSE：`id: <message_id>`、`data: <入站JSON>`；重连和每 5 秒补推未消费消息 |
 | `POST /api/v1/mq/ack` | `{"message_ids":["request-001"]}`；返回 `success`、本次 `acked` 数量；重复 ACK 数量为 0 |
+| `POST /api/v2/mq/store` | Agent 间 v2，使用同一消息 JSON；需要双方身份公钥与策略根已明确固定；返回 HTTP 202 |
+| `GET /api/v2/mq/status?message_id=...` | v2 出站状态、策略摘要与回执是否验证；`platform_queued` 不表示收件或业务完成 |
+| `GET /api/v2/disclosure` | 已验签策略、平台可否解密、本地是否同意、`legacy_send_code`、旧队列隔离数量；未知事实为 `null` |
+| `POST /api/v1/managed/mq/store` | 仅供已配对 Web 控制回复；必须对应本机已保存的 v1 `control.request`，平台另验有效受管证书 |
 
 ```json
 {
@@ -56,6 +64,8 @@ agent-comm-helper daemon <keys_dir绝对路径> <platform_url> [local_port]
 使用任务的实际截止时间；无需关联的可选字段可省略。`text` 最多 262144 UTF-8 字节；conversation/task/kind/in_reply_to 各最多 256 字节；本机 message ID 为 1–128 个 ASCII 字母、数字或 `._:-`；`hop_limit` 为 0–64，默认 8；`kind` 默认 `message`；deadline 为 RFC3339。同 ID、同请求复用原状态；同 ID、不同内容返回 409。可省略 message_id 让 helper 生成，但跨请求重试要自行保留稳定 ID。
 
 入站的 `sender_urn` 已通过传输验证，保留关联字段。先去重、处理或写入持久队列，再 ACK 本机 helper。平台 ACK 由 helper 在验证/解密并持久保存 inbox 后处理。不要因 SSE 收到、开始处理、`Last-Event-ID` 或模型调用返回就提前确认。状态与崩溃恢复细节见 [通信合同](../docs/guides/HERMES_INTEGRATION.md)。
+
+v2 验证后的入站仍从上述本机 retrieve/SSE 读取，附有逐条 `mode`、`policy_epoch`、`gateway_key_id`、`envelope_hash`。缺少有效回执的合规消息不会写入 inbox 或 ACK；旧 v1 消息不能显示为 v2 已验证。策略切换前的未发旧信封会标成 `quarantined`，不得用同一 ID 重加密。新版 helper 的普通 v1 入口不会自动转成 v2；旧二进制只在平台签名 `private` 兼容策略允许 v1 的阶段使用。发布顺序应先准备平台签名策略与可信根分发，再升级 helper，保留原身份目录和 `mailbox.db`。
 
 ## 原始密码学 CLI
 

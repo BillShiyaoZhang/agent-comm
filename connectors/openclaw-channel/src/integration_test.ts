@@ -18,7 +18,9 @@ async function helper(t: TestContext) {
   const inbox = new Map<string, any>();
   const subscribers = new Set<http.ServerResponse>();
   const stored: any[] = [], acknowledgements: string[] = [], channels: AgentCommChannel[] = [];
+  const storePaths: string[] = [];
   let storeReply: any = null;
+  let disclosureReply: any = null;
   let rejectAck = false;
   function write(res: http.ServerResponse, message: any) {
     res.write(`id: ${message.message_id}\ndata: ${JSON.stringify(message)}\n\n`);
@@ -36,10 +38,14 @@ async function helper(t: TestContext) {
     req.setEncoding("utf8");
     req.on("data", chunk => { body += chunk; });
     req.on("end", () => {
-      const parsed = JSON.parse(body);
+      const parsed = body ? JSON.parse(body) : {};
       res.setHeader("Content-Type", "application/json");
-      if (req.url === "/api/v1/mq/store") {
+      if (req.url === "/api/v2/disclosure") {
+        if (disclosureReply === null) res.writeHead(404);
+        res.end(JSON.stringify(disclosureReply || {}));
+      } else if (req.url === "/api/v1/mq/store" || req.url === "/api/v2/mq/store") {
         stored.push(parsed);
+        storePaths.push(req.url);
         res.writeHead(202);
         res.end(JSON.stringify(storeReply || { success: true, message_id: parsed.message_id, status: "accepted" }));
       } else if (req.url === "/api/v1/mq/ack") {
@@ -71,8 +77,9 @@ async function helper(t: TestContext) {
     await new Promise<void>(resolve => server.close(() => resolve()));
   });
   return {
-    stored, acknowledgements, inbox, subscribers,
+    stored, storePaths, acknowledgements, inbox, subscribers,
     setStoreReply: (reply: any) => { storeReply = reply; },
+    setDisclosure: (reply: any) => { disclosureReply = reply; },
     setRejectAck: (reject: boolean) => { rejectAck = reject; },
     channel(gateway = new EventEmitter()) {
       const channel = new AgentCommChannel(gateway, { platform_url: url, urn: "local", keys_dir: "unused" });
@@ -99,6 +106,18 @@ test("202 send verifies success/id and retains caller retry key/metadata", async
   await assert.rejects(channel.sendMessage("peer", "hello", metadata), /did not accept/);
   h.setStoreReply({ success: true, status: "accepted" });
   await assert.rejects(channel.sendMessage("peer", "hello", metadata), /did not accept/);
+});
+
+test("signed local disclosure selects v2 and consent stops ordinary sends", async (t) => {
+  const h = await helper(t), channel = h.channel();
+  h.setDisclosure({ state: "ready", policy_verified: true, v2_send_ready: true, mode: "private" });
+  await channel.sendMessage("peer", "v2 body", { message_id: "v2-1" });
+  assert.deepEqual(h.storePaths, ["/api/v2/mq/store"]);
+  h.setDisclosure({ state: "consent_required", policy_verified: true, v2_send_ready: false,
+    legacy_send_code: "consent_required", mode: "compliance", platform_can_decrypt: true });
+  await assert.rejects(channel.sendMessage("peer", "blocked", { message_id: "v2-2" }),
+    (error: any) => error.code === "consent_required");
+  assert.equal(h.storePaths.length, 1);
 });
 
 test("SSE repeat emits once and ACK waits for explicit completion callback", async (t) => {

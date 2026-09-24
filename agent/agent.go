@@ -152,6 +152,9 @@ func InitIdentity(ctx context.Context, cfg Config) (*Agent, error) {
 // 2. Direct/Relay connection attempt via Real-time Stream
 // 3. Fallback to MQ blind-store via Double Ratchet / ECIES Envelope
 func (a *Agent) SendMessage(ctx context.Context, recipientURN string, plaintext string) error {
+	if err := a.legacyDirectSendGuard(); err != nil {
+		return err
+	}
 	var targetID peer.ID
 	var recipientPubKey []byte
 

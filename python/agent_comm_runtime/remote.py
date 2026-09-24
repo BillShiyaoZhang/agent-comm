@@ -304,7 +304,8 @@ class RemoteBridge:
             self.store.flush_social_outbox(transport)
         with self.delivery(message, response) as response:
             if response is not None:
-                result = transport.store(response)
+                managed_store = getattr(transport, "store_managed_control", None)
+                result = managed_store(response) if managed_store is not None else transport.store(response)
                 if result.get("success") is not True or result.get("message_id") != response["message_id"]:
                     raise ValueError("Helper did not accept the correlated control response")
         transport.ack([message["message_id"]])

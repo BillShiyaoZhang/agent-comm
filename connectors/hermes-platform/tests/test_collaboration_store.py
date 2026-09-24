@@ -258,6 +258,10 @@ class TransportTests(unittest.TestCase):
                 pass
 
             def do_GET(self):
+                if self.path == "/api/v2/disclosure":
+                    self.send_response(404)  # Simulate a helper predating v2.
+                    self.end_headers()
+                    return
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b'{"messages":[]}')

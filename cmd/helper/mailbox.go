@@ -42,6 +42,10 @@ type InboxMessage struct {
 	MessageID string `json:"message_id"`
 	SenderURN string `json:"sender_urn"`
 	MessageFields
+	Mode         string `json:"mode,omitempty"`
+	PolicyEpoch  uint64 `json:"policy_epoch,omitempty"`
+	GatewayKeyID string `json:"gateway_key_id,omitempty"`
+	EnvelopeHash string `json:"envelope_hash,omitempty"`
 }
 
 type wireMessage struct {
@@ -102,7 +106,23 @@ CREATE TABLE IF NOT EXISTS helper_outbox (
  next_attempt INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
  created_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS helper_inbox_pending ON helper_inbox(consumed_at,received_at);
-CREATE INDEX IF NOT EXISTS helper_outbox_pending ON helper_outbox(status,next_attempt);`)
+CREATE INDEX IF NOT EXISTS helper_outbox_pending ON helper_outbox(status,next_attempt);
+CREATE TABLE IF NOT EXISTS helper_v2_outbox (
+ message_id TEXT PRIMARY KEY, request BLOB NOT NULL, envelope BLOB, cek BLOB,
+ receipt BLOB, policy_hash TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL DEFAULT '',
+ status TEXT NOT NULL DEFAULT 'accepted', attempts INTEGER NOT NULL DEFAULT 0,
+ next_attempt INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
+ created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS helper_v2_outbox_pending ON helper_v2_outbox(status,next_attempt);
+CREATE TABLE IF NOT EXISTS helper_v2_sessions (peer_urn TEXT PRIMARY KEY, data BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS helper_v2_handshakes (
+ session_id TEXT PRIMARY KEY, peer_urn TEXT NOT NULL, role TEXT NOT NULL,
+ init_frame BLOB NOT NULL, accept_frame BLOB, ephemeral_private BLOB NOT NULL,
+ status TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS helper_v2_handshakes_peer ON helper_v2_handshakes(peer_urn);
+CREATE TABLE IF NOT EXISTS helper_v2_policy_state (
+ platform_id TEXT PRIMARY KEY, epoch INTEGER NOT NULL, policy_hash TEXT NOT NULL, policy BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS helper_v2_seen_frames (frame_id TEXT PRIMARY KEY, seen_at INTEGER NOT NULL);`)
 	if err != nil {
 		db.Close()
 		return nil, err

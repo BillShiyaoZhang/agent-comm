@@ -26,6 +26,16 @@ type DurableHandler func(*pb.EncryptedEnvelope, []byte) error
 // The returned channel closes after context cancellation, polling shutdown,
 // and all in-flight application callbacks; wait for it before closing the inbox.
 func (a *Agent) StartListeningDurable(ctx context.Context, handler DurableHandler) <-chan struct{} {
+	return a.startListeningDurable(ctx, handler, true)
+}
+
+// StartListeningMQDurable disables direct v1/DR streams and polls only the
+// platform MQ. A v2 compliance route must not admit unchecked direct frames.
+func (a *Agent) StartListeningMQDurable(ctx context.Context, handler DurableHandler) <-chan struct{} {
+	return a.startListeningDurable(ctx, handler, false)
+}
+
+func (a *Agent) startListeningDurable(ctx context.Context, handler DurableHandler, allowDirect bool) <-chan struct{} {
 	done := make(chan struct{})
 	if handler == nil {
 		close(done)
@@ -46,29 +56,33 @@ func (a *Agent) StartListeningDurable(ctx context.Context, handler DurableHandle
 		return handler(env, plaintext)
 	}
 	a.Host.SetStreamHandler(dr.ProtoID, func(stream network.Stream) { _ = stream.Reset() })
-	a.Host.SetStreamHandler(session.ProtoID, func(stream network.Stream) {
-		defer stream.Close()
-		_ = stream.SetDeadline(time.Now().Add(30 * time.Second))
-		env, err := session.ReadEnvelope(stream)
-		if err != nil {
-			_ = stream.Reset()
-			return
-		}
-		if err := session.VerifyPeerURN(stream.Conn().RemotePeer(), env.SenderUrn); err != nil {
-			_ = stream.Reset()
-			return
-		}
-		plaintext, err := a.Session.DecryptEnvelope(env)
-		if err != nil {
-			_ = stream.Reset()
-			return
-		}
-		if err := guarded(env, plaintext); err != nil {
-			_ = stream.Reset()
-			return
-		}
-		_ = a.Session.SendReply(stream, env.SenderStaticPubkey, env.SenderUrn, "persisted")
-	})
+	if !allowDirect {
+		a.Host.SetStreamHandler(session.ProtoID, func(stream network.Stream) { _ = stream.Reset() })
+	} else {
+		a.Host.SetStreamHandler(session.ProtoID, func(stream network.Stream) {
+			defer stream.Close()
+			_ = stream.SetDeadline(time.Now().Add(30 * time.Second))
+			env, err := session.ReadEnvelope(stream)
+			if err != nil {
+				_ = stream.Reset()
+				return
+			}
+			if err := session.VerifyPeerURN(stream.Conn().RemotePeer(), env.SenderUrn); err != nil {
+				_ = stream.Reset()
+				return
+			}
+			plaintext, err := a.Session.DecryptEnvelope(env)
+			if err != nil {
+				_ = stream.Reset()
+				return
+			}
+			if err := guarded(env, plaintext); err != nil {
+				_ = stream.Reset()
+				return
+			}
+			_ = a.Session.SendReply(stream, env.SenderStaticPubkey, env.SenderUrn, "persisted")
+		})
+	}
 	pollDone := make(chan struct{})
 	go func() {
 		defer close(pollDone)

@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	pb "github.com/BillShiyaoZhang/agent-comm/proto"
 	"github.com/BillShiyaoZhang/agent-comm/session"
+	"github.com/BillShiyaoZhang/agent-comm/v2"
 	goproto "google.golang.org/protobuf/proto"
 )
 
@@ -39,10 +41,89 @@ func main() {
 			printError(err.Error())
 			os.Exit(1)
 		}
+	case "v2-pin-peer":
+		runV2PinPeer()
+	case "v2-pin-policy-root":
+		runV2PinPolicyRoot()
+	case "v2-allow-compliance":
+		runV2AllowCompliance()
+	case "v2-disallow-compliance":
+		runV2DisallowCompliance()
 	default:
 		printError(fmt.Sprintf("unknown command: %s", cmd))
 		os.Exit(1)
 	}
+}
+
+func runV2PinPeer() {
+	if len(os.Args) != 6 {
+		printError("Usage: agent-comm-helper v2-pin-peer <keys_dir> <urn> <ed25519_public_key_hex> <independent_verification_note>")
+		os.Exit(1)
+	}
+	pub, err := hex.DecodeString(os.Args[4])
+	if err == nil {
+		err = v2.PinPeer(os.Args[2], os.Args[3], pub, os.Args[5])
+	}
+	if err != nil {
+		printError(err.Error())
+		os.Exit(1)
+	}
+	printResult(Response{"pinned": true, "urn": os.Args[3], "ed25519_public_key": os.Args[4]})
+}
+
+func runV2PinPolicyRoot() {
+	if len(os.Args) != 6 {
+		printError("Usage: agent-comm-helper v2-pin-policy-root <keys_dir> <root_public_key_hex> <expected_platform_peer_id> <independent_verification_note>")
+		os.Exit(1)
+	}
+	pub, err := hex.DecodeString(os.Args[3])
+	if err == nil {
+		err = v2.PinPolicyRoot(os.Args[2], pub, os.Args[4], os.Args[5])
+	}
+	if err != nil {
+		printError(err.Error())
+		os.Exit(1)
+	}
+	printResult(Response{"pinned": true, "policy_root_public_key": os.Args[3], "platform_id": os.Args[4]})
+}
+
+func runV2AllowCompliance() {
+	if len(os.Args) != 5 {
+		printError("Usage: agent-comm-helper v2-allow-compliance <keys_dir> <expected_policy_hash> <explicit_authorization_note>")
+		os.Exit(1)
+	}
+	mailboxPath := filepath.Join(os.Args[2], "mailbox.db")
+	if _, err := os.Stat(mailboxPath); err != nil {
+		printError("No persisted verified policy; start the daemon and inspect GET /api/v2/disclosure first")
+		os.Exit(1)
+	}
+	mail, err := openMailbox(mailboxPath)
+	if err != nil {
+		printError(err.Error())
+		os.Exit(1)
+	}
+	defer mail.db.Close()
+	policy, err := mail.policyForAuthorization(os.Args[3])
+	if err == nil {
+		err = v2.AllowCompliance(os.Args[2], policy, os.Args[3], os.Args[4])
+	}
+	if err != nil {
+		printError(err.Error())
+		os.Exit(1)
+	}
+	printResult(Response{"compliance_allowed": true, "policy_hash": os.Args[3], "platform_id": policy.PlatformID, "policy_epoch": policy.Epoch, "gateway_key_id": policy.GatewayKeyID})
+}
+
+func runV2DisallowCompliance() {
+	if len(os.Args) != 4 {
+		printError("Usage: agent-comm-helper v2-disallow-compliance <keys_dir> <explicit_revocation_note>")
+		os.Exit(1)
+	}
+	if err := v2.DisallowCompliance(os.Args[2], os.Args[3]); err != nil {
+		printError(err.Error())
+		os.Exit(1)
+	}
+	printResult(Response{"compliance_allowed": false})
 }
 
 func printError(msg string) {

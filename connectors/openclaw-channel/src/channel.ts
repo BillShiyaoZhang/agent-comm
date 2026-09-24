@@ -48,7 +48,8 @@ export class AgentCommChannel {
     }
     const path = base.pathname.replace(/\/$/, "");
     if (path && path !== "/api/v1/mq") throw new Error("Unexpected helper API path");
-    base.pathname = `/api/v1/mq/${endpoint}`;
+    base.pathname = endpoint === "disclosure" ? "/api/v2/disclosure"
+      : endpoint === "v2-store" ? "/api/v2/mq/store" : `/api/v1/mq/${endpoint}`;
     return base;
   }
 
@@ -189,11 +190,11 @@ export class AgentCommChannel {
     if (result.success !== true) throw new Error(`Helper rejected ACK for ${messageId}`);
   }
 
-  private requestJson(endpoint: string, body: unknown): Promise<any> {
-    const bytes = Buffer.from(JSON.stringify(body), "utf8");
+  private requestJson(endpoint: string, body?: unknown, method = "POST"): Promise<any> {
+    const bytes = body === undefined ? null : Buffer.from(JSON.stringify(body), "utf8");
     return new Promise((resolve, reject) => {
       const req = http.request(this.getApiUrl(endpoint), {
-        method: "POST", headers: { "Content-Type": "application/json", "Content-Length": bytes.length },
+        method, headers: bytes ? { "Content-Type": "application/json", "Content-Length": bytes.length } : {},
       }, (res) => {
         res.setEncoding("utf8");
         let text = "";
@@ -201,9 +202,11 @@ export class AgentCommChannel {
         res.on("error", reject);
         res.on("end", () => {
           try {
-            const result = JSON.parse(text);
+            let result: any;
+            try { result = JSON.parse(text); } catch { result = { error: text.slice(0, 500) }; }
             if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
-              throw new Error(`Helper ${endpoint}: HTTP ${res.statusCode}: ${text}`);
+              throw Object.assign(new Error(`Helper ${endpoint}: HTTP ${res.statusCode}: ${text}`),
+                { statusCode: res.statusCode, result });
             }
             if (!result || typeof result !== "object") throw new Error("Expected helper JSON object");
             resolve(result);
@@ -212,7 +215,7 @@ export class AgentCommChannel {
       });
       req.setTimeout(15000, () => req.destroy(Object.assign(new Error("Helper request timed out"), { code: "ETIMEDOUT" })));
       req.on("error", reject);
-      req.end(bytes);
+      req.end(bytes || undefined);
     });
   }
 
@@ -223,10 +226,27 @@ export class AgentCommChannel {
     for (const key of WIRE_FIELDS) {
       if (metadata[key] !== undefined) body[key] = metadata[key];
     }
+    let disclosure: any;
+    try {
+      disclosure = await this.requestJson("disclosure", undefined, "GET");
+    } catch (error: any) {
+      if (error.statusCode !== 404) throw error;
+      disclosure = { state: "legacy_helper" }; // Older helper.
+    }
+    let endpoint = "store";
+    if (disclosure.state !== "legacy_helper") {
+      if (disclosure.policy_verified !== true || disclosure.v2_send_ready !== true) {
+        const error: any = new Error(`${disclosure.legacy_send_code || "policy_unavailable"}: inspect /api/v2/disclosure`);
+        error.code = disclosure.legacy_send_code || "policy_unavailable";
+        error.disclosure = disclosure;
+        throw error;
+      }
+      endpoint = "v2-store";
+    }
     let result: any;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        result = await this.requestJson("store", body);
+        result = await this.requestJson(endpoint, body);
         break;
       } catch (error: any) {
         if (attempt === 2 || !["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE"].includes(error.code)) throw error;

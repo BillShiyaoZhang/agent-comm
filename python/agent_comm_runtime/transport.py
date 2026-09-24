@@ -2,6 +2,7 @@
 
 import json
 from urllib.parse import urlsplit, quote
+from urllib.error import HTTPError
 from urllib.request import (HTTPRedirectHandler, ProxyHandler, Request, build_opener)
 
 from .ports import Descriptor
@@ -10,6 +11,13 @@ from .ports import Descriptor
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise ValueError("The plaintext helper API must not redirect")
+
+
+class HelperDisclosureError(RuntimeError):
+    def __init__(self, code, disclosure):
+        self.code = code
+        self.disclosure = disclosure
+        super().__init__(f"{code}: inspect GET /api/v2/disclosure and use the v2 helper route")
 
 
 class HelperTransport:
@@ -28,12 +36,16 @@ class HelperTransport:
         # Resolve localhost to the literal loopback address rather than ambient DNS.
         host = "[::1]" if parsed.hostname == "::1" else "127.0.0.1"
         self.base = f"http://{host}" + (f":{parsed.port}" if parsed.port is not None else "") + "/api/v1/mq"
+        self.origin = self.base.removesuffix("/api/v1/mq")
         self.timeout = timeout
         self._opener = build_opener(ProxyHandler({}), _NoRedirect())
 
     def _request(self, endpoint, body=None):
+        return self._request_url(f"{self.base}/{endpoint}", body)
+
+    def _request_url(self, target, body=None):
         data = None if body is None else json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")
-        request = Request(f"{self.base}/{endpoint}", data=data, headers={"Content-Type": "application/json"})
+        request = Request(target, data=data, headers={"Content-Type": "application/json"})
         with self._opener.open(request, timeout=self.timeout) as response:
             payload = response.read(2_000_001)
             if len(payload) > 2_000_000:
@@ -54,7 +66,30 @@ class HelperTransport:
         return json.loads(payload)
 
     def store(self, body):
-        return self._request("store", body)
+        try:
+            disclosure = self._request_url(f"{self.origin}/api/v2/disclosure")
+        except HTTPError as exc:
+            if exc.code == 404:  # Helper predates the v2 source upgrade.
+                return self._request("store", body)
+            raise
+        if disclosure.get("policy_verified") is True and disclosure.get("v2_send_ready") is True:
+            return self._request_url(f"{self.origin}/api/v2/mq/store", body)
+        raise HelperDisclosureError(disclosure.get("legacy_send_code") or "policy_unavailable", disclosure)
+
+    def store_managed_control(self, body):
+        if body.get("kind") != "control.response":
+            raise ValueError("Managed helper route is only for control.response")
+        try:
+            return self._request_url(f"{self.origin}/api/v1/managed/mq/store", body)
+        except HTTPError as exc:
+            if exc.code != 404:
+                raise
+            try:
+                self._request_url(f"{self.origin}/api/v2/disclosure")
+            except HTTPError as state_exc:
+                if state_exc.code == 404:  # Compatible with an older helper.
+                    return self._request("store", body)
+            raise
 
     def retrieve(self):
         result = self._request("retrieve")

@@ -13,6 +13,6 @@ Wire definitions live in [proto/](../../proto/agentcomm.proto). Use the source d
 | Local HTTP/SSE and delivery states | [helper contract](../guides/HERMES_INTEGRATION.md) |
 | Collaboration and remote RPC | [Python runtime](../../python/README.md) |
 
-Registry ownership binds URN, identity-derived PeerID and signed X25519 key. Envelope signatures bind sender, recipient, stable message ID and encryption fields. Retrieve and ACK authenticate the recipient. Use `registry.BuildSignedMsg` and the envelope helpers instead of older draft formulas.
+Registry ownership binds URN, identity-derived PeerID and signed X25519 key. The v1 envelope signatures bind sender, recipient, stable message ID and encryption fields. Retrieve and ACK authenticate the recipient. Use `registry.BuildSignedMsg` and the envelope helpers instead of older draft formulas. The separately versioned v2 JSON handshake, policy, envelope and receipt are documented in [the v2 protocol reference](PROTOCOL_V2.md).
 
 Local acceptance, platform queueing and consumer ACK are separate from business completion. The helper's static-key HTTPS MQ path has different state and encryption properties from the Go P2P Double Ratchet route. See [engineering](../guides/ENGINEERING.md) and [integration checks](../../tests/README.md).

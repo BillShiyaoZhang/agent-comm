@@ -24,6 +24,7 @@ import (
 	"github.com/BillShiyaoZhang/agent-comm/contacts"
 	"github.com/BillShiyaoZhang/agent-comm/crypto"
 	pb "github.com/BillShiyaoZhang/agent-comm/proto"
+	"github.com/BillShiyaoZhang/agent-comm/v2"
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
@@ -39,6 +40,7 @@ type DaemonServer struct {
 	mailbox   *mailbox
 	transport durableTransport
 	outgoing  chan struct{}
+	v2        *v2Engine
 }
 
 type ContactRequest struct {
@@ -122,6 +124,16 @@ func runDaemon() error {
 		transport: ag,
 		outgoing:  make(chan struct{}, 1),
 	}
+	if rootPin, rootErr := v2.LoadPolicyRootPin(ag.Keys.KeysDir); rootErr == nil {
+		v2Client, clientErr := v2.NewHTTPClient(platformURL, ag.Keys.Ed25519.URN(), ag.Keys.Ed25519.PrivateKey)
+		if clientErr != nil {
+			return clientErr
+		}
+		v2Client.ExpectedPlatformID = rootPin.PlatformID
+		ds.v2 = &v2Engine{ds: ds, client: v2Client, root: rootPin.PublicKey, keysDir: ag.Keys.KeysDir}
+	} else if !errors.Is(rootErr, os.ErrNotExist) {
+		return rootErr
+	}
 
 	server := ds.httpServer(ctx, fmt.Sprintf("127.0.0.1:%d", localPort))
 	// Reserve the API port before any mailbox worker can send or acknowledge.
@@ -131,9 +143,20 @@ func runDaemon() error {
 	}
 	defer listener.Close()
 	// Cloud ACK follows the durable commit, independently of connector presence.
-	incomingDone := ag.StartListeningDurable(ctx, ds.receiveMessage)
+	var incomingDone <-chan struct{}
+	if ds.v2 != nil {
+		incomingDone = ag.StartListeningMQDurable(ctx, ds.receiveMessage)
+	} else {
+		incomingDone = ag.StartListeningDurable(ctx, ds.receiveMessage)
+	}
 	workerDone := make(chan struct{})
 	go func() { defer close(workerDone); ds.runOutbox(ctx) }()
+	var v2Done <-chan struct{}
+	if ds.v2 != nil {
+		done := make(chan struct{})
+		v2Done = done
+		go func() { defer close(done); ds.v2.run(ctx) }()
+	}
 
 	// Handle graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -164,6 +187,9 @@ func runDaemon() error {
 		_ = server.Close()
 	}
 	<-workerDone
+	if v2Done != nil {
+		<-v2Done
+	}
 	<-incomingDone
 	log.Println("Daemon stopped cleanly.")
 	return serveErr
@@ -211,6 +237,8 @@ func (ds *DaemonServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ds.handlePresence(w, r)
 	case "/api/v1/mq/store":
 		ds.handleStore(w, r)
+	case "/api/v1/managed/mq/store":
+		ds.handleManagedStore(w, r)
 	case "/api/v1/mq/subscribe":
 		ds.handleSubscribe(w, r)
 	case "/api/v1/mq/retrieve":
@@ -221,6 +249,12 @@ func (ds *DaemonServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ds.handleStatus(w, r)
 	case "/api/v1/contacts":
 		ds.handleAddContact(w, r)
+	case "/api/v2/mq/store":
+		ds.handleV2Store(w, r)
+	case "/api/v2/mq/status":
+		ds.handleV2Status(w, r)
+	case "/api/v2/disclosure":
+		ds.handleDisclosure(w, r)
 	default:
 		// Also support paths without /api/v1/mq context in case connectors pass them directly
 		if strings.HasSuffix(r.URL.Path, "/store") {
@@ -402,11 +436,18 @@ func (ds *DaemonServer) handleAddContact(w http.ResponseWriter, r *http.Request)
 }
 
 func (ds *DaemonServer) handleStore(w http.ResponseWriter, r *http.Request) {
+	ds.handleLegacyStore(w, r, false)
+}
+
+func (ds *DaemonServer) handleManagedStore(w http.ResponseWriter, r *http.Request) {
+	ds.handleLegacyStore(w, r, true)
+}
+
+func (ds *DaemonServer) handleLegacyStore(w http.ResponseWriter, r *http.Request, managedControl bool) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
 	var req StoreRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -428,6 +469,15 @@ func (ds *DaemonServer) handleStore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if !managedControl && ds.legacyStorePolicyError(w) {
+		return
+	}
+	if managedControl {
+		if err := ds.validateManagedControlResponse(req); err != nil {
+			http.Error(w, "Invalid managed control response: "+err.Error(), http.StatusForbidden)
+			return
+		}
+	}
 	status, err := ds.mailbox.accept(req)
 	if err != nil {
 		code := http.StatusInternalServerError
@@ -439,7 +489,7 @@ func (ds *DaemonServer) handleStore(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]any{"success": true, "message_id": req.MessageID, "status": status})
+	json.NewEncoder(w).Encode(map[string]any{"success": true, "message_id": req.MessageID, "status": status, "protocol": "v1"})
 	select {
 	case ds.outgoing <- struct{}{}:
 	default:

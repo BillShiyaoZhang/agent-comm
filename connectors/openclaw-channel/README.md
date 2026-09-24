@@ -1,5 +1,12 @@
 # OpenClaw local-helper bridge
 
+New helper builds expose `GET /api/v2/disclosure`. The adapter sends ordinary
+messages through `/api/v2/mq/store` only when the locally verified policy says
+`v2_send_ready=true`; `policy_root_required` and `consent_required` stop the send.
+Provision the root public key and platform PeerID independently with
+`v2-pin-policy-root <keys_dir> <root_public_key_hex> <expected_platform_peer_id> <verification_note>`.
+The adapter uses v1 only with an older helper that has no disclosure endpoint.
+
 This connector uses the local helper plaintext HTTP/SSE API. Configure a loopback URL such as `http://127.0.0.1:45042`; the cloud platform URL is not compatible with this API.
 
 `sendMessage(recipientUrn, text, metadata?)` now accepts the helper's HTTP 202 response and returns `{success: true, message_id, status}` only after validating its JSON success and ID. `status: accepted` means durable helper outbox admission, not delivery or task completion. Set `metadata.message_id` to the same caller-owned retry key across repeated calls. Network retries inside one call reuse the generated ID. Conversation/task/reply/kind/deadline/hop fields pass through `metadata`.

@@ -167,6 +167,17 @@ func (a *Agent) resolveHTTP(ctx context.Context, urn string) (*registry.ResolveR
 	return result, nil
 }
 
+// ResolveVerifiedRecipient returns the owner-signed registry key bundle. V2
+// callers must additionally compare Ed25519PubKey with an independently pinned
+// full identity key; the registry signature alone does not establish who the
+// human intended to contact.
+func (a *Agent) ResolveVerifiedRecipient(ctx context.Context, urn string) (*registry.ResolveResult, error) {
+	if a.MQHTTPClient == nil {
+		return nil, fmt.Errorf("v2 requires platform HTTP registry")
+	}
+	return a.resolveHTTP(ctx, urn)
+}
+
 func (a *Agent) registerHTTP(ctx context.Context) {
 	for {
 		attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
