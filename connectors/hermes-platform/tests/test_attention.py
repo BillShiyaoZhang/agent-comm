@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -94,16 +95,25 @@ class AttentionTests(unittest.TestCase):
         settings = {"remote_enabled": True, "urn": "urn:agent-comm:agent:local"}
         store = Store(self.path, local_urn=settings["urn"], owner_principal="native-owner")
         try:
+            store.ingest_message({"message_id": "friend-request", "sender_urn": "urn:agent-comm:agent:peer",
+                "conversation_id": "friend-request", "kind": "contact.request",
+                "text": json.dumps({"protocol": "agent-comm-contacts/v1", "type": "request",
+                                    "request_id": "friend-request"})})
+            store.remote_mutation("contacts.respond", {"request_id": "friend-request", "decision": "accept"},
+                "native-owner|attention", request_key="e" * 64, fingerprint="f" * 64,
+                valid_until=time.time() + 300)
             store.ingest_message({"message_id": "incoming", "sender_urn": "urn:agent-comm:agent:peer", "text": "完整消息"})
         finally:
             store.close()
         with patch.object(attention, "Store", Store), patch.object(attention, "read_settings", return_value=settings):
             feed = attention.read_attention()
             self.assertTrue(feed["available"])
-            self.assertEqual(feed["items"][0]["details"]["peer_message"]["text"], "完整消息")
+            message_item = next(item for item in feed["items"] if item["kind"] == "peer_message_received")
+            self.assertEqual(message_item["details"]["peer_message"]["text"], "完整消息")
             self.assertEqual(attention.mark_attention_read({"message_id": "incoming"})["status"], "read")
             changed = attention.read_attention(after=feed["cursor"])
-            self.assertEqual(changed["items"][0]["state"], "resolved")
+            self.assertEqual(next(item for item in changed["items"]
+                                  if item["attention_id"] == message_item["attention_id"])["state"], "resolved")
 
     def test_friend_request_is_visible_with_context_and_native_handling_instruction(self):
         from agent_comm_runtime.store import Store

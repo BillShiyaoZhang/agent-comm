@@ -11,7 +11,7 @@ agent-comm-helper daemon <keys_dir绝对路径> <platform_url> [local_port]
 
 `init` 加载已有身份，目录不存在身份时创建；返回 `urn`、`peer_id`、`ed25519_pubkey`、`x25519_pubkey`。先检查现有配置并展开 `~`；不要为查看身份换目录生成新身份。`GET /info` 返回 `urn`、`peer_id`、`addrs`、`status`，不含公网 platform URL。helper 默认监听 `127.0.0.1:45042`。启动时补收，之后每 5 秒补拉；云端暂不可达仍可启动并排队重试。
 
-Agent 间 v2 使用独立的签名策略、握手和消息端点。先从平台之外核对策略根和平台 libp2p PeerID，再运行 `v2-pin-policy-root <keys_dir> <root_public_key_hex> <expected_platform_peer_id> <independent_verification_note>`。更新后的单 Platform helper 可用准确 URN 从 Registry 自动查询、验签并缓存对应公钥；`v2-pin-peer <keys_dir> <peer_urn> <ed25519_public_key_hex> <independent_verification_note>` 仍可用于已有手工固定记录或额外带外核对，自动发现不能覆盖不同的手工 pin。v0.9.0 接入包支持此自动发现；旧版 v0.8.0 仍须双方手工核对并固定完整身份公钥。根固定后重启 daemon，并查看本机 `GET /api/v2/disclosure`。默认只允许 `private`；主人核对披露状态的网关密钥与精确策略后，运行 `v2-allow-compliance <keys_dir> <policy_hash> <explicit_authorization_note>`。新 epoch 或新策略哈希必须重新授权；`v2-disallow-compliance <keys_dir> <explicit_revocation_note>` 撤回后续合规收发，不能收回已披露内容。自动验钥证明 URN 的密钥持有者，不能证明现实人物身份；原有 `trusted` 联系人也不自动获得业务授权。具体协议见 [v2 参考](../docs/architecture/PROTOCOL_V2.md)。
+Agent 间 v2 使用独立的签名策略、握手和消息端点。先从平台之外核对策略根和平台 libp2p PeerID，再运行 `v2-pin-policy-root <keys_dir> <root_public_key_hex> <expected_platform_peer_id> <independent_verification_note>`。更新后的单 Platform helper 可用准确 URN 从 Registry 自动查询、验签并缓存对应公钥；`v2-pin-peer <keys_dir> <peer_urn> <ed25519_public_key_hex> <independent_verification_note>` 仍可用于已有手工固定记录或额外带外核对，自动发现不能覆盖不同的手工 pin。v0.9.1 接入包支持此自动发现；旧版 v0.8.0 仍须双方手工核对并固定完整身份公钥。根固定后重启 daemon，并查看本机 `GET /api/v2/disclosure`。默认只允许 `private`；主人核对披露状态的网关密钥与精确策略后，运行 `v2-allow-compliance <keys_dir> <policy_hash> <explicit_authorization_note>`。新 epoch 或新策略哈希必须重新授权；`v2-disallow-compliance <keys_dir> <explicit_revocation_note>` 撤回后续合规收发，不能收回已披露内容。自动验钥证明 URN 的密钥持有者，不能证明现实人物身份；原有 `trusted` 联系人也不自动获得业务授权。具体协议见 [v2 参考](../docs/architecture/PROTOCOL_V2.md)。
 
 带 `policy-trust.json` 的 v2 完整安装包可通过 `v2-ensure-policy-root <keys_dir> <root_public_key_hex> <expected_platform_peer_id> <trusted_release_note>` 在原身份目录自动固定公开根和平台 PeerID；同值重装幂等，不同值拒绝。旧包或手工流程继续用 `v2-pin-policy-root` 显式固定。`GET /api/v2/disclosure` 的 `policy_root_public_key` 是当前 daemon 已加载的根公钥（未配置为 `null`）；只有 `policy_verified=true` 且 `platform_id` 与包内 PeerID 一致时，才说明它已验签当前策略。新 helper 缺少根固定时普通发送为 HTTP 428；不能用平台自己的 bootstrap 响应替代独立核对。先在平台准备签名 `private` 且 `allow_v1=true` 的兼容策略并可信分发根和 PeerID，再升级新 helper。旧身份与信箱原样保留，Web 配对成功不代表 Agent 间 v2 可发送或允许合规披露。
 
@@ -44,7 +44,7 @@ Agent 间 v2 使用独立的签名策略、握手和消息端点。先从平台�
 | `GET /api/v1/mq/retrieve` | `{"messages":[...]}`，全部未本地 ACK 入站 |
 | `GET /api/v1/mq/subscribe` | SSE：`id: <message_id>`、`data: <入站JSON>`；重连和每 5 秒补推未消费消息 |
 | `POST /api/v1/mq/ack` | `{"message_ids":["request-001"]}`；返回 `success`、本次 `acked` 数量；重复 ACK 数量为 0 |
-| `POST /api/v2/mq/store` | Agent 间 v2，使用同一消息 JSON；更新后源码可按准确 URN 自动验证身份公钥，仍需已固定的策略根、已验签策略及适用的本机合规授权；返回 HTTP 202。旧版 v0.8.0 还要求手工 pin 对端完整公钥；v0.9.0 支持 URN 首联 |
+| `POST /api/v2/mq/store` | Agent 间 v2，使用同一消息 JSON；更新后源码可按准确 URN 自动验证身份公钥，仍需已固定的策略根、已验签策略及适用的本机合规授权；返回 HTTP 202。旧版 v0.8.0 还要求手工 pin 对端完整公钥；v0.9.1 支持 URN 首联 |
 | `GET /api/v2/mq/status?message_id=...` | v2 出站状态、策略摘要与回执是否验证；`platform_queued` 不表示收件或业务完成 |
 | `GET /api/v2/disclosure` | 已验签策略、平台可否解密、本地是否同意、`legacy_send_code`、旧队列隔离数量；未知事实为 `null` |
 | `POST /api/v1/managed/mq/store` | 仅供已配对 Web 控制回复；必须对应本机已保存的 v1 `control.request`，平台另验有效受管证书 |

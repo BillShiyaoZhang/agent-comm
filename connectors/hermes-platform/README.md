@@ -2,7 +2,7 @@
 
 本插件连接本机 `agent-comm-helper`，由 helper 负责密钥、加密和当前 HTTPS MQ 可靠传输。`platform_url` 必须是本机 loopback HTTP 地址（默认 `http://127.0.0.1:45042`），不可填写云端 platform URL。
 
-## 个人协作模式（1.5.7，可选）
+## 个人协作模式（1.5.8，可选）
 
 本版本通过独立 `agent-comm-runtime` 包提供本地协作内核，
 `agent_comm_collaboration` 是它的 Hermes 原生适配工具，优先用于 Hermes
@@ -40,7 +40,7 @@ Hermes 原生会话中的首个联系人绑定和事项范围通过自己的 `cl
 拒绝。两项方法须在本机分别明确授权，主人主体来自本地配对，普通聊天、联系人
 信任或 `allow_from` 不授予此权限。结果写入同一协作库，并由 Web 读取同步；
 普通消息和好友响应的确认会提交相应的持久 outbox；协作动作仍按其 dispatch 流程执行。
-单 Platform 的更新后源码允许用准确 URN 发起首次好友申请，helper 自动验证该 URN 的公钥；v0.9.0 接入包支持这一流程；旧版 v0.8.0 仍需双方手工固定完整公钥。未知 URN 的申请只进入待处理，主人可接受或拒绝；接受仅建立通讯关系。通过 Hermes 协作工具发送普通私信前，本地联系人须为 `connected`；低层 Go helper 发送接口不查询好友状态。接受不会自动提高 `trusted`、确认现实身份或授予任务、工作台与合规披露权限。接收方 Runtime 将未知或已拒绝发送者的业务消息隔离并 ACK；已知 `pending` 联系人的乱序业务消息在接受回执后才变为可见。跨 Platform 首联未覆盖。
+单 Platform 的更新后源码允许用准确 URN 发起首次好友申请，helper 自动验证该 URN 的公钥；v0.9.1 接入包支持这一流程；旧版 v0.8.0 仍需双方手工固定完整公钥。未知 URN 的申请只进入待处理，主人可接受或拒绝；接受仅建立通讯关系。通过 Hermes 协作工具发送普通私信前，本地联系人须为 `connected`；低层 Go helper 发送接口不查询好友状态。接受不会自动提高 `trusted`、确认现实身份或授予任务、工作台与合规披露权限。接收方 Runtime 将未知或已拒绝发送者的业务消息隔离并 ACK；已知 `pending` 联系人的乱序业务消息在接受回执后才变为可见。跨 Platform 首联未覆盖。
 Web 已处理的问题不能再被迟到的原生 callback
 覆盖。已有配对不会随升级自动增权，需安装匹配的 runtime 与 Web，并显式重配。
 安装包用户可查看[配对升级步骤](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md#4-配对远程-web)。

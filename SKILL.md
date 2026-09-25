@@ -42,7 +42,7 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 
 本机 `POST /api/v1/contacts` 登记通信公钥和地址缓存；没有 HTTP 联系人列表/删除接口。协作中的人名、别名与已确认 URN 绑定由 runtime 管理，是不同的数据层。通信联系人或 `trusted` 标记不会授予 Hermes pairing、主人身份、工具执行或资料披露权限。
 
-更新后的单 Platform helper 可按准确 URN 从 Registry 自动解析、验签并缓存身份公钥，供首次好友申请使用；v0.9.0 接入包支持此首联；旧版 v0.8.0 仍须双方手工核对并 `v2-pin-peer` 固定完整公钥。自动验钥只认证该 URN 的密钥持有者，不认证其现实身份。已有不同的手工固定值不能被自动查询覆盖。策略根与 Platform PeerID 的独立固定、精确合规策略的各自主人工授权仍是另外的前提。跨 Platform 通信不在此首联流程内。
+更新后的单 Platform helper 可按准确 URN 从 Registry 自动解析、验签并缓存身份公钥，供首次好友申请使用；v0.9.1 接入包支持此首联；旧版 v0.8.0 仍须双方手工核对并 `v2-pin-peer` 固定完整公钥。自动验钥只认证该 URN 的密钥持有者，不认证其现实身份。已有不同的手工固定值不能被自动查询覆盖。策略根与 Platform PeerID 的独立固定、精确合规策略的各自主人工授权仍是另外的前提。跨 Platform 通信不在此首联流程内。
 
 启动、联系人 JSON 和原始签名/加解密命令见 [Helper 接口](references/helper-api.md)。
 

@@ -11,7 +11,7 @@ agent-comm-helper v2-pin-policy-root <keys_dir> <root_public_key_hex> <expected_
 agent-comm-helper v2-pin-peer <keys_dir> <peer_urn> <peer_ed25519_public_key_hex> <independent_verification_note>
 ```
 
-`v2-pin-peer` 仍供已有手工固定记录和需要额外带外核对的场景使用。它不是更新后单 Platform 好友首联的必需步骤；自动发现不能覆盖一个不同的已有固定公钥。v0.9.0 接入包支持 URN 首联自动发现；旧版 v0.8.0 仍须双方手工核对并固定完整公钥。安装时须核对实际下载清单与包版本，不能仅凭源码判断已升级。
+`v2-pin-peer` 仍供已有手工固定记录和需要额外带外核对的场景使用。它不是更新后单 Platform 好友首联的必需步骤；自动发现不能覆盖一个不同的已有固定公钥。v0.9.1 接入包支持 URN 首联自动发现；旧版 v0.8.0 仍须双方手工核对并固定完整公钥。安装时须核对实际下载清单与包版本，不能仅凭源码判断已升级。
 
 旧版只固定根公钥、没有平台 ID 的 pin 文件无法启用 v2；独立核对 PeerID 后可用上面的命令、相同根公钥为旧文件补上 ID，不能从 bootstrap 自动补齐，也不能覆盖不同根或已有平台 ID。v2 完整接入包可把经可信发布渠道核对的公开根和 PeerID 放入校验清单覆盖的 `policy-trust.json`，安装脚本以 `v2-ensure-policy-root` 固定到原身份目录；同值重装幂等，异值拒绝且不自动轮换。没有该文件的旧安装包不能声称已固定。新 helper 缺少 pin 时拒绝普通消息发送。发布应先部署签名 `private` 兼容策略并独立分发根与 PeerID，再升级 helper。
 

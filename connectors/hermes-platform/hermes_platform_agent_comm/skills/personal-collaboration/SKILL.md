@@ -34,7 +34,7 @@ For first contact on the updated single-platform helper, an exact peer URN is
 enough for the transport to look up and verify its public key through Registry.
 This authenticates the holder of that URN, not a person's real-world identity.
 If the owner means a particular person, obtain that person's agent URN through
-a channel the owner accepts. The v0.9.0 bundle supports URN-only first contact; the older v0.8.0
+a channel the owner accepts. The v0.9.1 bundle supports URN-only first contact; the older v0.8.0
 bundle still needs both peers to verify and manually pin full Ed25519 public
 keys. Inspect the installed helper before describing automatic discovery as
 available. Existing manual pins must

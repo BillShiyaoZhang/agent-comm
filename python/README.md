@@ -1,6 +1,6 @@
 # Agent Comm 本地协作 Runtime
 
-`agent-comm-runtime` 0.1.5 是可独立安装的 Python 3.11+ 包，标准库即可运行。它不导入 Hermes、模型 SDK 或任何记忆库。联系人、授权、任务、不可变动作、资源快照、入站和审计的唯一实现位于这里；Hermes connector 是它的首个实际宿主适配器。Web 通过明确配对的远程控制协议同步 agent 侧状态；拥有对应权限后可直接添加联系人和确认授权，所有决定仍写入 agent 的同一个 Store。
+`agent-comm-runtime` 0.1.6 是可独立安装的 Python 3.11+ 包，标准库即可运行。它不导入 Hermes、模型 SDK 或任何记忆库。联系人、授权、任务、不可变动作、资源快照、入站和审计的唯一实现位于这里；Hermes connector 是它的首个实际宿主适配器。Web 通过明确配对的远程控制协议同步 agent 侧状态；拥有对应权限后可直接添加联系人和确认授权，所有决定仍写入 agent 的同一个 Store。
 
 ## 安装与独立运行
 
@@ -38,7 +38,7 @@ flowchart LR
     TP --> G["Go helper<br/>身份、密钥与持久收发"]
 ```
 
-扩展协议版本 `1.0`、Python 包版本 `0.1.5`、协作消息 `agent-comm-collaboration/v1` / `v2`、SQLite schema `1` 是不同版本维度。当前 adapter API 要求版本精确相同；未来改变合约时显式升级，避免静默兼容猜测。v2 与 attention 使用新增记录类型，旧 v1 行保留；原 `hermes-native-<profile hash>` 主体仍能读取旧记录。不能用旧二进制继续处理已建立的 v2 协作。
+扩展协议版本 `1.0`、Python 包版本 `0.1.6`、协作消息 `agent-comm-collaboration/v1` / `v2`、SQLite schema `1` 是不同版本维度。当前 adapter API 要求版本精确相同；未来改变合约时显式升级，避免静默兼容猜测。v2 与 attention 使用新增记录类型，旧 v1 行保留；原 `hermes-native-<profile hash>` 主体仍能读取旧记录。不能用旧二进制继续处理已建立的 v2 协作。
 
 ## 双边协作与持久提醒
 
@@ -207,7 +207,7 @@ Hermes 的 `collaboration/policy.py`、`store.py`、`transport.py` 仅保留薄�
 
 本机配对可显式授予 `contacts.add` 和 `approval.respond`；旧配对不会自动获得这两项权限，独立 daemon 也支持这两个确定性方法。它们不需要宿主模型或 `InteractionPort`：
 
-单 Platform 首次联系只需主人指定准确 URN。更新后的 helper 自动从 Registry 核对该 URN 的公钥，未知 URN 的已认证好友申请先待主人接受或拒绝；这只认证密钥持有者，不证明现实人物身份。本地联系人绑定可为 `unverified`，好友申请为 `pending`；接受才建立 `connected` 通讯关系，不提升 `trusted`，不授予任务、工具、工作台或合规披露权限。Python Runtime 的普通私信及 v1/v2 业务 dispatch 需要已接受的连接；低层 Go helper 不查询此状态。接收方 Runtime 将未知或被拒绝发送者的业务消息隔离并 ACK，已知 `pending` 联系人的乱序消息在接受回执后才变为可见。v0.9.0 helper 支持 URN 首联；旧版 v0.8.0 仍需双方手工固定完整公钥。跨 Platform 首联未覆盖。
+单 Platform 首次联系只需主人指定准确 URN。更新后的 helper 自动从 Registry 核对该 URN 的公钥，未知 URN 的已认证好友申请先待主人接受或拒绝；这只认证密钥持有者，不证明现实人物身份。本地联系人绑定可为 `unverified`，好友申请为 `pending`；接受才建立 `connected` 通讯关系，不提升 `trusted`，不授予任务、工具、工作台或合规披露权限。Python Runtime 的普通私信及 v1/v2 业务 dispatch 需要已接受的连接；低层 Go helper 不查询此状态。接收方 Runtime 将未知或被拒绝发送者的业务消息隔离并 ACK，已知 `pending` 联系人的乱序消息在接受回执后才变为可见。v0.9.1 helper 支持 URN 首联；旧版 v0.8.0 仍需双方手工固定完整公钥。跨 Platform 首联未覆盖。
 
 | 方法 | params | agent 结果 |
 | --- | --- | --- |
