@@ -297,6 +297,10 @@ class CollaborationV2Mixin:
                   "recovery_once": recovery_once,
                   "created_at": self.clock(), "text": canonical({"kind": kind, "recipient_urn": c["peer_urn"], "payload": wire_payload}),
                   "deliveries": []}
+            if kind == "accept" and verdict["decision"] == "ask":
+                # Older approvals displayed only the wire digest. A persisted
+                # pre-upgrade question must not silently gain authority later.
+                op["owner_review_version"] = 2
             if kind in {"invite", "join"}:
                 # The native card approves these exact finite maintenance rights.
                 op["new_collaboration"] = c
@@ -305,6 +309,23 @@ class CollaborationV2Mixin:
             op["hash"] = digest({k: v for k, v in op.items() if k != "status"})
             if verdict["decision"] == "ask":
                 question = "请确认这一次协作动作及完整对外内容：\n" + op["text"]
+                if kind == "accept":
+                    # The accept wire event carries only a terms digest. The owner
+                    # must review the validated local snapshot that digest names,
+                    # rather than approving an opaque hash or model-written terms.
+                    terms = c["terms"]
+                    question += "\n本次接受的当前方案（来自本机已核对的协作记录）："
+                    question += "\n".join((
+                        f"\n方案编号：{canonical(terms['proposal_id'])}",
+                        f"版本：{terms['version']}",
+                        f"主题：{canonical(terms['topic'])}",
+                        f"参与方 URN：{canonical(terms['participant_ids'])}",
+                        f"开始时间（UTC）：{terms['start']}",
+                        f"结束时间（UTC）：{terms['end']}",
+                        f"条款摘要：{wire_payload['terms_digest']}",
+                        "约定范围：仅形成线上会议约定（agreement_only / online）；双方各自仅承担本人参会义务（each_party_attends_only），不创建日历事件。",
+                        "对方的授权依据仅为其 agent 声明（peer_attested），不等于独立核验对方本人。",
+                    ))
                 if kind in {"invite", "join"}:
                     question += ("\n双方各自授权；范围内方案和接受继续按本事项委托检查。"
                                  "仅协调线上会议方案，不写入日历。A 的持久成约决定裁定接受与撤回顺序。"
@@ -334,6 +355,12 @@ class CollaborationV2Mixin:
 
     def _v2_operation_current(self, op):
         if op["expires_at"] <= self.clock():
+            return False
+        if (op["kind"] == "accept" and op["decision"]["decision"] == "ask"
+                and op["status"] not in {"sending", "accepted"}
+                and op.get("owner_review_version") != 2):
+            # Already-reserved sends keep their crash-recovery path; older
+            # undelivered approvals need a new full-terms owner question.
             return False
         c = self._get("v2_collaboration", op["collaboration_id"])
         if "new_collaboration" in op:

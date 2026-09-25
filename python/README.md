@@ -1,6 +1,6 @@
 # Agent Comm 本地协作 Runtime
 
-`agent-comm-runtime` 0.1.6 是可独立安装的 Python 3.11+ 包，标准库即可运行。它不导入 Hermes、模型 SDK 或任何记忆库。联系人、授权、任务、不可变动作、资源快照、入站和审计的唯一实现位于这里；Hermes connector 是它的首个实际宿主适配器。Web 通过明确配对的远程控制协议同步 agent 侧状态；拥有对应权限后可直接添加联系人和确认授权，所有决定仍写入 agent 的同一个 Store。
+`agent-comm-runtime` 0.1.7 是可独立安装的 Python 3.11+ 包，标准库即可运行。它不导入 Hermes、模型 SDK 或任何记忆库。联系人、授权、任务、不可变动作、资源快照、入站和审计的唯一实现位于这里；Hermes connector 是它的首个实际宿主适配器。Web 通过明确配对的远程控制协议同步 agent 侧状态；拥有对应权限后可直接添加联系人和确认授权，所有决定仍写入 agent 的同一个 Store。
 
 ## 安装与独立运行
 
@@ -38,7 +38,7 @@ flowchart LR
     TP --> G["Go helper<br/>身份、密钥与持久收发"]
 ```
 
-扩展协议版本 `1.0`、Python 包版本 `0.1.6`、协作消息 `agent-comm-collaboration/v1` / `v2`、SQLite schema `1` 是不同版本维度。当前 adapter API 要求版本精确相同；未来改变合约时显式升级，避免静默兼容猜测。v2 与 attention 使用新增记录类型，旧 v1 行保留；原 `hermes-native-<profile hash>` 主体仍能读取旧记录。不能用旧二进制继续处理已建立的 v2 协作。
+扩展协议版本 `1.0`、Python 包版本 `0.1.7`、协作消息 `agent-comm-collaboration/v1` / `v2`、SQLite schema `1` 是不同版本维度。当前 adapter API 要求版本精确相同；未来改变合约时显式升级，避免静默兼容猜测。v2 与 attention 使用新增记录类型，旧 v1 行保留；原 `hermes-native-<profile hash>` 主体仍能读取旧记录。不能用旧二进制继续处理已建立的 v2 协作。
 
 ## 双边协作与持久提醒
 
@@ -53,7 +53,7 @@ v2 的模型入口是 `prepare_collaboration`，必需字段为 `task_id`、`col
 | `agreement` / `agreement_ack` / `sync_request` / `sync_response` | `{}`；固定模板维护消息，须有主人批准的独立有限许可。 |
 | `receipt` | `{ "event_id": "已保存事件ID" }` |
 
-准备结果若为 `ask`，通过已有 `confirm(approval_id)` 展示原生问题，或在已授权的 Web 控制台查看同一问题并作决定；获准后通过 `dispatch(operation_id)` 发送。`collaborations` 查看双方阶段、等待原因和待发操作。`state` 的 `collaboration` 字段提供相同投影。v1/v2 业务动作共享任务累计预算，维护许可最多 32 条、最多 7 天，并在邀请/加入确认中明确展示。
+准备结果若为 `ask`，通过已有 `confirm(approval_id)` 展示原生问题，或在已授权的 Web 控制台查看同一问题并作决定；获准后通过 `dispatch(operation_id)` 发送。`accept` 发出的协议事件只带条款摘要，因此原生/Web 确认问题另从本机已验证的当前方案快照展示方案编号、版本、主题、双方 URN、UTC 起止时间及线上约定、仅本人参会的边界。若旧卡只有摘要，不应凭摘要同意；更新 Runtime 后用新的操作 ID 重新准备，旧审批不会被改写。`collaborations` 查看双方阶段、等待原因和待发操作。`state` 的 `collaboration` 字段提供相同投影。v1/v2 业务动作共享任务累计预算，维护许可最多 32 条、最多 7 天，并在邀请/加入确认中明确展示。
 
 本阶段由宿主主动恢复、调用 `inbox` 接收和 `dispatch` 逐段驱动；协议可生成固定维护待发项，但没有后台私人模型自动协商。`accepted` 只代表本机 helper 接受消息；双方同版显式接受、发起方形成持久约定并完成 ACK/回执同步后才到 `closed`。首版只协调线上会议方案（`agreement_only`），没有日历写入。对方代表权标注为 `peer_attested`，不冒充独立核验的人类签名。
 

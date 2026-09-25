@@ -70,8 +70,45 @@ class Store(SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
         if not row:
             self._db.execute("INSERT INTO collaboration_meta VALUES (1)")
         self._db.commit()
+        try:
+            self._invalidate_legacy_accept_approvals()
+        except BaseException:
+            self._db.close()
+            raise
         if owner_principal is not None:
             self.register_owner(owner_principal)
+
+    def _invalidate_legacy_accept_approvals(self):
+        """Persistently retire digest-only accept cards before any owner action.
+
+        A read-time guard alone is insufficient: an older wheel would otherwise
+        make an unsubmitted approval actionable again after a rollback. Sending
+        operations already reserved their wire packet and retain crash recovery.
+        """
+        with self._transaction():
+            for op in self._all("v2_operation"):
+                decision = op.get("decision")
+                if (op.get("kind") != "accept" or not isinstance(decision, dict)
+                        or decision.get("decision") != "ask"
+                        or op.get("owner_review_version") == 2
+                        or op.get("status") not in {"awaiting_approval", "ready"}):
+                    continue
+                op["status"] = "denied"
+                op["invalidation_reason"] = "upgrade_requires_full_terms_review"
+                self._put("v2_operation", op["operation_id"], op)
+                approval_id = op.get("approval_id")
+                approval = self._get("approval", approval_id) if approval_id else None
+                if (approval and approval.get("kind") == "collaboration_v2"
+                        and approval.get("subject_id") == op["operation_id"]
+                        and approval.get("status") in {"pending", "presenting", "expired", "approved"}):
+                    approval["status"] = "superseded"
+                    approval["invalidation_reason"] = "upgrade_requires_full_terms_review"
+                    approval.pop("token_hash", None)
+                    approval.pop("lease_until", None)
+                    self._put("approval", approval_id, approval)
+                    self._attention_approval(approval, refresh=True)
+                self._audit("legacy_accept_approval_invalidated", operation_id=op["operation_id"],
+                            approval_id=approval_id, owner_id=op.get("owner_id"))
 
     @contextmanager
     def _transaction(self):

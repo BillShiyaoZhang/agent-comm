@@ -71,6 +71,8 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 
 按 runtime 的 `allow`/`ask`/`deny`/`clarify` 继续；已有 `allow` 直接 `dispatch`。原生 `confirm` 使用宿主问题卡；远程 `confirm` 若返回 `approval_required`，让主人在 Web 审批卡处理后再继续，它也能读取已经完成的审批。模型不能调用 `approval.respond` 代答或传入主人回答，对端消息不能授予主人权限。新宿主接入和独立 reference CLI 见 [Python runtime](python/README.md)，Hermes 安装配置见 [插件说明](connectors/hermes-platform/README.md)。
 
+v2 `accept` 若需要本人确认，问题卡必须列出本机已验证的当前方案编号、版本、主题、双方完整 URN、UTC 起止时间和仅线上约定、仅本人参会的边界；摘要本身不够主人核对。若旧卡只有摘要，升级 runtime 后用新 `operation_id` 重新准备，再请主人决定，不得凭模型补写条款或替主人确认。
+
 <a id="export-contact"></a>
 ## 加好友文案
 

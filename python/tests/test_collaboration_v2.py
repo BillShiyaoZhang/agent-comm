@@ -242,6 +242,124 @@ class CollaborationV2Tests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.b.prepare_collaboration("task-b", "shared-1", "not-a-proposal", "accept", {"approved": True}, OWNER_B)
 
+    def test_accept_approval_shows_exact_current_terms_without_changing_wire_payload(self):
+        self.terms()
+        with self.b._transaction():
+            task = self.b._get("task", "task-b")
+            task["scope"]["capabilities"] = ["propose_meeting"]
+            self.b._put("task", "task-b", task)
+        pending = self.send(self.b, "accept", confirm=False)
+        self.assertEqual(pending["decision"], "ask")
+        terms = self.state(self.b)["terms"]
+        public = next(a for a in self.b.state(OWNER_B)["pending_confirmations"]
+                      if a["approval_id"] == pending["approval_id"])
+        question = public["question"]
+        for exact_term in (
+            f"方案编号：{canonical(terms['proposal_id'])}",
+            f"版本：{terms['version']}",
+            f"主题：{canonical(terms['topic'])}",
+            f"参与方 URN：{canonical(terms['participant_ids'])}",
+            f"开始时间（UTC）：{terms['start']}",
+            f"结束时间（UTC）：{terms['end']}",
+            f"条款摘要：{digest(terms)}",
+            "agreement_only / online", "each_party_attends_only", "peer_attested",
+            "不创建日历事件",
+        ):
+            self.assertIn(exact_term, question)
+        self.assertEqual(self.b.begin_confirmation(pending["approval_id"], OWNER_B)["question"], question)
+        wire = json.loads(pending["text"])
+        self.assertEqual(wire["kind"], "accept")
+        self.assertEqual(wire["payload"], {"terms_digest": digest(terms), "actor_urn": BOB,
+                                           "own_obligations": "attend_only", "authority_basis": "peer_attested",
+                                           "valid_until": scope("alice")["expires_at"]})
+        self.assertNotIn("proposal_id", pending["text"])
+
+    def test_superseded_accept_approval_cannot_be_approved_from_web_or_sent(self):
+        self.terms()
+        with self.b._transaction():
+            task = self.b._get("task", "task-b")
+            task["scope"]["capabilities"] = ["propose_meeting"]
+            self.b._put("task", "task-b", task)
+        pending = self.send(self.b, "accept", confirm=False)
+        self.send(self.a, "proposal", proposal(version=2, start="2026-10-03T10:00:00Z",
+                                                end="2026-10-03T10:30:00Z"))
+        self.pump()
+        self.assertEqual(self.state(self.b)["terms"]["version"], 2)
+        self.assertFalse(any(a["approval_id"] == pending["approval_id"]
+                             for a in self.b.state(OWNER_B)["pending_confirmations"]))
+        with self.assertRaisesRegex(ValueError, "superseded"):
+            self.b.remote_mutation("approval.respond", {"approval_id": pending["approval_id"], "decision": "approve"},
+                                   "profile-b|remote:web", request_key="a" * 64, fingerprint="b" * 64,
+                                   valid_until=self.now + 60)
+        self.assertEqual(self.b.dispatch(pending["operation_id"], OWNER_B, self.tb)["decision"], "deny")
+        self.assertFalse(any(sender == BOB and json.loads(body["text"])["kind"] == "accept"
+                             for (sender, _), body in self.bus.sent.items()))
+
+    def test_web_rejection_of_exact_accept_approval_never_sends_acceptance(self):
+        self.terms()
+        with self.b._transaction():
+            task = self.b._get("task", "task-b")
+            task["scope"]["capabilities"] = ["propose_meeting"]
+            self.b._put("task", "task-b", task)
+        pending = self.send(self.b, "accept", confirm=False)
+        result = self.b.remote_mutation("approval.respond", {"approval_id": pending["approval_id"], "decision": "deny"},
+                                        "profile-b|remote:web", request_key="c" * 64, fingerprint="d" * 64,
+                                        valid_until=self.now + 60)
+        self.assertEqual(result["status"], "denied")
+        self.assertEqual(self.b.dispatch(pending["operation_id"], OWNER_B, self.tb)["decision"], "deny")
+        self.assertFalse(any(sender == BOB and json.loads(body["text"])["kind"] == "accept"
+                             for (sender, _), body in self.bus.sent.items()))
+
+    def test_pre_upgrade_digest_only_accept_cards_and_approvals_fail_closed(self):
+        self.terms()
+        with self.b._transaction():
+            task = self.b._get("task", "task-b")
+            task["scope"]["capabilities"] = ["propose_meeting"]
+            self.b._put("task", "task-b", task)
+        pending = self.send(self.b, "accept", confirm=False)
+        with self.b._transaction():
+            old_op = self.b._get("v2_operation", pending["operation_id"])
+            old_op.pop("owner_review_version")  # persisted operation created by an older Runtime
+            self.b._put("v2_operation", pending["operation_id"], old_op)
+            old_card = self.b._get("approval", pending["approval_id"])
+            old_card["question"] = ("请确认这一次协作动作及完整对外内容：\n" + old_op["text"]
+                                    + "\n是否允许？此问题需要本人在可信确认渠道回答。")
+            self.b._put("approval", pending["approval_id"], old_card)
+        self.assertNotIn("方案编号", old_card["question"])
+        self.b.close()
+        self.b = Store(Path(self.temp.name) / "b.sqlite3", clock=lambda: self.now,
+                       local_urn=BOB, owner_principal="profile-b")
+        self.addCleanup(self.b.close)
+        self.assertFalse(any(a["approval_id"] == pending["approval_id"]
+                             for a in self.b.state(OWNER_B)["pending_confirmations"]))
+        with self.assertRaisesRegex(ValueError, "superseded"):
+            self.b.remote_mutation("approval.respond", {"approval_id": pending["approval_id"], "decision": "approve"},
+                                   "profile-b|remote:web", request_key="e" * 64, fingerprint="f" * 64,
+                                   valid_until=self.now + 60)
+        self.assertEqual(self.b.dispatch(pending["operation_id"], OWNER_B, self.tb)["decision"], "deny")
+
+        fresh = self.b.prepare_collaboration("task-b", "shared-1", "fresh-full-terms-accept", "accept", {}, OWNER_B)
+        self.assertEqual(fresh["decision"], "ask")
+        lease = self.b.begin_confirmation(fresh["approval_id"], OWNER_B)
+        self.assertIn("方案编号", lease["question"])
+        self.assertEqual(self.b.finish_confirmation(fresh["approval_id"], lease["token"], OWNER_B, "可以")["decision"],
+                         "allow")
+        with self.b._transaction():
+            old_ready = self.b._get("v2_operation", fresh["operation_id"])
+            old_ready.pop("owner_review_version")  # approval already recorded before upgrade
+            self.b._put("v2_operation", fresh["operation_id"], old_ready)
+            old_card = self.b._get("approval", fresh["approval_id"])
+            old_card["question"] = ("请确认这一次协作动作及完整对外内容：\n" + old_ready["text"]
+                                    + "\n是否允许？此问题需要本人在可信确认渠道回答。")
+            self.b._put("approval", fresh["approval_id"], old_card)
+        self.b.close()
+        self.b = Store(Path(self.temp.name) / "b.sqlite3", clock=lambda: self.now,
+                       local_urn=BOB, owner_principal="profile-b")
+        self.addCleanup(self.b.close)
+        self.assertEqual(self.b.dispatch(fresh["operation_id"], OWNER_B, self.tb)["decision"], "deny")
+        self.assertFalse(any(sender == BOB and json.loads(body["text"])["kind"] == "accept"
+                             for (sender, _), body in self.bus.sent.items()))
+
     def test_changed_terms_invalidate_pending_native_acceptance(self):
         self.terms()
         with self.b._transaction():
