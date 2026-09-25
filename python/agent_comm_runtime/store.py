@@ -23,7 +23,7 @@ from .identity import validate_urn
 from .attention import AttentionMixin
 from .collaboration_v2 import CollaborationV2Mixin
 from .worker import WorkerMixin
-from .social import SocialMixin
+from .social import SOCIAL_KINDS, SocialMixin
 
 
 def canonical(value):
@@ -193,9 +193,10 @@ class Store(SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                 return self._prepare_existing_contact(old, owner_session)
             if any(self._belongs(item, owner_session) and item["urn"] == urn for item in self._all("contact")):
                 raise ValueError("This agent identity is already a confirmed contact; use the existing contact")
-            question = (f"请核对联系人：本地称呼 {', '.join(contact['aliases'])}（{contact_id}）对应 {urn}。\n"
-                        "确认后将向此 agent 发送好友请求；对方接受后建立连接。不会自动发送资料或代表你承诺。\n"
-                        "确认这是同一个人的指定 agent 吗？")
+            question = (f"请核对联系人：本地称呼 {', '.join(contact['aliases'])}（{contact_id}）对应准确 URN {urn}。\n"
+                        "确认后将向此 URN 发送好友请求；对方接受后可以通信。"
+                        "这不验证对方的现实身份，也不授权资料披露、协作任务或代表你承诺。\n"
+                        "确认发送好友请求吗？")
             return {"decision": "ask", **self._approval("contact", contact_id, owner_session, contact,
                                                            question, self.clock() + 900)}
 
@@ -742,6 +743,8 @@ class Store(SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                 return {"decision": "deny", "reasons": ["revoked_expired_or_superseded"]}
             if operation["status"] not in {"ready", "sending"}:
                 return {"decision": "deny", "reasons": ["operation_not_authorized"]}
+            if any(not self._can_send_to(c["urn"], owner_session) for c in operation["recipients"]):
+                return {"decision": "deny", "reasons": ["contact_not_connected"]}
             if operation["status"] == "ready":
                 if task["used_count"] >= task["scope"]["max_actions"]:
                     return {"decision": "deny", "reasons": ["action_limit_reached"]}
@@ -776,6 +779,8 @@ class Store(SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                     continue
                 if not self._live(task) or task["revision"] != current["revision"] or not self._proposal_current(current):
                     return {"decision": "deny", "reasons": ["revoked_expired_or_superseded"], "deliveries": current["deliveries"]}
+                if not self._can_send_to(delivery["recipient_urn"], owner_session):
+                    return {"decision": "deny", "reasons": ["contact_not_connected"], "deliveries": current["deliveries"]}
                 body = {"message_id": delivery["message_id"], "recipient_urn": delivery["recipient_urn"],
                         "text": current["wire_text"], "task_id": current["task_id"],
                         "conversation_id": "collaboration:" + current["task_id"],
@@ -830,11 +835,26 @@ class Store(SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
                 if old["fingerprint"] != fingerprint:
                     raise ValueError("Incoming message ID conflicts with its durable contents")
                 return {"message_id": message_id, "status": "already_recorded"}
-            social = self._ingest_social(record)
+            # A signed URN proves the sender's key, not that the local owner has
+            # accepted messages from that sender. Keep unexpected business mail
+            # durable for idempotent helper ACK, but never surface or reinterpret
+            # unknown mail after a later friend acceptance. Only known pending
+            # contacts can release reordered mail when the matching response arrives.
+            sender_state, pending_request_id = (
+                self._sender_connection_state(sender) if self.local_urn
+                and record.get("kind") not in SOCIAL_KINDS else ("connected", None))
+            quarantined = sender_state != "connected"
+            social = None if quarantined else self._ingest_social(record)
             self._put("inbound", message_id, {**record, "fingerprint": fingerprint, "received_at": self.clock(),
-                                             "trust": "peer_statement_not_owner_authority"})
-            protocol = None if social else self.ingest_v2_record(record)
-            return {"message_id": message_id, "status": "recorded", **({"collaboration": protocol} if protocol else {})}
+                                             "trust": "peer_statement_not_owner_authority",
+                                             **({"quarantined": True, "quarantine_reason":
+                                                 "pending_connection" if sender_state == "pending" else "not_connected",
+                                                 **({"quarantine_request_id": pending_request_id}
+                                                    if pending_request_id else {})}
+                                                if quarantined else {})})
+            protocol = None if quarantined or social else self.ingest_v2_record(record)
+            return {"message_id": message_id, "status": "quarantined" if quarantined else "recorded",
+                    **({"collaboration": protocol} if protocol else {})}
 
     def sync_inbox(self, transport):
         recorded = 0
@@ -906,6 +926,8 @@ class Store(SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
             message = self._get("inbound", message_id)
             if not message or message.get("task_id") != task_id or (message.get("deadline") and instant(message["deadline"]) <= self.clock()):
                 raise ValueError("No current inbound proposal for this task")
+            if message.get("quarantined") or not self._can_send_to(message["sender_urn"], owner_session):
+                raise ValueError("Proposal sender is not a connected contact")
             contacts = {c["urn"]: c["contact_id"] for c in self._all("contact") if self._belongs(c, owner_session)}
             sender = contacts.get(message["sender_urn"])
             if not sender or sender not in set(task["scope"]["recipient_ids"]) | set(task["scope"]["participant_ids"]):

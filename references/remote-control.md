@@ -39,8 +39,8 @@ agent-comm-runtime remote serve --hermes-profile <actual_profile> --agent-urn <l
 | `contacts.list` | `{}` | 当前配对主人 profile 的 runtime 联系人、连接状态和 `presence`；不是 helper 公钥缓存 |
 | `contacts.requests` | `{}` | 双向好友请求及 `pending` / `accepted` / `rejected` 状态 |
 | `contacts.add` | 必需 `contact_id`、`aliases`（字符串数组）、`urn` | 确认用户提交的本地联系人并持久发出好友请求；对方接受后才建立连接 |
-| `contacts.respond` | 必需 `request_id`、`decision=accept\|reject`；可选 `contact_id`、`aliases` | 处理收到的好友请求，接受时保存联系人；向对方发送响应并同步双方连接状态 |
-| `messages.send` | 必需 `recipient_urn`、`text`；可选稳定 `message_id` | 向已确认本地联系人持久提交用户输入的确切正文，断线重试复用消息 ID；不代表对方已读 |
+| `contacts.respond` | 必需 `request_id`、`decision=accept\|reject`；可选 `contact_id`、`aliases` | 处理收到的好友请求，接受时保存联系人并建立通讯关系；不授予信任或协作权限，向对方发送响应并同步双方连接状态 |
+| `messages.send` | 必需 `recipient_urn`、`text`；可选稳定 `message_id` | 仅向已 `connected` 的联系人持久提交用户输入的确切正文，断线重试复用消息 ID；不代表对方已读 |
 | `collaboration.state` | 可选 `task_id` | 联系人、请求、资料、事项、动作、待确认项、已作决定、入站、发送记录及提议；读取不授予审批权限 |
 | `inbox.list` | 可选 `task_id` | 已存入 runtime 的内容及 `read` / `read_at`；不是新一次 helper 拉取 |
 | `inbox.mark_read` | 必需 `message_id` | 在 agent 保存已读，两端下一次同步时关闭此消息提醒；不接受好友或批准动作 |

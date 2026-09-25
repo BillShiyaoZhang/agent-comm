@@ -18,7 +18,13 @@ type PeerPin struct {
 	IdentityPublicKey []byte `json:"identity_public_key"`
 	VerificationNote  string `json:"verification_note"`
 	VerifiedAt        int64  `json:"verified_at"`
+	// An empty source is a legacy independent pin. Registry discovery proves
+	// control of this URN, not the human identity behind it.
+	Source       string `json:"source,omitempty"`
+	DiscoveredAt int64  `json:"discovered_at,omitempty"`
 }
+
+const PeerPinSourceRegistry = "registry"
 
 type RootPin struct {
 	PublicKey        []byte `json:"public_key"`
@@ -134,7 +140,44 @@ func PinPeer(keysDir, urn string, public ed25519.PublicKey, verificationNote str
 	}
 	path := peerPinPath(keysDir, urn)
 	if _, err := os.Stat(path); err == nil {
-		return errors.New("peer already pinned; identity rotation requires a separate explicit workflow")
+		existing, loadErr := LoadPeerPin(keysDir, urn)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !ed25519.PublicKey(existing.IdentityPublicKey).Equal(public) {
+			return errors.New("peer already pinned with a different identity key")
+		}
+		if existing.Source != PeerPinSourceRegistry {
+			return errors.New("peer already independently pinned; identity rotation requires a separate explicit workflow")
+		}
+		// An owner who independently checks the same key may strengthen its
+		// provenance without changing the identity binding. Replace atomically
+		// so readers never observe a partial assurance upgrade.
+		data, marshalErr := Canonical(PeerPin{URN: urn, IdentityPublicKey: public, VerificationNote: verificationNote, VerifiedAt: time.Now().Unix()})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		temp, createErr := os.CreateTemp(filepath.Dir(path), ".v2-peer-pin-*")
+		if createErr != nil {
+			return createErr
+		}
+		defer os.Remove(temp.Name())
+		if err := temp.Chmod(0600); err != nil {
+			temp.Close()
+			return err
+		}
+		if _, err := temp.Write(data); err != nil {
+			temp.Close()
+			return err
+		}
+		if err := temp.Sync(); err != nil {
+			temp.Close()
+			return err
+		}
+		if err := temp.Close(); err != nil {
+			return err
+		}
+		return os.Rename(temp.Name(), path)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -143,6 +186,42 @@ func PinPeer(keysDir, urn string, public ed25519.PublicKey, verificationNote str
 		return err
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	return file.Sync()
+}
+
+// PinRegistryPeer records a key from an already verified owner-signed registry
+// bundle. It must never be presented as independent human identity verification.
+// Repeated discovery is idempotent; a different existing key fails closed.
+func PinRegistryPeer(keysDir, urn string, public ed25519.PublicKey) error {
+	if !URNMatchesPublicKey(urn, public) {
+		return errors.New("peer URN does not match registry Ed25519 public key")
+	}
+	if err := os.MkdirAll(filepath.Join(keysDir, "v2_peers"), 0700); err != nil {
+		return err
+	}
+	path := peerPinPath(keysDir, urn)
+	data, err := Canonical(PeerPin{URN: urn, IdentityPublicKey: public, Source: PeerPinSourceRegistry, DiscoveredAt: time.Now().Unix()})
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, os.ErrExist) {
+		pin, loadErr := LoadPeerPin(keysDir, urn)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !ed25519.PublicKey(pin.IdentityPublicKey).Equal(public) {
+			return errors.New("registry identity differs from existing peer pin")
+		}
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -162,7 +241,19 @@ func LoadPeerPin(keysDir, urn string) (*PeerPin, error) {
 	if err := json.Unmarshal(data, &pin); err != nil {
 		return nil, err
 	}
-	if pin.URN != urn || !URNMatchesPublicKey(urn, pin.IdentityPublicKey) || strings.TrimSpace(pin.VerificationNote) == "" {
+	if pin.URN != urn || !URNMatchesPublicKey(urn, pin.IdentityPublicKey) {
+		return nil, errors.New("invalid stored peer pin")
+	}
+	switch pin.Source {
+	case "":
+		if strings.TrimSpace(pin.VerificationNote) == "" || pin.VerifiedAt <= 0 || pin.DiscoveredAt != 0 {
+			return nil, errors.New("invalid stored peer pin")
+		}
+	case PeerPinSourceRegistry:
+		if pin.VerificationNote != "" || pin.VerifiedAt != 0 || pin.DiscoveredAt <= 0 {
+			return nil, errors.New("invalid registry-discovered peer pin")
+		}
+	default:
 		return nil, errors.New("invalid stored peer pin")
 	}
 	return &pin, nil

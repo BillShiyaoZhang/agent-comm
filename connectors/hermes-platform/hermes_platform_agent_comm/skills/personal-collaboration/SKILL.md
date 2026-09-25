@@ -30,6 +30,16 @@ expected platform ID before relying on v2. Older bundles and manually managed
 helpers require a separate trusted pin. The platform's own bootstrap response
 is not an independent identity check.
 
+For first contact on the updated single-platform helper, an exact peer URN is
+enough for the transport to look up and verify its public key through Registry.
+This authenticates the holder of that URN, not a person's real-world identity.
+If the owner means a particular person, obtain that person's agent URN through
+a channel the owner accepts. The v0.9.0 bundle supports URN-only first contact; the older v0.8.0
+bundle still needs both peers to verify and manually pin full Ed25519 public
+keys. Inspect the installed helper before describing automatic discovery as
+available. Existing manual pins must
+not be silently replaced. Compliance-policy authorization remains separate.
+
 ## Export a friend invitation
 
 When asked to share your agent address or introduce a confirmed friend, call
@@ -87,8 +97,9 @@ confirmed contact binding.
    external messages. This does not wake a native owner conversation in the
    background. Peer requests never change grants or confirm proposals by themselves.
 2. Resolve familiar names with `resolve_contact` and `name`. If absent, obtain an
-   explicit URN from a trusted card and call `prepare_contact` with `contact_id`,
-   `aliases` and `urn`. A matching display name alone is insufficient.
+   exact URN through a channel accepted by the owner and call `prepare_contact`
+   with `contact_id`, `aliases` and `urn`. A matching display name alone is
+   insufficient to identify a particular person's agent.
 3. Register each intended material snapshot with `register_resource`,
    `resource_id`, `title`, `text`. Registration alone grants no disclosure rights.
 4. Call `prepare_task` with a stable `task_id` and the scope below. The component
@@ -126,15 +137,23 @@ local queue acceptance alone is not an established connection. Read incoming
 and outgoing requests with `contact_requests`. To accept or reject, call
 `prepare_contact_response` with `request_id`, `decision` (`accept` or `reject`),
 and optionally `contact_id` / `aliases`, then `confirm` its exact approval.
-The peer receives the result and both agents store the connection state.
+An unknown peer's valid URN and handshake may make its request available for
+review; neither verification nor reading accepts the request. The peer receives
+the owner's decision and both agents store the connection state. Acceptance
+allows ordinary communication with a `connected` contact. It does not verify
+the peer's claimed real-world identity, mark it `trusted`, or grant a task,
+resource disclosure, tool action, console access, or gateway disclosure consent.
 
-For an ordinary message, resolve the contact and call `prepare_message` with
+For an ordinary message, resolve a `connected` contact and call `prepare_message` with
 `recipient_urn`, `text` and optionally a stable `message_id`, then `confirm`.
 The approved exact content is durably queued; the same ID is retried after a
 connection failure. `inbox` shows message content; `mark_read` with `message_id`
 records the read state on the agent and dismisses that message's reminder on
 both the local companion and paired web. Reading a friend request does not
-accept it. Connected contacts expose `presence.status` and its observation expiry;
+accept it. Business messages from unknown or rejected senders are quarantined
+and ACKed; out-of-order
+business messages from a known pending contact become visible only after its
+acceptance response. Connected contacts expose `presence.status` and its observation expiry;
 `unknown` must never be presented as proof that the peer is offline.
 
 ## Durable attention and native recovery

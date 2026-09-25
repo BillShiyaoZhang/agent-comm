@@ -8,6 +8,7 @@ import unittest
 
 from agent_comm_runtime.store import Store
 from agent_comm_runtime.collaboration_v2 import PROTOCOL, canonical, digest, timestamp
+from agent_comm_runtime.social import key as social_key
 
 
 NOW = datetime(2026, 10, 1, tzinfo=timezone.utc).timestamp()
@@ -77,12 +78,21 @@ class CollaborationV2Tests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.now = NOW
-        self.a = Store(Path(self.temp.name) / "a.sqlite3", clock=lambda: self.now, local_urn=ALICE)
-        self.b = Store(Path(self.temp.name) / "b.sqlite3", clock=lambda: self.now, local_urn=BOB)
+        self.a = Store(Path(self.temp.name) / "a.sqlite3", clock=lambda: self.now,
+                       local_urn=ALICE, owner_principal="profile-a")
+        self.b = Store(Path(self.temp.name) / "b.sqlite3", clock=lambda: self.now,
+                       local_urn=BOB, owner_principal="profile-b")
         self.addCleanup(self.a.close)
         self.addCleanup(self.b.close)
         approve(self.a, self.a.prepare_contact("bob", ["私密称呼甲"], BOB, OWNER_A), OWNER_A)
         approve(self.b, self.b.prepare_contact("alice", ["私密称呼乙"], ALICE, OWNER_B), OWNER_B)
+        # These protocol tests begin after both owners accepted friendship.
+        with self.a._transaction():
+            self.a._put("connection", social_key("profile-a", BOB),
+                        {"owner_id": "profile-a", "peer_urn": BOB, "request_id": "accepted-a", "connected_at": self.now})
+        with self.b._transaction():
+            self.b._put("connection", social_key("profile-b", ALICE),
+                        {"owner_id": "profile-b", "peer_urn": ALICE, "request_id": "accepted-b", "connected_at": self.now})
         approve(self.a, self.a.prepare_task("task-a", scope("bob"), OWNER_A), OWNER_A)
         approve(self.b, self.b.prepare_task("task-b", scope("alice"), OWNER_B), OWNER_B)
         self.bus = Bus()
@@ -102,6 +112,39 @@ class CollaborationV2Tests(unittest.TestCase):
         dispatched = store.dispatch(op, owner, transport)
         self.assertEqual(dispatched["status"], "accepted", dispatched)
         return dispatched
+
+    def test_existing_task_grant_does_not_bypass_friendship_gate(self):
+        with self.a._transaction():
+            self.a._db.execute("DELETE FROM collaboration_records WHERE kind='connection' AND id=?",
+                               (social_key("profile-a", BOB),))
+        action = {"capability": "share_slots", "recipient_ids": ["bob"],
+                  "payload": {"slots": [{"start": "2026-10-03T09:00:00Z", "end": "2026-10-03T09:30:00Z"}]}}
+        prepared = self.a.prepare_action("task-a", "unconnected-v1", action, OWNER_A)
+        if prepared["decision"] == "ask":
+            approve(self.a, prepared, OWNER_A)
+        self.assertEqual(self.a.dispatch("unconnected-v1", OWNER_A, self.ta)["reasons"], ["contact_not_connected"])
+        v2 = self.a.prepare_collaboration("task-a", "unconnected-v2", "unconnected-v2-op",
+                                          "invite", {"peer_id": "bob"}, OWNER_A)
+        self.assertEqual(v2["reasons"], ["contact_not_connected"])
+        self.assertEqual(self.bus.sent, {})
+
+    def test_other_profile_connection_cannot_advance_bound_collaboration(self):
+        self.terms()
+        before = copy.deepcopy(self.b._get("v2_collaboration", "shared-1"))
+        with self.b._transaction():
+            self.b._put("local_profile", "owner", {"owner_id": "profile-c"})
+        approve(self.b, self.b.prepare_contact("alice-other", ["Alice"], ALICE,
+                                               "profile-c|native"), "profile-c|native")
+        with self.b._transaction():
+            self.b._put("connection", social_key("profile-c", ALICE),
+                        {"owner_id": "profile-c", "peer_urn": ALICE,
+                         "request_id": "accepted-c", "connected_at": self.now})
+        self.send(self.a, "accept")
+        wire = self.tb.retrieve()[0]
+        self.assertEqual(self.b.ingest_message(wire)["status"], "recorded")
+        self.assertEqual(self.b._get("v2_collaboration", "shared-1"), before)
+        self.assertEqual(self.b.inbox(OWNER_B)["messages"], [])
+        self.assertEqual(self.b.inbox("profile-c|native")["messages"], [])
 
     def transfer(self, recipient):
         transport = self.ta if recipient is self.a else self.tb

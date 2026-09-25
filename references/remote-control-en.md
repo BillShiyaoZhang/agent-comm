@@ -39,8 +39,8 @@ Availability depends on both the pairing allowlist and the host adapter. First c
 | `contacts.list` | `{}` | Runtime contacts, connection state and `presence` for the paired owner, separate from helper key caches |
 | `contacts.requests` | `{}` | Incoming/outgoing friend requests with `pending`, `accepted` or `rejected` state |
 | `contacts.add` | Required `contact_id`, `aliases` (string array), `urn` | Confirms the user's local contact entry and durably sends a friend request; connection requires peer acceptance |
-| `contacts.respond` | Required `request_id`, `decision=accept\|reject`; optional `contact_id`, `aliases` | Handles an incoming request, saves an accepted contact and sends the response to synchronize both agents |
-| `messages.send` | Required `recipient_urn`, `text`; optional stable `message_id` | Durably submits the user's exact content to a confirmed local contact, reusing the ID after failures; does not imply peer reading |
+| `contacts.respond` | Required `request_id`, `decision=accept\|reject`; optional `contact_id`, `aliases` | Handles an incoming request; acceptance saves a contact and establishes communication without granting trust or collaboration authority, then sends the response to synchronize both agents |
+| `messages.send` | Required `recipient_urn`, `text`; optional stable `message_id` | Durably submits the user's exact content only to a `connected` contact, reusing the ID after failures; does not imply peer reading |
 | `collaboration.state` | Optional `task_id` | Contacts, requests, resources, tasks, actions, pending/completed decisions, inbox, sent messages and proposals; reads confer no approval authority |
 | `inbox.list` | Optional `task_id` | Previously persisted message content and `read` / `read_at`, without a fresh helper retrieval |
 | `inbox.mark_read` | Required `message_id` | Stores read state on the agent; both clients clear the message reminder on their next sync. Does not accept friends or approve actions |

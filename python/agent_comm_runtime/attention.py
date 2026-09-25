@@ -88,12 +88,17 @@ class AttentionMixin(AttentionResumeMixin):
                             created_at=approval.get("created_at"))
 
     def _attention_inbound(self, message, owner_session=None):
+        if message.get("quarantined"):
+            return
         # Visibility uses the same confirmed local contacts as Store.inbox.
         contacts = [c for c in self._all("contact") if c.get("urn") == message.get("sender_urn")
-                    and (owner_session is None or self._belongs(c, owner_session))]
+                    and (owner_session is None or self._belongs(c, owner_session))
+                    and (not self.local_urn or self._contact_status(c) == "connected")]
         owners = {c.get("owner_id", self._principal(c.get("owner_session", ""))) for c in contacts}
         owners.discard("")
-        if not contacts and self._mail_owner():
+        if self.local_urn:
+            owners.intersection_update({self._mail_owner()})
+        if not contacts and not self.local_urn and self._mail_owner():
             owners.add(self._mail_owner())
         if message.get("kind") in {"contact.request", "contact.response"}:
             return

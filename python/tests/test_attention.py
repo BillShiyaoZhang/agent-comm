@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from agent_comm_runtime import Store
 from agent_comm_runtime.remote import RemoteBridge
+from agent_comm_runtime.social import key as social_key
 
 
 class AttentionTests(unittest.TestCase):
@@ -15,7 +16,8 @@ class AttentionTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.now = 1789500000
         self.path = Path(self.tmp.name) / "collaboration.sqlite3"
-        self.store = Store(self.path, clock=lambda: self.now, local_urn="urn:agent-comm:agent:alice")
+        self.store = Store(self.path, clock=lambda: self.now,
+                           local_urn="urn:agent-comm:agent:alice", owner_principal="alice")
         self.addCleanup(lambda: self.store.close())
         self.owner = "alice|native-one"
 
@@ -25,8 +27,14 @@ class AttentionTests(unittest.TestCase):
         return self.store.finish_confirmation(result["approval_id"], lease["token"], owner, "同意")
 
     def contact(self, owner=None, contact_id="bob", urn="urn:agent-comm:agent:bob"):
-        result = self.store.prepare_contact(contact_id, [contact_id], urn, owner or self.owner)
+        owner = owner or self.owner
+        result = self.store.prepare_contact(contact_id, [contact_id], urn, owner)
         self.approve(result, owner)
+        # Attention tests focus on business mail after friendship acceptance.
+        with self.store._transaction():
+            self.store._put("connection", social_key(owner.split("|", 1)[0], urn),
+                            {"owner_id": owner.split("|", 1)[0], "peer_urn": urn,
+                             "request_id": "accepted-" + contact_id, "connected_at": self.now})
 
     def message(self, message_id="hello", **extra):
         return {"message_id": message_id, "sender_urn": "urn:agent-comm:agent:bob", "text": "Secret contents should never be in a lock-screen notice", **extra}
@@ -62,11 +70,12 @@ class AttentionTests(unittest.TestCase):
         self.assertEqual(self.store.attention(self.owner, first["cursor"])["items"], [])
         self.assertEqual(self.store.attention("someone-else|native")["items"], [])
 
-    def test_unknown_contact_only_becomes_visible_after_native_binding(self):
+    def test_unknown_mail_stays_quarantined_after_later_contact_binding(self):
         self.store.ingest_message(self.message())
         self.assertEqual(self.store.attention(self.owner)["items"], [])
         self.contact()
-        self.assertEqual(len([i for i in self.store.attention(self.owner)["items"] if i["kind"] == "peer_message_received"]), 1)
+        self.assertEqual([i for i in self.store.attention(self.owner)["items"] if i["kind"] == "peer_message_received"], [])
+        self.assertEqual(self.store.inbox(self.owner)["messages"], [])
 
     def test_control_traffic_and_peer_approval_claims_never_create_approval(self):
         self.contact()

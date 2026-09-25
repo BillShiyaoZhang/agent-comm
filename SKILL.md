@@ -42,6 +42,8 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 
 本机 `POST /api/v1/contacts` 登记通信公钥和地址缓存；没有 HTTP 联系人列表/删除接口。协作中的人名、别名与已确认 URN 绑定由 runtime 管理，是不同的数据层。通信联系人或 `trusted` 标记不会授予 Hermes pairing、主人身份、工具执行或资料披露权限。
 
+更新后的单 Platform helper 可按准确 URN 从 Registry 自动解析、验签并缓存身份公钥，供首次好友申请使用；v0.9.0 接入包支持此首联；旧版 v0.8.0 仍须双方手工核对并 `v2-pin-peer` 固定完整公钥。自动验钥只认证该 URN 的密钥持有者，不认证其现实身份。已有不同的手工固定值不能被自动查询覆盖。策略根与 Platform PeerID 的独立固定、精确合规策略的各自主人工授权仍是另外的前提。跨 Platform 通信不在此首联流程内。
+
 启动、联系人 JSON 和原始签名/加解密命令见 [Helper 接口](references/helper-api.md)。
 
 <a id="reliable-messaging"></a>
@@ -63,7 +65,7 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 
 该入口覆盖联系人解析与确认、资源登记、任务/动作准备与原生确认、幂等发送、提议导入、撤销及入站，并自动保存内部审计记录。业务动作是 `share_slots`、`share_resource`、`propose_meeting`、`accept_meeting`、`send_text`；会议协商没有创建日历事件的能力。
 
-`prepare_contact` / `confirm` 确认本地联系人并发出好友请求；连接状态保持 `pending`，直到对方接受后才为 `connected`。用 `contact_requests` 查看双向请求，以 `prepare_contact_response`（`request_id`、`decision=accept|reject`，可选 `contact_id`、`aliases`）再 `confirm` 处理收到的请求。普通消息使用 `prepare_message`（`recipient_urn`、`text`，可选稳定 `message_id`）再 `confirm`；接收方需先确认为本地联系人。`inbox` 读取内容，`mark_read`（`message_id`）将已读写回 agent 并关闭两端相应待办提醒。已连接联系人的 `presence` 包含在线观察与有效期，过期的 `unknown` 不是离线证明。
+`prepare_contact` / `confirm` 按主人指定的准确 URN 保存本地联系人并发出好友请求；本地绑定可为 `unverified`，申请保持 `pending`，直到对方接受后才为 `connected`。未知 URN 发来的已认证申请可待主人决定；用 `contact_requests` 查看双向请求，以 `prepare_contact_response`（`request_id`、`decision=accept|reject`，可选 `contact_id`、`aliases`）再 `confirm` 处理。接受仅建立通讯关系，不提升 `trusted`、证明现实身份或授予协作权限。通过 Python Runtime、Hermes 协作工具或受管 Web 的普通消息与 v1/v2 业务发送须面向 `connected` 联系人，使用 `prepare_message`（`recipient_urn`、`text`，可选稳定 `message_id`）再 `confirm`；接收方 Runtime 将未知或已拒绝发送者的业务消息隔离并 ACK，已知 `pending` 联系人的乱序业务消息在接受回执后才进入可见收件。低层 Go helper 的 `/api/v2/mq/store` 不查询好友连接状态，直接调用不能绕过接收方 Runtime 的隔离。`inbox` 读取内容，`mark_read`（`message_id`）将已读写回 agent 并关闭两端相应待办提醒。已连接联系人的 `presence` 包含在线观察与有效期，过期的 `unknown` 不是离线证明。
 
 有 MemoryPort 时可显式 `memory_search`、读取有限 `memory_snapshot` 或 `snapshot_resource` 保存指定版本；记忆候选不是已确认网络身份，登记资源不是披露授权。`wake`/`notification` 是可选宿主端口；接口存在不等于已实现后台唤醒或自动推进。
 

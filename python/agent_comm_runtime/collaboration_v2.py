@@ -247,6 +247,8 @@ class CollaborationV2Mixin:
                         raise ValueError("Invitation topic differs from the local mandate")
                 if not self._belongs(peer, owner_session) or peer_id not in task["scope"]["recipient_ids"]:
                     raise ValueError("Peer must be a confirmed recipient of the local mandate")
+                if not self._can_send_to(peer["urn"], owner_session):
+                    return {"decision": "deny", "reasons": ["contact_not_connected"]}
                 validate_urn(self.local_urn)
                 if peer["urn"] == self.local_urn:
                     raise ValueError("A collaboration requires a distinct peer")
@@ -431,6 +433,9 @@ class CollaborationV2Mixin:
                 return self._v2_operation_view(op)
             if op["status"] not in {"ready", "sending"} or not self._v2_operation_current(op):
                 return {"decision": "deny", "reasons": ["not_authorized_or_superseded"]}
+            peer = self._get("v2_collaboration", op["collaboration_id"]) or op.get("new_collaboration")
+            if not peer or not self._can_send_to(peer["peer_urn"], owner_session):
+                return {"decision": "deny", "reasons": ["contact_not_connected"]}
             if worker_context is not None:
                 worker, _ = self._check_worker_context(worker_context)
                 if (op["task_id"] != worker_context.task_id or op["owner_id"] != worker_context.principal_id
@@ -486,6 +491,8 @@ class CollaborationV2Mixin:
             delivery = op["deliveries"][0]
             packet = op["packet"]
             c = self._v2_collaboration(op["collaboration_id"], owner_session)
+            if not self._can_send_to(packet["recipient_urn"], owner_session):
+                return {"decision": "deny", "reasons": ["contact_not_connected"]}
             record = self._v2_record(c, self.local_urn, packet["event_id"])
             if record["status"] == "reserved":
                 # Linearize the intention to send with the bounded helper call.
@@ -836,6 +843,8 @@ class CollaborationV2Mixin:
                 raise ValueError("Invitation conflicts with an existing wire record")
             self._put("v2_invitation", key, old or invitation)
             return {"protocol": PROTOCOL, "status": "invitation_recorded_not_authorized"}
+        if self._mail_owner() and c["owner_id"] != self._mail_owner():
+            return None  # An authenticated peer cannot advance another profile's collaboration.
         if packet["sender_urn"] != c["peer_urn"]:
             raise ValueError("Shared ID does not authorize a different peer")
         record = self._v2_ingest_bound(c, packet)
@@ -852,7 +861,8 @@ class CollaborationV2Mixin:
             items = [c for c in self._all("v2_collaboration") if self._belongs(c, owner_session)
                      and (task_id is None or c["task_id"] == task_id)]
             ids = {c["collaboration_id"] for c in items}
-            peers = {c["urn"] for c in self._all("contact") if self._belongs(c, owner_session)}
+            peers = {c["urn"] for c in self._all("contact") if self._belongs(c, owner_session)
+                     and (not self.local_urn or self._contact_status(c) == "connected")}
             invitations = [{"message_id": r["message_id"], "collaboration_id": r["packet"]["collaboration_id"],
                             "sender_urn": r["packet"]["sender_urn"], "topic": r["packet"]["payload"]["topic"],
                             "expires_at": r["packet"]["expires_at"], "authority": "peer_statement"}

@@ -4,12 +4,14 @@
 
 ## 启用与信任来源
 
-在双方各自设备上，先通过平台之外的可信渠道取得并核对完整 Ed25519 公钥，再明确固定；策略签名根和平台 libp2p PeerID 也必须从可信安装/部署渠道取得。不能把同一平台未认证的 bootstrap 响应当作固定 PeerID 的证据。URN 自证明公钥属于该 URN，但**不会证明该 URN 就是现实中的某个人**。旧联系人 `trusted` 和平台注册表结果不自动成为 v2 身份锚。
+策略签名根和平台 libp2p PeerID 必须从可信安装/部署渠道取得；不能把同一平台未认证的 bootstrap 响应当作固定 PeerID 的证据。更新后的单 Platform helper 可仅凭准确 URN 向 Registry 查询对应公钥，验证 URN 指纹、Ed25519 公钥、派生 PeerID、X25519 公钥和注册签名，再缓存该绑定。握手签名证明对端持有该 URN 的私钥；**这不证明 URN 属于现实中的某个人**。主人若需要认定现实身份，须从可信渠道核对准确 URN。未知 URN 的入站申请在验证后仍是未确认联系人，只能交主人接受或拒绝，不能由握手自动提升 `trusted` 或协作权限。本流程仅覆盖双方使用同一个 Platform；跨 Platform 的身份发现与路由不在本次实现范围内。
 
 ```text
 agent-comm-helper v2-pin-policy-root <keys_dir> <root_public_key_hex> <expected_platform_peer_id> <independent_verification_note>
 agent-comm-helper v2-pin-peer <keys_dir> <peer_urn> <peer_ed25519_public_key_hex> <independent_verification_note>
 ```
+
+`v2-pin-peer` 仍供已有手工固定记录和需要额外带外核对的场景使用。它不是更新后单 Platform 好友首联的必需步骤；自动发现不能覆盖一个不同的已有固定公钥。v0.9.0 接入包支持 URN 首联自动发现；旧版 v0.8.0 仍须双方手工核对并固定完整公钥。安装时须核对实际下载清单与包版本，不能仅凭源码判断已升级。
 
 旧版只固定根公钥、没有平台 ID 的 pin 文件无法启用 v2；独立核对 PeerID 后可用上面的命令、相同根公钥为旧文件补上 ID，不能从 bootstrap 自动补齐，也不能覆盖不同根或已有平台 ID。v2 完整接入包可把经可信发布渠道核对的公开根和 PeerID 放入校验清单覆盖的 `policy-trust.json`，安装脚本以 `v2-ensure-policy-root` 固定到原身份目录；同值重装幂等，异值拒绝且不自动轮换。没有该文件的旧安装包不能声称已固定。新 helper 缺少 pin 时拒绝普通消息发送。发布应先部署签名 `private` 兼容策略并独立分发根与 PeerID，再升级 helper。
 
@@ -26,11 +28,13 @@ agent-comm-helper v2-disallow-compliance <keys_dir> <explicit_revocation_note>
 
 `v2/` 包定义固定字段顺序的紧凑 JSON；签名字段也出现，签名预映像中该字段为 `null`。`Canonical` 不做 HTML 转义，解析器会重编码比较，拒绝重复、额外或非规范字段。所有 `[]byte` 字段用标准 base64；时间为 Unix 秒。线格式、Go/TypeScript 对照样本在 [`v2/testdata/interop.json`](../../v2/testdata/interop.json)。
 
-1. A 用已固定的 B 身份检查 Registry 中 B 自签的 X25519 公钥。双方经平台交换 Ed25519 已签的 `Init`、`Accept`，各包含一次性 X25519 公钥、随机数、策略摘要、模式与套件。双方核对后由临时 ECDH 与完整握手摘要派生本次密钥，并相互核验 `Finished` MAC。
+1. A 按 B 的准确 URN 从 Registry 解析并验证身份公钥与 B 自签的 X25519 公钥；已有手工 pin 时还须与之相符。B 可对未知 A 验证同样的密码学关系，但此时 A 仍是未确认联系人。双方经平台交换 Ed25519 已签的 `Init`、`Accept`，各包含一次性 X25519 公钥、随机数、策略摘要、模式与套件。双方核对后由临时 ECDH 与完整握手摘要派生本次密钥，并相互核验 `Finished` MAC。首个 `contact.request` 可在未建立通讯录连接时送达；通过 Python Runtime、Hermes 协作工具或受管 Web 发普通消息，须等申请被接受、联系人为 `connected`。
 2. `private` 正文密钥只从已完成的临时会话与单调序号派生。信封没有密钥槽。平台只见路由和密文。
 3. `compliance` 每条消息生成独立随机 CEK，AES-256-GCM 加密正文**一次**；RFC 9180 X25519/HKDF-SHA256/AES-256-GCM HPKE 分别给收件方和指定网关封装同一 CEK。网关解开正文并签准入回执；回执中的 HMAC 持钥证明必须与收件方实际解开的 CEK 一致。平台无须持有 Agent 私钥。
 
 `Policy` 由独立固定的 Ed25519 根签署，包含平台 ID、epoch、有效期、模式、套件、网关加密公钥、回执签名公钥、受管 Web issuer 公钥。域分离前缀是 `agent-comm-v2-policy\x00`、`agent-comm-v2-handshake\x00`、`agent-comm-v2-envelope\x00`、`agent-comm-v2-receipt\x00`。哈希是完整已签规范字节的 SHA-256 小写 hex。网关持钥证明是 `HMAC-SHA256(HKDF-SHA256(CEK, zero_salt_32, "agent-comm-v2/admission-proof"), SHA256(raw_envelope))`。
+
+Go helper 的本机 `POST /api/v2/mq/store` 是低层通信接口，会检查 URN/Registry 身份绑定、已固定信任锚、签名策略及适用的本机合规授权；它不读取 Python Runtime 的好友状态。直接调用可能把未连接发送者的业务消息送到对方 helper；若对方使用 Runtime，未知或已拒绝发送者的业务消息会被持久隔离并 ACK，已知 `pending` 联系人的乱序业务消息要等接受回执后才进入可见收件。不能把 helper 接受或平台回执当作好友接受或业务许可。
 
 握手、正文和回执必须与**当前**签名策略完全一致。收到更高 epoch 后删除旧会话，所有未发完的旧请求（包括还没加密的本机明文）标为 `quarantined`；已生成的旧信封保留原字节，不以同一消息 ID 重新加密。旧队列默认不当作新模式消息交付。`platform_queued` 只表示平台准入，入站在验签、解密、验证回执并持久写入后才 ACK；业务完成另算。
 

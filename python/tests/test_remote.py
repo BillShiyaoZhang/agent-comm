@@ -12,6 +12,7 @@ from unittest.mock import patch
 from agent_comm_runtime.daemon import main
 from agent_comm_runtime.remote import PROTOCOL, READ_METHODS, WRITE_METHODS, RemoteBridge, hermes_principal
 from agent_comm_runtime.store import Store
+from agent_comm_runtime.social import key as social_key
 
 NOW = 2_000_000_000
 AGENT = "urn:agent-comm:agent:hermes"
@@ -92,9 +93,14 @@ class TestRemote(unittest.TestCase):
         return json.loads(response["text"])
 
     def contact(self, name, owner):
-        staged = self.store.prepare_contact(name, [name], "urn:agent-comm:agent:" + name, owner + "|native")
+        urn = "urn:agent-comm:agent:" + name
+        staged = self.store.prepare_contact(name, [name], urn, owner + "|native")
         lease = self.store.begin_confirmation(staged["approval_id"], owner + "|native")
         self.store.finish_confirmation(staged["approval_id"], lease["token"], owner + "|native", "同意")
+        with self.store._transaction():
+            self.store._put("connection", social_key(owner, urn),
+                            {"owner_id": owner, "peer_urn": urn,
+                             "request_id": "accepted-" + name, "connected_at": self.now})
 
     def test_two_identity_helper_rpc_has_correlated_response_and_ordered_ack(self):
         _, response = self.submit()

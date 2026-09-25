@@ -12,6 +12,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from hermes_platform_agent_comm.collaboration.store import Store
 from hermes_platform_agent_comm.collaboration.transport import HelperTransport
+from agent_comm_runtime.social import key as social_key
 
 
 NOW = datetime(2026, 10, 1, tzinfo=timezone.utc).timestamp()
@@ -38,6 +39,15 @@ def meeting(peer="bob", capability="propose_meeting", version=1, **changes):
 def approve(store, request, owner="profile-a|conversation-1", answer="可以"):
     lease = store.begin_confirmation(request["approval_id"], owner)
     return store.finish_confirmation(request["approval_id"], lease["token"], owner, answer)
+
+
+def accepted_contact(store, owner, urn):
+    """These task tests start after the separate friend acceptance flow."""
+    principal = owner.split("|", 1)[0]
+    with store._transaction():
+        store._put("connection", social_key(principal, urn),
+                   {"owner_id": principal, "peer_urn": urn,
+                    "request_id": "accepted-" + urn.rsplit(":", 1)[-1], "connected_at": NOW})
 
 
 class Bus:
@@ -75,18 +85,22 @@ class StoreTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.owner = "profile-a|conversation-1"
-        self.store = Store(Path(self.temp.name) / "alice.sqlite3", clock=lambda: NOW, local_urn=ALICE)
+        self.store = Store(Path(self.temp.name) / "alice.sqlite3", clock=lambda: NOW,
+                           local_urn=ALICE, owner_principal="profile-a")
         self.addCleanup(self.store.close)
         approve(self.store, self.store.prepare_contact("bob", ["老王", "王哥"], BOB, self.owner))
+        accepted_contact(self.store, self.owner, BOB)
 
     def start(self, **changes):
         approve(self.store, self.store.prepare_task("meeting", scope(**changes), self.owner))
 
     def test_two_independent_owners_exchange_and_accept_current_proposal(self):
         peer_owner = "profile-b|conversation-2"
-        peer = Store(Path(self.temp.name) / "bob.sqlite3", clock=lambda: NOW, local_urn=BOB)
+        peer = Store(Path(self.temp.name) / "bob.sqlite3", clock=lambda: NOW,
+                     local_urn=BOB, owner_principal="profile-b")
         self.addCleanup(peer.close)
         approve(peer, peer.prepare_contact("alice", ["合作伙伴"], ALICE, peer_owner), peer_owner)
+        accepted_contact(peer, peer_owner, ALICE)
         approve(peer, peer.prepare_task("meeting", scope("alice"), peer_owner), peer_owner)
         self.start()
         bus = Bus()
@@ -171,6 +185,7 @@ class StoreTests(unittest.TestCase):
 
     def test_partial_send_then_revocation_does_not_send_remaining_recipient(self):
         approve(self.store, self.store.prepare_contact("chen", ["陈"], "urn:agent-comm:agent:chen", self.owner))
+        accepted_contact(self.store, self.owner, "urn:agent-comm:agent:chen")
         self.start(recipient_ids=["bob", "chen"])
         action = {"capability": "share_slots", "recipient_ids": ["bob", "chen"], "payload": {"slots": [
             {"start": "2026-10-06T14:00:00Z", "end": "2026-10-06T14:30:00Z"}]}}
@@ -227,6 +242,7 @@ class StoreTests(unittest.TestCase):
             peer = f"contact-{index}"
             peers.append(peer)
             approve(self.store, self.store.prepare_contact(peer, [peer], f"urn:agent-comm:agent:{peer}", self.owner))
+            accepted_contact(self.store, self.owner, f"urn:agent-comm:agent:{peer}")
         self.start(recipient_ids=peers)
         action = {"capability": "share_slots", "recipient_ids": peers, "payload": {"slots": [
             {"start": "2026-10-06T14:00:00Z", "end": "2026-10-06T14:30:00Z"}]}}

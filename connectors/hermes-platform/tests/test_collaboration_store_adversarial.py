@@ -13,6 +13,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from hermes_platform_agent_comm.collaboration.store import Store
+from agent_comm_runtime.social import key as social_key
 
 OWNER = "profile-a|session-one"
 RESUMED = "profile-a|session-two"
@@ -117,7 +118,7 @@ class StoreAdversarialTests(unittest.TestCase):
         self.temp.cleanup()
 
     def open_store(self):
-        store = Store(self.path, clock=self.clock, local_urn=LOCAL_URN)
+        store = Store(self.path, clock=self.clock, local_urn=LOCAL_URN, owner_principal="profile-a")
         self.stores.append(store)
         return store
 
@@ -133,9 +134,15 @@ class StoreAdversarialTests(unittest.TestCase):
         return store.finish_confirmation(approval_id, ui["token"], owner, text)
 
     def contact(self, contact_id="friend", *, owner=OWNER):
+        urn = "urn:agent-comm:agent:" + contact_id
         request = self.store.prepare_contact(contact_id, [contact_id, "称呼-" + contact_id],
-            "urn:agent-comm:agent:" + contact_id, owner)
+            urn, owner)
         self.assertEqual(self.answer(request, owner=owner)["decision"], "allow")
+        principal = owner.split("|", 1)[0]
+        with self.store._transaction():
+            self.store._put("connection", social_key(principal, urn),
+                            {"owner_id": principal, "peer_urn": urn,
+                             "request_id": "accepted-" + contact_id, "connected_at": self.clock()})
 
     def task(self, *, task_id="task-1", scope=None):
         self.contact()
@@ -530,6 +537,20 @@ store.dispatch('op-1', 'profile-a|session-one', CrashTransport())
         self.assertEqual(self.store.inbox(OWNER)["messages"], [])
         with self.assertRaises(ValueError):
             self.store.import_proposal("task-1", "wire-1", OWNER)
+
+    def test_quarantined_proposal_cannot_be_imported_by_message_id(self):
+        self.task()
+        with self.store._transaction():
+            self.store._db.execute("DELETE FROM collaboration_records WHERE kind='connection' AND id=?",
+                                   (social_key("profile-a", "urn:agent-comm:agent:friend"),))
+        payload = meeting()["payload"]
+        payload["participant_ids"] = ["urn:agent-comm:agent:friend", LOCAL_URN]
+        packet = {"protocol": "agent-comm-collaboration/v1", "capability": "propose_meeting",
+                  "payload": payload, "text": "提案"}
+        self.assertEqual(self.store.ingest_message(incoming(text=json.dumps(packet)))["status"], "quarantined")
+        with self.assertRaisesRegex(ValueError, "not a connected contact"):
+            self.store.import_proposal("task-1", "wire-1", OWNER)
+        self.assertEqual(self.store._all("proposal"), [])
 
     def test_lost_ack_after_ingest_recovers_without_losing_or_duplicating_message(self):
         self.task()

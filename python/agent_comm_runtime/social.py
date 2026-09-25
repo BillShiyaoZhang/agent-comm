@@ -64,6 +64,9 @@ class SocialMixin:
         packet = {"protocol": SOCIAL_PROTOCOL, "type": "request", "request_id": request_id}
         request = {"request_id": request_id, "owner_id": owner, "direction": "outgoing",
                    "peer_urn": contact["urn"], "contact_id": contact["contact_id"], "status": "pending",
+                   "attempt": 1 + len([r for r in self._all("contact_request")
+                                       if r.get("owner_id") == owner and r["peer_urn"] == contact["urn"]
+                                       and r["direction"] == "outgoing"]),
                    "created_at": self.clock(), "updated_at": self.clock()}
         self._put("contact_request", request_id, request)
         self._queue_social({"message_id": request_id, "recipient_urn": contact["urn"],
@@ -94,9 +97,58 @@ class SocialMixin:
         requests = [r for r in self._all("contact_request") if r.get("owner_id") == owner
                     and r["peer_urn"] == urn and r["direction"] == "outgoing"]
         if requests:
-            latest = max(requests, key=lambda r: r["created_at"])
+            latest = max(requests, key=lambda r: (r.get("attempt", 0), r["created_at"], r["request_id"]))
             return {"accepted": "connected", "rejected": "rejected"}.get(latest["status"], "pending")
         return "unverified"
+
+    def _sender_connection_state(self, sender_urn):
+        """Classify business mail without treating a local binding as consent."""
+        mail_owner = self._mail_owner()
+        if not mail_owner:
+            return "not_connected", None
+        statuses = [self._contact_status(c) for c in self._all("contact")
+                    if c["urn"] == sender_urn and c["owner_id"] == mail_owner]
+        if "connected" in statuses:
+            return "connected", None
+        if "pending" in statuses:
+            requests = [r for r in self._all("contact_request") if r.get("owner_id") == mail_owner
+                        and r["peer_urn"] == sender_urn and r["direction"] == "outgoing"
+                        and r["status"] == "pending"]
+            if requests:
+                latest = max(requests, key=lambda r: (r.get("attempt", 0), r["created_at"], r["request_id"]))
+                return "pending", latest["request_id"]
+        return "not_connected", None
+
+    def _can_send_to(self, recipient_urn, owner_session):
+        contacts = [c for c in self._all("contact") if c["urn"] == recipient_urn
+                    and self._belongs(c, owner_session)]
+        return bool(contacts and (not self.local_urn or any(
+            self._contact_status(c) == "connected" for c in contacts)))
+
+    def _promote_pending_messages(self, sender_urn, request_id):
+        """Release messages reordered ahead of a matching acceptance response.
+
+        Unknown/rejected senders never enter this path. Each replay is isolated
+        so malformed preconnection mail cannot undo the friendship decision.
+        """
+        pending = sorted((m for m in self._all("inbound")
+                          if m.get("sender_urn") == sender_urn
+                          and m.get("quarantine_reason") == "pending_connection"
+                          and m.get("quarantine_request_id") == request_id),
+                         key=lambda m: (m["received_at"], m["message_id"]))
+        for message in pending:
+            self._db.execute("SAVEPOINT promote_pending_message")
+            try:
+                visible = {k: v for k, v in message.items()
+                           if k not in {"quarantined", "quarantine_reason", "quarantine_request_id"}}
+                self._put("inbound", message["message_id"], visible)
+                self.ingest_v2_record(visible)
+                self._db.execute("RELEASE SAVEPOINT promote_pending_message")
+            except (ValueError, TypeError, UnicodeError, RecursionError, KeyError, OverflowError):
+                self._db.execute("ROLLBACK TO SAVEPOINT promote_pending_message")
+                self._db.execute("RELEASE SAVEPOINT promote_pending_message")
+                message["quarantine_reason"] = "invalid_preconnection_message"
+                self._put("inbound", message["message_id"], message)
 
     def _contacts_view(self, owner_session):
         result = []
@@ -200,6 +252,8 @@ class SocialMixin:
         if status == "accepted":
             self._put("connection", key(request["owner_id"], sender), {"owner_id": request["owner_id"],
                 "peer_urn": sender, "request_id": request_id, "connected_at": self.clock()})
+            if request["owner_id"] == self._mail_owner():
+                self._promote_pending_messages(sender, request_id)
         self._attention_put(request["owner_id"], "contact_response", request_id,
             kind="friend_request_accepted" if status == "accepted" else "friend_request_rejected",
             subject_id=message["message_id"], target_kind="inbox", title="好友请求已接受" if status == "accepted" else "好友请求已拒绝",
@@ -264,8 +318,11 @@ class SocialMixin:
         text = params["text"]
         if not isinstance(text, str) or not text.strip() or len(text.encode()) > 24000:
             raise ValueError("Message text must contain 1–24000 UTF-8 bytes")
-        if not any(c["urn"] == urn and self._belongs(c, owner_session) for c in self._all("contact")):
+        contacts = [c for c in self._all("contact") if c["urn"] == urn and self._belongs(c, owner_session)]
+        if not contacts:
             raise ValueError("Confirm this recipient as a local contact before sending a message")
+        if not self._can_send_to(urn, owner_session):
+            raise ValueError("Wait for this contact to accept the friend request before sending a message")
         return {"message_id": identifier(params.get("message_id", "message-" + secrets.token_hex(20)), "message_id"),
                 "recipient_urn": urn, "kind": "chat.message", "text": text}
 
@@ -307,10 +364,17 @@ class SocialMixin:
             return self._mark_read(message_id, owner_session)
 
     def _message_visible(self, message, owner_session):
+        if message.get("quarantined"):
+            return False
         owner = self._principal(owner_session)
         matched = [c for c in self._all("contact") if c["urn"] == message["sender_urn"]]
         # A known contact of a different profile must never leak via stranger mail.
-        visible = any(self._belongs(c, owner_session) for c in matched) if matched else self._mail_owner() == owner
+        if self.local_urn and message.get("kind") not in SOCIAL_KINDS:
+            visible = owner == self._mail_owner() and any(
+                          self._belongs(c, owner_session) and self._contact_status(c) == "connected"
+                          for c in matched)
+        else:
+            visible = any(self._belongs(c, owner_session) for c in matched) if matched else self._mail_owner() == owner
         return visible and self._inbound_local_task(message, owner_session) is not False
 
     def _sent_messages(self, owner_session):
@@ -321,11 +385,16 @@ class SocialMixin:
     def flush_social_outbox(self, transport, limit=16):
         """Retry the identical helper ID after uncertain delivery; never invent a resend."""
         with self._lock:
-            pending = [r for r in self._all("social_outbox") if r["status"] != "accepted"][:limit]
+            all_pending = [r for r in self._all("social_outbox") if r["status"] != "accepted"]
+            pending = [r for r in all_pending if r["message"]["kind"] != "chat.message"
+                       or self._can_send_to(r["message"]["recipient_urn"], r["owner_id"])][:limit]
         accepted = 0
         if not callable(getattr(transport, "store", None)):
-            return {"accepted": 0, "pending": len(pending)}
+            return {"accepted": 0, "pending": len(all_pending)}
         for record in pending:
+            if record["message"]["kind"] == "chat.message" and not self._can_send_to(
+                    record["message"]["recipient_urn"], record["owner_id"]):
+                continue
             try:
                 result = transport.store(record["message"])
                 if result.get("success") is not True or result.get("message_id") != record["message_id"]:
@@ -339,4 +408,4 @@ class SocialMixin:
                 current.update(status="accepted", updated_at=self.clock())
                 self._put("social_outbox", record["message_id"], current)
             accepted += 1
-        return {"accepted": accepted, "pending": len(pending) - accepted}
+        return {"accepted": accepted, "pending": len(all_pending) - accepted}

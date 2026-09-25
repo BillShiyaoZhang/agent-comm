@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -149,10 +150,6 @@ func (ds *DaemonServer) handleV2Store(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := v2.LoadPeerPin(ds.agent.Keys.KeysDir, req.RecipientURN); err != nil {
-		http.Error(w, "Recipient full identity key must be independently pinned: "+err.Error(), http.StatusForbidden)
-		return
-	}
 	status, err := ds.mailbox.acceptV2(req)
 	if err != nil {
 		code := http.StatusInternalServerError
@@ -193,19 +190,38 @@ func (e *v2Engine) pinnedPeer(urn string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(pin.IdentityPublicKey), nil
 }
 
+// resolveRecipient uses the owner-signed registry bundle to discover the full
+// key for a known URN. A registry pin records that cryptographic binding only;
+// it is not a contact acceptance or a real-world identity assertion.
 func (e *v2Engine) resolveRecipient(ctx context.Context, urn string) ([]byte, error) {
-	pinned, err := e.pinnedPeer(urn)
-	if err != nil {
-		return nil, err
-	}
 	resolved, err := e.ds.agent.ResolveVerifiedRecipient(ctx, urn)
 	if err != nil {
 		return nil, err
 	}
-	if !bytes.Equal(resolved.Ed25519PubKey, pinned) || len(resolved.X25519PubKey) != 32 {
-		return nil, errors.New("registry identity differs from independently pinned peer")
+	if err := v2.PinRegistryPeer(e.keysDir, urn, resolved.Ed25519PubKey); err != nil {
+		return nil, err
+	}
+	if len(resolved.X25519PubKey) != 32 {
+		return nil, errors.New("registry recipient X25519 key is invalid")
 	}
 	return resolved.X25519PubKey, nil
+}
+
+// framePeer accepts a first Init from an as-yet unknown URN only after the
+// registry proves the key binding. Accept and Finished need an existing pin.
+func (e *v2Engine) framePeer(ctx context.Context, frame *v2.HandshakeFrame) (ed25519.PublicKey, bool, error) {
+	peer, err := e.pinnedPeer(frame.SenderURN)
+	if err == nil {
+		return peer, false, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) || frame.Type != v2.FrameInit {
+		return nil, false, err
+	}
+	resolved, err := e.ds.agent.ResolveVerifiedRecipient(ctx, frame.SenderURN)
+	if err != nil {
+		return nil, false, err
+	}
+	return ed25519.PublicKey(resolved.Ed25519PubKey), true, nil
 }
 
 func (e *v2Engine) startHandshake(ctx context.Context, policy *v2.Policy, peerURN string) error {
@@ -268,7 +284,11 @@ func (e *v2Engine) processFrames(ctx context.Context, policy *v2.Policy) error {
 				failures = append(failures, errors.New("handshake recipient mismatch"))
 				continue
 			}
-			peer, err := e.pinnedPeer(frame.SenderURN)
+			if err := v2.ValidateFrameForRelay(policy, frame, time.Now()); err != nil {
+				failures = append(failures, err)
+				continue
+			}
+			peer, discovered, err := e.framePeer(ctx, frame)
 			if err != nil {
 				failures = append(failures, err)
 				continue
@@ -277,7 +297,10 @@ func (e *v2Engine) processFrames(ctx context.Context, policy *v2.Policy) error {
 				failures = append(failures, err)
 				continue
 			}
-			if err := v2.ValidateFrameForRelay(policy, frame, time.Now()); err != nil {
+			if discovered {
+				err = v2.PinRegistryPeer(e.keysDir, frame.SenderURN, peer)
+			}
+			if err != nil {
 				failures = append(failures, err)
 				continue
 			}
