@@ -120,3 +120,16 @@ After you pair a hosted Web workspace, its server decrypts the responses you hav
 The traditional Go SDK also retains peer-to-peer messaging. Its encryption and transport differ from the current durable helper route; see the technical boundaries document.
 
 Full documentation and maintenance entry: [docs/README.md](docs/README.md).
+
+## Paired conversation provenance and result notices
+
+Upgraded Hermes records trusted `source_context` for tasks, exact approvals and bilateral collaborations,
+and `conversation.get.turns[].related` links to their stable IDs. A host-bound running turn uses
+`paired_conversation`; direct paired RPC uses `paired_control`. These are navigation facts, not owner consent.
+Only pass `source_conversation_id` to `collaboration.execute` when `describe.source_context_support.version=1`;
+the bridge verifies pairing ownership and removes it before runtime action validation. Never infer links from reply text.
+`history={limit:100,returned,truncated}` describes the returned recent-turn boundary, not complete history.
+Existing authorized `attention.list` reads include `conversation_completed` / `conversation_failed` with a
+conversation and exact turn target. Safe summaries omit private content. Submitted/running progress does not notify;
+completed means the host turn ended, and interrupted side effects are not automatically replayed.
+Old pairings retain their scope. See the [runtime reference](python/README.md#对话中的事项来源与结果提醒).

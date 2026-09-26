@@ -65,3 +65,26 @@ Web 控件需要按用户授权追加各自方法，例如 `--allow contacts.add
 RPC 使用稳定 `request_id` 和最长 300 秒的 deadline，重试复用同一请求，不改同 ID 的内容。通用执行若在提交与响应之间中断，重放可能返回 `uncertain`；先查看 agent 状态、发送记录和待决审批，不自动换新 ID 重做。传输 `accepted`、好友的 `connected`、RPC `submitted` 与模型回合完成是不同状态。所有客户端显示 agent 保存的结果；联系人在线观察过期后为 `unknown`，不把平台曾注册视为当前在线。
 
 自定义控制客户端的消息关联、重放、响应持久化与撤销检查见 [remote.py](../python/agent_comm_runtime/remote.py)；CLI 参数以 [daemon.py](../python/agent_comm_runtime/daemon.py) 为准。不要为未注册的方法降级执行任意 shell 或通用文本动作。
+
+## 对话中的事项来源与结果提醒
+
+升级后的 Hermes 将任务、具体审批和双边协作的 `source_context` 保存在 agent Store。
+`origin=paired_conversation` 只由当前真实 running 回合的宿主绑定生成，含原 `conversation_id` / `turn_id`；
+模型文本、对端来信、工具参数不能创建该身份或替本人批准。直接 `collaboration.execute` RPC
+仍使用 `paired_control` 主体，含 `request_id`；它不要求模型回合正在运行。
+
+`{"action":"describe"}` 返回 `source_context_support.version=1` 时，已配对 Web 可在
+`collaboration.execute` params 顶层传 `source_conversation_id`。bridge 只接受该配对确实拥有的已存会话，
+将它作为导航来源后移除这个字段再验证动作。此关联不授予额外权限，旧宿主不应发送该参数。
+任务首次来源保持不变；后续回合更新同一事项会新增可信关联。
+
+既有 `conversation.get` 返回每个回合的可选 `related`（task / approval / collaboration 的稳定 ID），
+及 `history={limit:100,returned,truncated}`，明确返回最近 100 回合；这不代表完整历史发现或分页。
+旧记录没有来源时返回空关联，不从回复文字猜 ID。
+
+既有获准 `attention.list` 返回对话回合的持久事项：submitted / running 版本为 resolved 的普通进展，
+completed 为 `conversation_completed`，failed / interrupted 为 `conversation_failed`，
+终态 target 为 `{kind:"conversation",id:conversation_id,turn_id}`。完成与失败是结果提醒，
+不代表待批准或允许重做；safe_summary 不含私人提问、回复或错误原文。读取不制造新版本，
+启动/读取可从已提交的回合事实幂等修复缺失投影。回合串行执行，重启后的 running 标 interrupted，
+不会自动重放可能已经产生副作用的动作。配对方法、主人隔离与具体审批规则保持原有边界。

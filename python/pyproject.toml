@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-comm-runtime"
-version = "0.1.7"
+version = "0.1.8"
 description = "Host-independent local collaboration authority and adapter contracts"
 requires-python = ">=3.11"
 dependencies = []

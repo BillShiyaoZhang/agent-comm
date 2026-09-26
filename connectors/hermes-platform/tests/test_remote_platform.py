@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from test_platform import Helper
 from gateway.config import PlatformConfig
@@ -93,6 +94,13 @@ class TestRemotePlatform(unittest.IsolatedAsyncioTestCase):
         completed = await self.rpc("poll-done", "conversation.get", {"conversation_id": "chat"})
         turn = completed["result"]["turns"][0]
         self.assertEqual(turn["response"], "This is the real Hermes handler's final response.")
+        notices = await self.rpc("poll-notice", "attention.list")
+        notice = next(item for item in notices["result"]["items"] if item["kind"] == "conversation_completed")
+        self.assertEqual(notice["target"], {"kind": "conversation", "id": "chat", "turn_id": turn["turn_id"]})
+        from hermes_platform_agent_comm.collaboration.attention import _decorate
+        detail = _decorate(self.adapter._remote_store, profile_principal() + "|attention", notice)
+        self.assertFalse(detail["details"]["can_resume"])
+        self.assertNotIn("```json", detail["resume"]["instruction"])
         self.assertTrue(all(m["kind"] == "control.response" for m in self.helper.stored))
         self.assertEqual(len(self.received), 1)
 
@@ -147,6 +155,53 @@ class TestRemotePlatform(unittest.IsolatedAsyncioTestCase):
         await self.until(lambda: all(j["status"] == "completed" for j in self.adapter._remote_bridge._all("turn")))
         self.assertEqual([e.text for e in self.received], ["first", "second"])
         self.assertEqual(self.received[0].source.thread_id, self.received[1].source.thread_id)
+
+    async def test_terminal_projection_failure_releases_queue_and_read_repairs_notice(self):
+        first = await self.rpc("first-turn", "conversation.send", {"conversation_id": "one-chat", "text": "first"})
+        await self.until(lambda: len(self.received) == 1)
+        second = await self.rpc("second-turn", "conversation.send", {"conversation_id": "one-chat", "text": "second"})
+        first_id, second_id = first["result"]["turn_id"], second["result"]["turn_id"]
+        original = self.adapter._remote_store.record_conversation_event
+        failed = []
+
+        def project(job):
+            if job["turn_id"] == first_id and job["status"] == "completed" and not failed:
+                failed.append(job["turn_id"])
+                raise OSError("isolated terminal projection unavailable")
+            return original(job)
+
+        with patch.object(self.adapter._remote_store, "record_conversation_event", side_effect=project):
+            self.release.set()
+            await self.until(lambda: len(self.received) == 2)
+            await self.until(lambda: self.adapter._remote_bridge._get("turn", second_id)["status"] == "completed")
+        self.assertEqual(failed, [first_id])
+        self.assertEqual(self.adapter._remote_bridge._get("turn", first_id)["status"], "completed")
+        self.assertEqual([event.text for event in self.received], ["first", "second"])
+        notices = await self.rpc("repair-notice", "attention.list")
+        terminal = [item for item in notices["result"]["items"] if item["kind"] == "conversation_completed"]
+        self.assertEqual({item["target"]["turn_id"] for item in terminal}, {first_id, second_id})
+        self.assertIsNone(self.adapter._remote_bridge.claim_turn())
+
+    async def test_failed_terminal_commit_keeps_running_guard_and_does_not_forge_completion(self):
+        first = await self.rpc("first-turn", "conversation.send", {"conversation_id": "one-chat", "text": "first"})
+        await self.until(lambda: len(self.received) == 1)
+        second = await self.rpc("second-turn", "conversation.send", {"conversation_id": "one-chat", "text": "second"})
+        first_id, second_id = first["result"]["turn_id"], second["result"]["turn_id"]
+        with patch.object(self.adapter._remote_bridge, "finish_turn", side_effect=OSError("isolated terminal commit unavailable")):
+            self.release.set()
+            await self.until(lambda: first_id not in self.adapter._remote_events)
+            self.assertEqual(self.adapter._remote_bridge._get("turn", first_id)["status"], "running")
+            self.assertEqual(self.adapter._remote_bridge._get("turn", second_id)["status"], "submitted")
+            self.assertIsNone(self.adapter._remote_bridge.claim_turn())
+            self.assertEqual([event.text for event in self.received], ["first"])
+        # An explicit interrupted result can release the durable guard. It must
+        # preserve uncertainty rather than fabricate a successful host response.
+        self.adapter._remote_bridge.finish_turn(first_id, error="terminal commit failed", interrupted=True)
+        self.assertEqual(self.adapter._remote_bridge._get("turn", first_id)["status"], "interrupted")
+        self.assertIsNone(self.adapter._remote_bridge._get("turn", first_id)["response"])
+        await self.until(lambda: len(self.received) == 2)
+        await self.until(lambda: self.adapter._remote_bridge._get("turn", second_id)["status"] == "completed")
+        self.assertEqual([event.text for event in self.received], ["first", "second"])
 
     async def test_failed_control_response_store_keeps_request_pending(self):
         self.helper.store_response = {"success": False}
@@ -262,6 +317,12 @@ class TestRemotePlatform(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results["prepare"]["decision"], "ask")
         self.assertEqual(results["unanswered"]["status"], "approval_required")
         self.assertFalse(any(m["kind"] == "contact.request" for m in self.helper.stored))
+        linked = await self.rpc("tools-context", "conversation.get", {"conversation_id": "tools-turn"})
+        turn = linked["result"]["turns"][0]
+        self.assertIn({"kind": "approval", "id": results["prepare"]["approval_id"]}, turn["related"])
+        current = await self.rpc("tools-current", "collaboration.state")
+        approval = next(a for a in current["result"]["pending_confirmations"] if a["approval_id"] == results["prepare"]["approval_id"])
+        self.assertEqual(approval["source_context"], {"origin": "paired_conversation", "conversation_id": "tools-turn", "turn_id": turn["turn_id"]})
         decision = await self.rpc("ui-approval", "approval.respond",
             {"approval_id": results["prepare"]["approval_id"], "decision": "approve"})
         self.assertIn("result", decision)

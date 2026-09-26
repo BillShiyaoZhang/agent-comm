@@ -24,6 +24,7 @@ from .attention import AttentionMixin
 from .collaboration_v2 import CollaborationV2Mixin
 from .worker import WorkerMixin
 from .social import SOCIAL_KINDS, SocialMixin
+from .source_context import SourceContextMixin
 
 
 def canonical(value):
@@ -51,7 +52,7 @@ class RemoteMutationConflict(ValueError):
     code = "request_conflict"
 
 
-class Store(SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
+class Store(SourceContextMixin, SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
     def __init__(self, path, *, clock=time.time, local_urn=None, owner_principal=None):
         self.clock = clock
         self.local_urn = local_urn
@@ -134,6 +135,7 @@ class Store(SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
             "SELECT body FROM collaboration_records WHERE kind=? ORDER BY id", (kind,))]
 
     def _put(self, kind, key, body):
+        self._record_source_context(kind, key, body)
         self._db.execute("INSERT INTO collaboration_records VALUES (?,?,?) "
                          "ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body", (kind, key, canonical(body)))
         if kind in {"approval", "inbound", "operation", "v2_operation", "v2_collaboration"}:
@@ -195,7 +197,7 @@ class Store(SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
 
     @staticmethod
     def _public_approval(approval):
-        return {key: approval[key] for key in ("approval_id", "kind", "subject_id", "question", "expires_at", "status")}
+        return {key: approval[key] for key in ("approval_id", "kind", "subject_id", "question", "expires_at", "status", "source_context") if key in approval}
 
     def _approval_task_id(self, approval):
         if approval["kind"] in {"task", "worker_policy"}:
@@ -1001,7 +1003,7 @@ class Store(SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
             approvals = [self._public_approval(a) for a in self._all("approval") if self._belongs(a, owner_session)
                          and a["status"] in {"pending", "presenting", "expired"} and self._approval_current(a)
                          and (task_id is None or self._approval_task_id(a) == task_id)]
-            decisions = [{key: a[key] for key in ("approval_id", "kind", "subject_id", "status")}
+            decisions = [{key: a[key] for key in ("approval_id", "kind", "subject_id", "status", "source_context") if key in a}
                          for a in self._all("approval") if self._belongs(a, owner_session)
                          and a["status"] in {"approved", "denied"}
                          and (task_id is None or self._approval_task_id(a) == task_id)]

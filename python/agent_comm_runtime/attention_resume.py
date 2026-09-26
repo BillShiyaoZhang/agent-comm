@@ -62,7 +62,13 @@ class AttentionResumeMixin:
         origin = native_session_id(owner, source.get("owner_session"))
         if not origin and task:
             origin = native_session_id(owner, task.get("owner_session"))
-        if source_kind == "approval":
+        if source_kind == "conversation_turn":
+            details["can_resume"] = False
+            details["current_status"] = source["status"]
+            details["conversation"] = {k: source[k] for k in ("conversation_id", "turn_id", "status")}
+            details["initiator"] = {"label": "本方已配对远端工作台对话"}
+            details["risks"] = ["请回到原 Web 对话查看；回合结束不代表业务完成，不自动重放未知动作。"]
+        elif source_kind == "approval":
             details["question"] = source["question"]
             details["approval_kind"] = source["kind"]
             details["approval_status"] = source["status"]
@@ -118,6 +124,8 @@ class AttentionResumeMixin:
         with self._transaction():
             item = self._attention_record(owner_session, attention_id, revision, require_open=True)
             detail, origin = self._attention_detail(item, owner_session)
+            if not detail["details"]["can_resume"]:
+                raise ValueError("Return to the paired Web conversation; this result notice has no native handling request")
             key = self._attention_binding_key(item)
             binding = self._get("attention_session", key) or {
                 "owner_id": self._principal(owner_session), "binding_id": key, "generation": 0, "stored_session_id": None}

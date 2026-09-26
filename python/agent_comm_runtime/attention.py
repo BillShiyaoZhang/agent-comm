@@ -18,7 +18,7 @@ def _key(*parts):
 class AttentionMixin(AttentionResumeMixin):
     def _attention_put(self, owner, source_kind, source_id, *, kind, subject_id,
                        title, state="open", task_id=None, source_revision=1,
-                       target_kind="task", summary="", expires_at=None, approval_id=None, created_at=None):
+                       target_kind="task", summary="", expires_at=None, approval_id=None, created_at=None, turn_id=None, updated_at=None):
         if not owner:
             return
         key = "attention-" + _key(owner, source_kind, source_id)[:48]
@@ -30,6 +30,8 @@ class AttentionMixin(AttentionResumeMixin):
                  "source_kind": source_kind, "source_id": source_id}
         if task_id is not None:
             value["task_id"] = task_id
+        if turn_id is not None:
+            value["target"]["turn_id"] = turn_id
         if expires_at is not None:
             value["expires_at"] = expires_at
         if approval_id is not None:
@@ -42,9 +44,42 @@ class AttentionMixin(AttentionResumeMixin):
         revision = counter["revision"] + 1
         if revision > MAX_CURSOR:
             raise ValueError("Attention revision exhausted")
-        value.update(revision=revision, created_at=(previous or {}).get("created_at", self.clock() if created_at is None else created_at), updated_at=self.clock())
+        value.update(revision=revision, created_at=(previous or {}).get("created_at", self.clock() if created_at is None else created_at),
+                     updated_at=self.clock() if updated_at is None else updated_at)
         self._put("attention_counter", counter_key, {"revision": revision})
         self._put("attention", key, value)
+
+    def record_conversation_event(self, job):
+        """Idempotently project an authoritative, durably committed turn.
+
+        Submitted/running versions are resolved progress records, so ordinary
+        waiting does not notify. Terminal versions are one safe result notice.
+        No model response or private prompt is included in the attention feed.
+        """
+        status = job["status"]
+        terminal = status in {"completed", "failed", "interrupted"}
+        source = {key: job[key] for key in ("turn_id", "conversation_id", "status", "created_at", "updated_at")}
+        source["owner_id"] = job["owner_principal"]
+        with self._lock:
+            if self._get("conversation_turn", job["turn_id"]) == source:
+                return
+        with self._transaction():
+            previous = self._get("conversation_turn", job["turn_id"])
+            if previous and previous["status"] in {"completed", "failed", "interrupted"}:
+                return  # A late progress projection cannot reopen a terminal turn.
+            self._put("conversation_turn", job["turn_id"], source)
+            self._attention_put(job["owner_principal"], "conversation_turn", job["turn_id"],
+                kind=("conversation_completed" if status == "completed" else "conversation_failed" if terminal else "conversation_progress"),
+                subject_id=job["conversation_id"], target_kind="conversation", turn_id=job["turn_id"],
+                title="对话回合已结束" if status == "completed" else "对话处理结果需要查看" if terminal else "对话正在处理",
+                summary=("Agent 已结束这一回合；请回到原对话查看实际回复。" if status == "completed" else
+                         "Agent 在处理过程中重启或停止，执行结果不确定；请核对原回合，不要重复提交。" if status == "interrupted" else
+                         "这一回合未正常完成；请查看原回合的原因和已发生的动作。" if terminal else "请等待这一回合的实际结果。"),
+                state="open" if terminal else "resolved", source_revision=status,
+                # Reading the actual turn establishes a watermark in the Web.
+                # Projection can happen later (including recovery across the two
+                # databases), so its time must remain the durable turn's time.
+                created_at=job["created_at"], updated_at=job["updated_at"])
 
     def _attention_approval(self, approval, *, refresh=False):
         owner = self._principal(approval.get("owner_session", ""))

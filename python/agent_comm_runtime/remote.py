@@ -218,6 +218,7 @@ class RemoteBridge:
             return {"contacts": self.store.state(owner)["contacts"]}
         if method == "attention.list":
             self._params(params, optional=("after", "limit"))
+            self._sync_conversation_events(pairing)
             return self.store.attention(owner, params.get("after", 0), params.get("limit", 100))
         if method in {"collaboration.state", "inbox.list"}:
             self._params(params, optional=("task_id",))
@@ -246,8 +247,10 @@ class RemoteBridge:
             jobs = [j for j in self._all("turn") if j["console_urn"] == pairing["console_urn"]
                     and j["owner_principal"] == pairing["owner_principal"] and j["conversation_id"] == conversation_id]
             keys = ("turn_id", "status", "text", "response", "error", "created_at", "updated_at")
-            return {"conversation_id": conversation_id, "turns": [{k: j[k] for k in keys}
-                    for j in sorted(jobs, key=lambda j: (j["created_at"], j["turn_id"]))[-100:]]}
+            latest = sorted(jobs, key=lambda j: (j["created_at"], j["turn_id"]))[-100:]
+            return {"conversation_id": conversation_id, "turns": [{**{k: j[k] for k in keys},
+                    "related": self.store.conversation_links(owner, pairing["console_urn"], conversation_id, j["turn_id"]) if self.store else []}
+                    for j in latest], "history": {"limit": 100, "returned": len(latest), "truncated": len(jobs) > 100}}
         if method in self.handlers:
             # The generic owner action route can prepare a message without a
             # caller-generated ID. Derive it from the authenticated request so
@@ -257,7 +260,17 @@ class RemoteBridge:
                 params = {**params, "message_id": "web-message-" + hashlib.sha256(
                     (request["console_urn"] + "\0" + request["request_id"]).encode()).hexdigest()[:40]}
             if method == "collaboration.execute":
+                source_conversation_id = params.get("source_conversation_id")
+                source_context = {"origin": "paired_control", "request_id": request["request_id"]}
+                if source_conversation_id is not None:
+                    identifier(source_conversation_id)
+                    if not any(j["console_urn"] == pairing["console_urn"] and j["owner_principal"] == pairing["owner_principal"]
+                               and j["conversation_id"] == source_conversation_id for j in self._all("turn")):
+                        raise RemoteError("invalid_source_context", "The source conversation is not owned by this pairing")
+                    source_context["conversation_id"] = source_conversation_id
+                    params = {k: v for k, v in params.items() if k != "source_conversation_id"}
                 return self.handlers[method](params, owner,
+                    source_context=source_context, source_console_urn=pairing["console_urn"],
                     request_key=hashlib.sha256((request["console_urn"] + "\0" + request["request_id"]).encode()).hexdigest(),
                     fingerprint=hashlib.sha256(canonical(request).encode()).hexdigest(),
                     valid_until=min(instant(request["deadline"]), instant(pairing["expires_at"])))
@@ -351,7 +364,13 @@ class RemoteBridge:
             return batch
 
     def claim_turn(self):
+        changed = []
+        claimed = None
         with self._transaction():
+            # Serialize claims across workers/processes, not just in the Hermes
+            # async loop. A running turn must finish or be marked interrupted.
+            if any(j["status"] == "running" for j in self._all("turn")):
+                return None
             for job in sorted(self._all("turn"), key=lambda j: (j["created_at"], j["turn_id"])):
                 if job["status"] != "submitted":
                     continue
@@ -362,11 +381,17 @@ class RemoteBridge:
                 except RemoteError:
                     job.update(status="failed", error="Pairing expired, changed or revoked before execution", updated_at=self.clock())
                     self._put("turn", job["turn_id"], job)
+                    changed.append(job)
                     continue
                 job.update(status="running", updated_at=self.clock())
                 self._put("turn", job["turn_id"], job)
-                return job
-        return None
+                claimed = job
+                changed.append(job)
+                break
+        for job in changed:
+            if self.store:
+                self.store.record_conversation_event(job)
+        return claimed
 
     def finish_turn(self, turn_id, *, response=None, error=None, interrupted=False):
         with self._transaction():
@@ -378,6 +403,8 @@ class RemoteBridge:
             job.update(status="interrupted" if interrupted else "failed" if error else "completed",
                        response=response, error=error, updated_at=self.clock())
             self._put("turn", turn_id, job)
+        if self.store:
+            self.store.record_conversation_event(job)
 
     def recover_interrupted_turns(self):
         """A crash cannot prove whether host tools ran; never silently replay them."""
@@ -387,3 +414,15 @@ class RemoteBridge:
                     job.update(status="interrupted", error="Agent restarted during this turn; execution outcome is uncertain",
                                updated_at=self.clock())
                     self._put("turn", job["turn_id"], job)
+        self._sync_conversation_events()
+
+    def _sync_conversation_events(self, pairing=None):
+        """Repair only missing projections after commit; never replay a turn."""
+        if self.store is None:
+            return
+        with self._lock:
+            jobs = self._all("turn")
+        for job in jobs:
+            if pairing and (job["console_urn"] != pairing["console_urn"] or job["owner_principal"] != pairing["owner_principal"]):
+                continue
+            self.store.record_conversation_event(job)

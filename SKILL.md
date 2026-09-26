@@ -99,6 +99,14 @@ v2 `accept` 若需要本人确认，问题卡必须列出本机已验证的当�
 
 Hermes 适配器另提供 `conversation.send` / `conversation.get` 和 `collaboration.execute`；后者的 params 就是 Runtime 工具参数，`{"action":"describe"}` 可发现完整能力。Web 界面与已配对聊天使用同一 agent Runtime/Store，模型仍不能替用户回答审批。standalone 不执行 Hermes 会话，也不提供该通用执行入口。按返回的 capability descriptor 判断实际可用性；`submitted` 不是模型回答或业务完成，`accepted` 不是好友已接受。重试保持同一 RPC `request_id` 与内容；`uncertain` 表示先检查 agent 状态和审批，不能自动重做。
 
+新版 `conversation.get` 的 `turns[].related` 和 `source_context` 由真实宿主/已配对 bridge 生成，
+用于回到同一任务、审批和协作；不能解析回复文本猜关联或把来源当许可。直接 RPC 的来源为
+`paired_control`，聊天工具调用为 `paired_conversation`。只有 `describe.source_context_support.version=1`
+才传顶层 `source_conversation_id`，bridge 核对实际会话且不扩大权限。
+`history.truncated` 为真表示 agent 只返回最近 100 回合。`attention.list` 的
+`conversation_completed` / `conversation_failed` 以会话和回合深链返回安全摘要；终态提醒不等于业务完成
+或可自动重试。submitted/running 普通进展不主动通知；interrupted 保留未知副作用且不重放。
+
 具体 CLI、RPC 参数和消费者选择见 [远程工作台参考](references/remote-control.md)。
 
 <a id="sdk-only"></a>

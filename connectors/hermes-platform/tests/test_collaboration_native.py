@@ -86,6 +86,20 @@ class TestNativeBridge(unittest.TestCase):
         self.assertEqual(result["decision"], "ask", result)
         return result["approval_id"]
 
+    def accept_staged_friend(self):
+        # Scoped business tests start only after an authenticated peer accepted
+        # the outgoing friend request; a local approval alone is insufficient.
+        from agent_comm_runtime.social import SOCIAL_PROTOCOL
+        store = Store(self.db, local_urn=self.settings["urn"], owner_principal=hermes.profile_principal())
+        try:
+            request = next(r for r in store._all("contact_request") if r["direction"] == "outgoing")
+            packet = {"protocol": SOCIAL_PROTOCOL, "type": "response", "request_id": request["request_id"], "decision": "accept"}
+            store.ingest_message(envelope("friend-accepted", sender_urn=request["peer_urn"], kind="contact.response",
+                conversation_id=request["request_id"], in_reply_to=request["request_id"], text=json.dumps(packet)))
+            self.assertEqual(store.state(hermes.profile_principal())["contacts"][0]["connection_status"], "connected")
+        finally:
+            store.close()
+
     def question_pending(self, request_id, sid):
         if request_id in getattr(server, "_pending", {}):
             return True
@@ -432,6 +446,7 @@ class TestNativeBridge(unittest.TestCase):
     def test_scoped_dispatch_uses_core_without_another_native_question(self):
         with self.native(), self.answer() as events:
             self.call("confirm", approval_id=self.stage_contact())
+            self.accept_staged_friend()
             start = datetime.now(timezone.utc) + timedelta(days=1)
             scope = {"purpose": "讨论协作", "topic": "协作", "capabilities": ["share_slots"],
                 "recipient_ids": ["wang"], "participant_ids": ["self", "wang"], "resource_ids": [],
@@ -460,6 +475,7 @@ class TestNativeBridge(unittest.TestCase):
     def test_inbox_imports_only_persisted_peer_proposal_with_local_urn_mapping(self):
         with self.native(), self.answer():
             self.call("confirm", approval_id=self.stage_contact())
+            self.accept_staged_friend()
             start = datetime.now(timezone.utc) + timedelta(days=1)
             scope = {"purpose": "讨论协作", "topic": "协作", "capabilities": ["accept_meeting"],
                 "recipient_ids": ["wang"], "participant_ids": ["self", "wang"], "resource_ids": [],

@@ -102,8 +102,11 @@ def handle_paired_tool(args):
     with binding.bridge._transaction():
         binding.validate(method)
         owner = binding.owner_principal + "|remote:" + hashlib.sha256(binding.console_urn.encode()).hexdigest()[:24]
-        return execute_owner_action(binding.bridge.store, owner, args, binding.settings,
-                                    validate=lambda: binding.validate(method))
+        turn = binding.bridge._get("turn", binding.turn_id)
+        with binding.bridge.store.bind_source_context(owner,
+                {"origin": "paired_conversation", "conversation_id": turn["conversation_id"], "turn_id": binding.turn_id}, binding.console_urn):
+            return execute_owner_action(binding.bridge.store, owner, args, binding.settings,
+                                        validate=lambda: binding.validate(method))
 
 
 def paired_turn_available():
@@ -111,7 +114,12 @@ def paired_turn_available():
 
 
 def register_remote_actions(bridge, settings):
-    def execute(params, owner, **request_context):
-        return bridge.store.execute_owner_once(owner,
-            lambda: execute_owner_action(bridge.store, owner, params, settings), **request_context)
+    def execute(params, owner, *, source_context, source_console_urn, **request_context):
+        with bridge.store.bind_source_context(owner, source_context, source_console_urn):
+            result = bridge.store.execute_owner_once(owner,
+                lambda: execute_owner_action(bridge.store, owner, params, settings), **request_context)
+        if params.get("action") == "describe":
+            result = {**result, "source_context_support": {"version": 1, "rpc_param": "source_conversation_id",
+                "origins": ["paired_control", "paired_conversation"]}}
+        return result
     bridge.register_handler("collaboration.execute", execute)

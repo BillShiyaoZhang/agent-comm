@@ -360,3 +360,12 @@ Re-enabling, replacing or increasing the policy requires a new
 `prepare_worker_policy` plus native `confirm`. Revoking the task also stops its
 background business actions. No external messages are sent by preparing,
 viewing, pausing or revoking a policy.
+
+
+### 远程对话来源
+
+当前已配对 Web 回合通过真实 running 宿主 context 绑定协作工具。新任务、审批与双边协作保存
+`source_context={origin:paired_conversation,conversation_id,turn_id}`，`conversation.get.turns[].related`
+可回到原事项。不要传入、改写或从模型文字推断这些字段；它们只说明来源，不提供审批权限。
+已配对 `approval.respond` 记录主人对当前确切问题的决定；聊天“可以”和模型自答不能批准。
+直接 Web RPC 为 `paired_control`，与模型回合的主体区分；未知/中断回合不自动重放工具。

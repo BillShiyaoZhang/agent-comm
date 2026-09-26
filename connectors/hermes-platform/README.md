@@ -318,3 +318,26 @@ $env:PYTHONDONTWRITEBYTECODE = '1'
 ```
 
 测试在临时 HERMES_HOME 下使用真实 Hermes 适配器基类、原生后台处理生命周期及本机模拟 HTTP/SSE helper；不启动真实 Gateway，不调用模型，也不修改真实 Hermes 配置。测试涵盖连接失败、关闭 reader、重连、处理完成前不 ACK、稳定 ID 去重、取消恢复、ACK 失败恢复、串行接收、授权标记、会话隔离及关联字段回复。
+
+## 对话中的事项来源与结果提醒
+
+升级后的 Hermes 将任务、具体审批和双边协作的 `source_context` 保存在 agent Store。
+`origin=paired_conversation` 只由当前真实 running 回合的宿主绑定生成，含原 `conversation_id` / `turn_id`；
+模型文本、对端来信、工具参数不能创建该身份或替本人批准。直接 `collaboration.execute` RPC
+仍使用 `paired_control` 主体，含 `request_id`；它不要求模型回合正在运行。
+
+`{"action":"describe"}` 返回 `source_context_support.version=1` 时，已配对 Web 可在
+`collaboration.execute` params 顶层传 `source_conversation_id`。bridge 只接受该配对确实拥有的已存会话，
+将它作为导航来源后移除这个字段再验证动作。此关联不授予额外权限，旧宿主不应发送该参数。
+任务首次来源保持不变；后续回合更新同一事项会新增可信关联。
+
+既有 `conversation.get` 返回每个回合的可选 `related`（task / approval / collaboration 的稳定 ID），
+及 `history={limit:100,returned,truncated}`，明确返回最近 100 回合；这不代表完整历史发现或分页。
+旧记录没有来源时返回空关联，不从回复文字猜 ID。
+
+既有获准 `attention.list` 返回对话回合的持久事项：submitted / running 版本为 resolved 的普通进展，
+completed 为 `conversation_completed`，failed / interrupted 为 `conversation_failed`，
+终态 target 为 `{kind:"conversation",id:conversation_id,turn_id}`。完成与失败是结果提醒，
+不代表待批准或允许重做；safe_summary 不含私人提问、回复或错误原文。读取不制造新版本，
+启动/读取可从已提交的回合事实幂等修复缺失投影。回合串行执行，重启后的 running 标 interrupted，
+不会自动重放可能已经产生副作用的动作。配对方法、主人隔离与具体审批规则保持原有边界。

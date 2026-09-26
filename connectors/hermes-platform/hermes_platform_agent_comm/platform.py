@@ -482,14 +482,19 @@ class AgentCommAdapter(BasePlatformAdapter):
         remote = self._remote_events.get(event.message_id)
         if remote is not None and remote["event"] is event:
             error = None if outcome == ProcessingOutcome.SUCCESS else "Hermes did not complete this turn successfully"
-            await asyncio.to_thread(self._remote_bridge.finish_turn, event.message_id,
-                response=remote.get("response"), error=error, interrupted=outcome == ProcessingOutcome.CANCELLED)
-            def remote_finished(_task):
-                if not remote["future"].done():
-                    remote["future"].set_result(True)
-            # The host releases its active-session guard in finally, after this
-            # hook; do not merge a next queued RPC turn into this completed one.
-            asyncio.current_task().add_done_callback(remote_finished)
+            try:
+                await asyncio.to_thread(self._remote_bridge.finish_turn, event.message_id,
+                    response=remote.get("response"), error=error, interrupted=outcome == ProcessingOutcome.CANCELLED)
+            finally:
+                def remote_finished(_task):
+                    if not remote["future"].done():
+                        remote["future"].set_result(True)
+                # The host releases its active-session guard in finally, after
+                # this hook. Release our waiter even if an attention projection
+                # fails after the durable terminal commit; the read path repairs
+                # that projection. If the terminal commit itself failed, the
+                # durable running-turn guard prevents claiming any next turn.
+                asyncio.current_task().add_done_callback(remote_finished)
             return
         future = self._completion.get(event.message_id)
         if future is None or future.done():

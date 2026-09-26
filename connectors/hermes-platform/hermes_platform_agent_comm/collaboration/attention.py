@@ -74,6 +74,10 @@ def _instruction(item):
 def _decorate(store, owner_session, original):
     data = store.attention_detail(owner_session, original["attention_id"])
     item = data["item"]
+    if item["target"]["kind"] == "conversation":
+        item["resume"] = {"stored_session_id": None, "session_state": "none",
+                          "instruction": "请回到原 Web 对话查看这一回合；此提醒不提交新的原生处理请求。"}
+        return item
     candidate = data["bound_session_id"] or data["origin_session_id"]
     stored = _resolve_native_session(candidate) if candidate else None
     item["resume"] = {"stored_session_id": stored,

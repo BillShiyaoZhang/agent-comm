@@ -79,20 +79,20 @@ class CollaborationV2Tests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.now = NOW
         self.a = Store(Path(self.temp.name) / "a.sqlite3", clock=lambda: self.now,
-                       local_urn=ALICE, owner_principal="profile-a")
+                       local_urn=ALICE, owner_principal=OWNER_A.split("|", 1)[0])
         self.b = Store(Path(self.temp.name) / "b.sqlite3", clock=lambda: self.now,
-                       local_urn=BOB, owner_principal="profile-b")
+                       local_urn=BOB, owner_principal=OWNER_B.split("|", 1)[0])
         self.addCleanup(self.a.close)
         self.addCleanup(self.b.close)
         approve(self.a, self.a.prepare_contact("bob", ["私密称呼甲"], BOB, OWNER_A), OWNER_A)
         approve(self.b, self.b.prepare_contact("alice", ["私密称呼乙"], ALICE, OWNER_B), OWNER_B)
         # These protocol tests begin after both owners accepted friendship.
         with self.a._transaction():
-            self.a._put("connection", social_key("profile-a", BOB),
-                        {"owner_id": "profile-a", "peer_urn": BOB, "request_id": "accepted-a", "connected_at": self.now})
+            self.a._put("connection", social_key(OWNER_A.split("|", 1)[0], BOB),
+                        {"owner_id": OWNER_A.split("|", 1)[0], "peer_urn": BOB, "request_id": "accepted-a", "connected_at": self.now})
         with self.b._transaction():
-            self.b._put("connection", social_key("profile-b", ALICE),
-                        {"owner_id": "profile-b", "peer_urn": ALICE, "request_id": "accepted-b", "connected_at": self.now})
+            self.b._put("connection", social_key(OWNER_B.split("|", 1)[0], ALICE),
+                        {"owner_id": OWNER_B.split("|", 1)[0], "peer_urn": ALICE, "request_id": "accepted-b", "connected_at": self.now})
         approve(self.a, self.a.prepare_task("task-a", scope("bob"), OWNER_A), OWNER_A)
         approve(self.b, self.b.prepare_task("task-b", scope("alice"), OWNER_B), OWNER_B)
         self.bus = Bus()
@@ -116,7 +116,7 @@ class CollaborationV2Tests(unittest.TestCase):
     def test_existing_task_grant_does_not_bypass_friendship_gate(self):
         with self.a._transaction():
             self.a._db.execute("DELETE FROM collaboration_records WHERE kind='connection' AND id=?",
-                               (social_key("profile-a", BOB),))
+                               (social_key(OWNER_A.split("|", 1)[0], BOB),))
         action = {"capability": "share_slots", "recipient_ids": ["bob"],
                   "payload": {"slots": [{"start": "2026-10-03T09:00:00Z", "end": "2026-10-03T09:30:00Z"}]}}
         prepared = self.a.prepare_action("task-a", "unconnected-v1", action, OWNER_A)
@@ -328,7 +328,7 @@ class CollaborationV2Tests(unittest.TestCase):
         self.assertNotIn("方案编号", old_card["question"])
         self.b.close()
         self.b = Store(Path(self.temp.name) / "b.sqlite3", clock=lambda: self.now,
-                       local_urn=BOB, owner_principal="profile-b")
+                       local_urn=BOB, owner_principal=OWNER_B.split("|", 1)[0])
         self.addCleanup(self.b.close)
         self.assertFalse(any(a["approval_id"] == pending["approval_id"]
                              for a in self.b.state(OWNER_B)["pending_confirmations"]))
@@ -354,7 +354,7 @@ class CollaborationV2Tests(unittest.TestCase):
             self.b._put("approval", fresh["approval_id"], old_card)
         self.b.close()
         self.b = Store(Path(self.temp.name) / "b.sqlite3", clock=lambda: self.now,
-                       local_urn=BOB, owner_principal="profile-b")
+                       local_urn=BOB, owner_principal=OWNER_B.split("|", 1)[0])
         self.addCleanup(self.b.close)
         self.assertEqual(self.b.dispatch(fresh["operation_id"], OWNER_B, self.tb)["decision"], "deny")
         self.assertFalse(any(sender == BOB and json.loads(body["text"])["kind"] == "accept"
