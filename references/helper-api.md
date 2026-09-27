@@ -1,5 +1,11 @@
 # Helper 接口与调试
 
+## 对端内容安全（更新源码）
+
+当前源码使用持久 owner+URN 屏蔽及本人内容审核。自由正文和协作邀请、提议、修改请求先进入仅元数据的 `pending_review`；独立 READ `inbox.review_preview` 完整预览后，独立 WRITE `inbox.review` 由本人决定。屏蔽使用 `contacts.block` / `contacts.unblock`。四项方法必须显式授权，旧 pairing 不增权；模型 Runtime 不提供这些决定动作。
+
+屏蔽回执与 contacts/state 含单调 `safety_revision`，历史回执不能覆盖新状态。真实 `capabilities.peer_content_safety={version:1,mode:"owner_review",automatic_peer_model_execution:false}` 才表明更新后的本机边界。两种 Hermes 模式均不直接让对端来信启动模型；解除屏蔽或批准均不自动重放历史。审核不能替代业务委托、共享许可或 Web 运营审核；`review_policy` 不证明 Web/App 显示过滤已完成。完整契约与宿主限制见[屏蔽与本人审核](peer-safety.md)。
+
 用于初始化、宿主接入或排查收发；普通 Hermes 个人协作使用插件工具。以下 `<...>` 参数都替换为真实配置。helper 启动命令中的 platform 是云端地址；宿主调用的 helper URL 是本机地址，二者不同。
 
 ## 身份与启动

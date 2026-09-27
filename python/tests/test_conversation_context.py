@@ -25,7 +25,8 @@ class TestConversationContext(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.home = Path(self.temp.name)
         self.store = Store(self.home / 'store.sqlite3', clock=lambda: NOW, local_urn=AGENT)
-        self.bridge = RemoteBridge(self.home / 'remote.sqlite3', self.store, AGENT, clock=lambda: NOW, conversations=True)
+        self.bridge = RemoteBridge(self.home / 'remote.sqlite3', self.store, AGENT, clock=lambda: NOW,
+                                   conversations=True, peer_content_safety=True)
         methods = [*READ_METHODS, 'conversation.send', 'conversation.get', 'collaboration.execute']
         self.bridge.pair(CONSOLE, 'owner-a', methods, stamp(NOW + 1000))
         self.bridge.pair(OTHER, 'owner-b', methods, stamp(NOW + 1000))
@@ -86,7 +87,8 @@ class TestConversationContext(unittest.TestCase):
             with self.assertRaises(OSError):
                 self.bridge.finish_turn(job['turn_id'], response='Host completed')
         self.bridge.close()
-        self.bridge = RemoteBridge(self.home / 'remote.sqlite3', self.store, AGENT, clock=lambda: NOW, conversations=True)
+        self.bridge = RemoteBridge(self.home / 'remote.sqlite3', self.store, AGENT, clock=lambda: NOW,
+                                   conversations=True, peer_content_safety=True)
         self.bridge.recover_interrupted_turns()
         self.assertIsNone(self.bridge.claim_turn())
         self.assertEqual(self.bridge._get('turn', job['turn_id'])['status'], 'completed')
@@ -125,7 +127,7 @@ class TestConversationContext(unittest.TestCase):
         now[0] += 60
         self.bridge.close()
         self.bridge = RemoteBridge(self.home / 'remote.sqlite3', self.store, AGENT,
-                                   clock=lambda: now[0], conversations=True)
+                                   clock=lambda: now[0], conversations=True, peer_content_safety=True)
         self.bridge.recover_interrupted_turns()
         repaired = self.rpc('notice-repaired', 'attention.list', {'after': running['cursor']})['result']
         self.assertGreater(repaired['cursor'], running['cursor'])

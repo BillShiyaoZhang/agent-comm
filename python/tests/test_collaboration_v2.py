@@ -9,6 +9,7 @@ import unittest
 from agent_comm_runtime.store import Store
 from agent_comm_runtime.collaboration_v2 import PROTOCOL, canonical, digest, timestamp
 from agent_comm_runtime.social import key as social_key
+from owner_review_fixture import allow_pending
 
 
 NOW = datetime(2026, 10, 1, tzinfo=timezone.utc).timestamp()
@@ -151,6 +152,7 @@ class CollaborationV2Tests(unittest.TestCase):
         messages = transport.retrieve()
         for message in messages:
             recipient.ingest_message(message)
+        allow_pending(recipient, OWNER_A if recipient is self.a else OWNER_B)
         transport.ack([m["message_id"] for m in messages])
         return messages
 
@@ -474,6 +476,7 @@ class CollaborationV2Tests(unittest.TestCase):
         self.assertEqual(self.b._v2_record(self.state(self.b), ALICE, packet["event_id"])["status"], "buffered")
         self.assertIsNone(self.state(self.b)["terms"])
         self.b.ingest_message(original["proposal"])
+        allow_pending(self.b, OWNER_B)
         self.assertEqual(self.b._v2_record(self.state(self.b), ALICE, packet["event_id"])["status"], "applied")
         self.assertEqual(self.state(self.b)["acceptances"][ALICE]["event_id"], packet["event_id"])
 
@@ -504,6 +507,7 @@ class CollaborationV2Tests(unittest.TestCase):
         self.b.ingest_message(by_kind["accept"])
         self.now += 6 * 86400
         self.b.ingest_message(by_kind["proposal"])
+        allow_pending(self.b, OWNER_B)
         acceptance = json.loads(by_kind["accept"]["text"])
         record = self.b._v2_record(self.state(self.b), ALICE, acceptance["event_id"])
         self.assertEqual(record["status"], "rejected")

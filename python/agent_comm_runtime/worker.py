@@ -206,6 +206,14 @@ def run_worker_tick(store, principal_id, transport, *, max_tasks=10):
                 store._put("worker_run", run_id, {"run_id": run_id, "task_id": policy["task_id"], "policy_revision": policy["policy_revision"], "status": "running", "started_at": store.clock()})
                 store._put("worker_policy", policy["task_id"], policy)
                 c = store._v2_collaboration(policy["policy"]["collaboration_id"], context.owner_session)
+                if not store._collaboration_review_safe(c, context.owner_session):
+                    policy.update(status="paused", waiting_reason="peer_content_unavailable")
+                    store._put("worker_policy", policy["task_id"], policy)
+                    run = store._get("worker_run", run_id)
+                    run.update(status="completed", finished_at=store.clock())
+                    store._put("worker_run", run_id, run)
+                    store._worker_attention(policy)
+                    continue
                 operations = [o for o in store._all("v2_operation") if o["collaboration_id"] == c["collaboration_id"]]
                 uncertain = any(o["status"] == "sending" for o in operations)
                 maintenance = next((o for o in operations if o["maintenance"] and o["status"] == "ready"), None)

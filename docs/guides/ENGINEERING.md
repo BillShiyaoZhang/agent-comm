@@ -1,5 +1,11 @@
 # Agent Comm engineering reference
 
+## Peer content safety in updated source
+
+The updated source implements persistent owner+URN blocking and owner content review. Free text and collaboration invites/proposals/change requests first appear as metadata-only `pending_review`. Separate READ `inbox.review_preview` and WRITE `inbox.review` permissions let the owner inspect complete content and decide. `contacts.block` / `contacts.unblock` are separate owner permissions. Existing pairings never expand automatically; model Runtime actions cannot make these decisions.
+
+Blocking receipts and contacts/state include monotone `safety_revision`; historical replies cannot overwrite newer state. Actual `capabilities.peer_content_safety={version:1,mode:"owner_review",automatic_peer_model_execution:false}` identifies this implemented local boundary. Neither Hermes mode directly starts a model turn for peer input. Unblocking/approval never automatically replays history. Owner review does not replace business/disclosure consent or Web operator moderation; `review_policy` is not a Web/App display attestation. See [peer blocking and owner review](../../references/peer-safety-en.md) for exact contracts and host boundaries.
+
 [中文产品介绍](../../README.md) · [English introduction](../../README_EN.md)
 
 This reference covers the current helper and collaboration integrations. Start with the README for the user journey; use this document when building, maintaining or extending an installation.
@@ -42,7 +48,7 @@ Registry registrations require an Ed25519 signature from the URN owner. PeerID m
 
 Envelope signatures bind the sender, recipient, stable message ID and all encryption fields. Cloud MQ retrieve/ACK operations authenticate the recipient identity. Reusing a message ID with different content is rejected. Cryptographic identity validation does not grant permission to execute a task, access tools or approve an action.
 
-The updated single-platform helper can use an exact URN to resolve, verify and cache the peer identity key without a manually exchanged full key. An inbound unknown URN can complete a verified handshake for a friend request while remaining an unconfirmed contact. Python Runtime, Hermes collaboration tools and paired Web allow ordinary outbound messages and v1/v2 business dispatch only to `connected` contacts. The low-level Go helper `/api/v2/mq/store` checks identity and policy but does not consult Runtime friend state. Receiving Runtime quarantines and ACKs business messages from unknown or rejected senders and releases out-of-order messages from a known pending peer only after acceptance. Friend acceptance establishes communication, not a real-world identity claim, a `trusted` flag, a task grant or compliance disclosure consent. Existing manual peer pins remain authoritative on conflicts. The v0.9.1 bundle supports this flow; the older v0.8.0 bundle still requires manual full-key pinning.
+The updated single-platform helper can use an exact URN to resolve, verify and cache the peer identity key without a manually exchanged full key. An inbound unknown URN can complete a verified handshake for a friend request while remaining an unconfirmed contact. Python Runtime, Hermes collaboration tools and paired Web allow ordinary outbound messages and v1/v2 business dispatch only to `connected` contacts. The low-level Go helper `/api/v2/mq/store` checks identity and policy but does not consult Runtime friend state. Receiving Runtime quarantines and ACKs business messages from unknown or rejected senders and moves out-of-order messages from a known pending peer into owner content review only after acceptance. Friend acceptance establishes communication, not a real-world identity claim, a `trusted` flag, a task grant or compliance disclosure consent. Existing manual peer pins remain authoritative on conflicts. The v0.9.1 bundle supports this flow; the older v0.8.0 bundle still requires manual full-key pinning.
 
 ## Installation, profiles and upgrades
 
@@ -53,6 +59,14 @@ Preserve identity keys, helper `mailbox.db`, plugin receipt databases and their 
 The cloud HTTPS address is the helper daemon's platform argument. The Hermes plugin's `platform_url` is instead the local `http://127.0.0.1:45042`. Verify `/info`, an established SSE connection and a real two-identity round trip. Starting the helper or accepting a local send alone is insufficient.
 
 For platform operators, signed envelopes and authenticated ACK require a coordinated server/client upgrade. See the [platform upgrade instructions](https://github.com/BillShiyaoZhang/agent-comm-platform/blob/main/docs/guides/MESSAGE_UPGRADE.md) and the [integration contract](HERMES_INTEGRATION.md). To keep the helper running, see [persistent services](HELPER_SERVICE.md).
+
+### Model/provider disclosure requires a verified host
+
+The SDK currently has no `data_processing.describe` RPC or verified routing revision. [`HostSession`](../../python/agent_comm_runtime/ports.py) binds owner/session/turn, while [`read_settings()`](../../connectors/hermes-platform/hermes_platform_agent_comm/collaboration/hermes.py) only extracts `platforms.agent_comm` settings. The paired adapter delegates actual model execution to Hermes [`handle_message`](../../connectors/hermes-platform/hermes_platform_agent_comm/platform.py). Peer-safety capabilities do not attest model recipients.
+
+[Hermes' official runtime documentation](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/provider-runtime.md) describes runtime provider resolution, in-turn fallback switching, and independent auxiliary-model routing. Saved primary-model configuration or file modification time cannot establish all recipients. A future trusted host descriptor must obtain effective primary/fallback/auxiliary routes and external tool recipients from the matching host's resolver/admission hooks, omit secrets, and bind owner permission to a stable nonsecret fingerprint checked before queued execution and each route change. Any new owner READ RPC requires explicit pairing; old pairings must not gain it automatically.
+
+No actual Hermes installation was available for this assessment, so upstream `main` documents possible hooks rather than a verified installed contract. Unknown/custom relay operators, downstream recipients, supplier privacy terms and retention/training facts cannot be inferred from an endpoint or model name. Obtain verified operator/provider facts; never publish guessed policy URLs or a complete-disclosure claim. [Apple 5.1.2(i)](https://developer.apple.com/app-store/review/guidelines/#data-use-and-sharing) requires disclosure and explicit permission before personal-data sharing with third-party AI; user-configured routing does not establish that the app has implemented this flow.
 
 ## Collaboration and remote access
 

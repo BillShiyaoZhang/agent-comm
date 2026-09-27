@@ -61,7 +61,7 @@ helper 在 `<keys_dir>/mailbox.db` 中保存 inbox、outbox 及消费记录，SQ
 
 目前没有独立的端到端任务状态查询、取消或进度服务。不能将 `accepted` 或 `platform_queued` 展示成“对方任务完成”。deadline 在发送前和插件执行前检查；已被平台接纳的消息不会因状态查询自动撤回。
 
-入站只有在完整验证、解密和 inbox 提交成功后才 ACK 平台。Hermes 使用真实 `on_processing_complete` 钩子，先持久记录完成 receipt，再 ACK helper；仅 `handle_message` 返回不触发 ACK。重启或丢 ACK 后已完成消息只补 ACK，不重复调度。外部工具已产生副作用、但完成 receipt 尚未落盘时发生崩溃，仍可能重做；业务操作需要使用 `task_id`/`message_id` 作为幂等键。
+入站只有在完整验证、解密和 inbox 提交成功后才 ACK 平台。更新 Hermes connector 的两种模式都先将业务内容持久接管、屏蔽或审核隔离，再记录 receipt 并 ACK helper，不直接创建对端模型回合。数据库失败不 ACK，重启或丢 ACK 后只补 ACK。已配对的私人助手会话另按真实宿主 completion 写入其回合账本，不能把业务来信 ACK 当作本人批准或模型完成。屏蔽、本人审核与单向 schema 2 升级见[内容安全契约](../../references/peer-safety.md)。
 
 平台信封默认 TTL 为 7 天；平台历史清理会限制其去重保留期。未读队列满时平台拒绝新存储并返回 HTTP 429，让 helper 重试，不淘汰已经接纳的未读消息。helper 和 Hermes 完成记录用于更长时间的幂等性，因此升级不要清空这些数据库。当前 helper inbox/outbox 没有自动清理策略，运营方需关注磁盘用量。
 
@@ -81,7 +81,7 @@ helper 在 `<keys_dir>/mailbox.db` 中保存 inbox、outbox 及消费记录，SQ
 - 保留原身份，确认 helper `/info` 返回预期 URN；配置 loopback URL、profile 独立的 receipts 路径、明确的 `allow_from` 对端 URN。旧插件曾自动写入 pairing 的授权需按实际意图检查。
 - 确认外来消息 `is_bot=True`、`allow_gateway_control=False`，仅获得通信许可；不得因联系人信任自动获得工具执行或用户审批权限。
 - conversation_id 映射独立 Hermes thread，没有 conversation_id 时使用 task_id；均没有时使用对端 DM。不会自动共享当前桌面/CLI transcript。
-- 用两个隔离身份跑一次有停止条件的真实模型回合，检查关联回复、SSE 断开恢复、处理期间重启、重复消息、hop limit 和工具副作用幂等。
+- 用两个隔离身份检查入站持久隔离先于 ACK、本人完整预览后可读、拒绝/屏蔽与重复消息不触发模型、SSE 断开恢复和重启。新的配对私人助手回合先核对实际 `peer_content_safety` 三字段声明与业务/AI 许可；不通过原始 helper 来信绕过审核。
 
 安装需要使用兼容版本的 Hermes 原生接口；远程工作台、个人协作及其各自授权方式见插件和 Python runtime 文档。
 

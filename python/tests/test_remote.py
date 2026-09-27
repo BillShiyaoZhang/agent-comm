@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from owner_review_fixture import allow_pending
 from unittest.mock import patch
 
 from agent_comm_runtime.daemon import main
@@ -73,7 +74,7 @@ class TestRemote(unittest.TestCase):
         self.home = Path(self.temp.name)
         self.now = NOW
         self.store = Store(self.home / "collaboration.sqlite3", clock=lambda: self.now, local_urn=AGENT)
-        self.bridge = RemoteBridge(self.home / "remote.sqlite3", self.store, AGENT, clock=lambda: self.now, conversations=True)
+        self.bridge = RemoteBridge(self.home / "remote.sqlite3", self.store, AGENT, clock=lambda: self.now, conversations=True, peer_content_safety=True)
         self.network = MailNetwork()
         self.console, self.agent = self.network.endpoint(CONSOLE), self.network.endpoint(AGENT)
         self.bridge.pair(CONSOLE, "owner-a", [*READ_METHODS, "conversation.send", "conversation.get"], stamp(NOW + 1000))
@@ -132,6 +133,8 @@ class TestRemote(unittest.TestCase):
         self.contact("bob", "owner-b")
         self.store.ingest_message({"message_id": "alice-message", "sender_urn": "urn:agent-comm:agent:alice", "text": "owner a"})
         self.store.ingest_message({"message_id": "bob-message", "sender_urn": "urn:agent-comm:agent:bob", "text": "owner b"})
+        allow_pending(self.store, "owner-a|native")
+        allow_pending(self.store, "owner-b|native")
         _, response = self.submit(request(method="contacts.list"))
         self.assertEqual([c["contact_id"] for c in self.result(response)["result"]["contacts"]], ["alice"])
         _, response = self.submit(request("inbox-a", "inbox.list"))

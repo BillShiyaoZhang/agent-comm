@@ -1,5 +1,11 @@
 # 远程工作台：配对与方法
 
+## 对端内容安全（更新源码）
+
+当前源码使用持久 owner+URN 屏蔽及本人内容审核。自由正文和协作邀请、提议、修改请求先进入仅元数据的 `pending_review`；独立 READ `inbox.review_preview` 完整预览后，独立 WRITE `inbox.review` 由本人决定。屏蔽使用 `contacts.block` / `contacts.unblock`。四项方法必须显式授权，旧 pairing 不增权；模型 Runtime 不提供这些决定动作。
+
+屏蔽回执与 contacts/state 含单调 `safety_revision`，历史回执不能覆盖新状态。真实 `capabilities.peer_content_safety={version:1,mode:"owner_review",automatic_peer_model_execution:false}` 才表明更新后的本机边界。两种 Hermes 模式均不直接让对端来信启动模型；解除屏蔽或批准均不自动重放历史。审核不能替代业务委托、共享许可或 Web 运营审核；`review_policy` 不证明 Web/App 显示过滤已完成。完整契约与宿主限制见[屏蔽与本人审核](peer-safety.md)。
+
 用于已安装 `agent-comm-runtime` 的本机配对管理或 Web/宿主集成。它通过 helper 的加密信箱交换 `control.request` / `control.response`，不额外公开本机 HTTP 监听端口。普通好友关系不产生工作台权限。
 
 ## 本机 CLI
@@ -37,12 +43,15 @@ agent-comm-runtime remote serve --hermes-profile <actual_profile> --agent-urn <l
 | --- | --- | --- |
 | `capabilities` | `{}` | 协议、各方法可用性/原因、配对到期时间 |
 | `contacts.list` | `{}` | 当前配对主人 profile 的 runtime 联系人、连接状态和 `presence`；不是 helper 公钥缓存 |
+| `contacts.block` / `contacts.unblock` | 必需 `urn` | 独立主人 WRITE；持久屏蔽，准确回执包含 `urn`、`status`、`blocked`、`connection_status`、`safety_revision` |
 | `contacts.requests` | `{}` | 双向好友请求及 `pending` / `accepted` / `rejected` 状态 |
 | `contacts.add` | 必需 `contact_id`、`aliases`（字符串数组）、`urn` | 确认用户提交的本地联系人并持久发出好友请求；对方接受后才建立连接 |
 | `contacts.respond` | 必需 `request_id`、`decision=accept\|reject`；可选 `contact_id`、`aliases` | 处理收到的好友请求，接受时保存联系人并建立通讯关系；不授予信任或协作权限，向对方发送响应并同步双方连接状态 |
 | `messages.send` | 必需 `recipient_urn`、`text`；可选稳定 `message_id` | 仅向已 `connected` 的联系人持久提交用户输入的确切正文，断线重试复用消息 ID；不代表对方已读 |
 | `collaboration.state` | 可选 `task_id` | 联系人、请求、资料、事项、动作、待确认项、已作决定、入站、发送记录及提议；读取不授予审批权限 |
-| `inbox.list` | 可选 `task_id` | 已存入 runtime 的内容及 `read` / `read_at`；不是新一次 helper 拉取 |
+| `inbox.list` | 可选 `task_id` | 已批准内容及 `read` / `read_at`，另含仅元数据的 `pending_review`；不是新一次 helper 拉取 |
+| `inbox.review_preview` | 必需 `message_id` | 独立 READ；完整正文、真实发送方与不可变 `fingerprint`，不提供给模型工具 |
+| `inbox.review` | 必需 `message_id`、`decision=approve\|reject` | 独立主人 WRITE；同 session 完整预览后批准，拒绝永久，不自动重放 |
 | `inbox.mark_read` | 必需 `message_id` | 在 agent 保存已读，两端下一次同步时关闭此消息提醒；不接受好友或批准动作 |
 | `attention.list` | 可选 `after`、`limit`（1–100） | 同一 agent 的持久待办增量；跟随 `cursor` / `has_more`，已处理事项更新为 resolved |
 | `approval.respond` | 必需 `approval_id`、`decision=approve\|deny` | 用户在可信 Web 审批卡对具体问题作决定；写入同一 Store 并使迟到的原生回答失效。不得作为模型代答工具 |

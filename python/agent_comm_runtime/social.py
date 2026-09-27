@@ -19,6 +19,133 @@ def key(*values):
 
 
 class SocialMixin:
+    def _safety_revision(self, owner_session):
+        return (self._get("peer_safety", key(self._principal(owner_session))) or {}).get("revision", 0)
+
+    def _peer_blocked(self, urn, owner_session):
+        return bool((self._get("peer_block", key(self._principal(owner_session), urn)) or {}).get("blocked"))
+
+    def _blocked_peers(self, owner_session):
+        return [{"urn": record["urn"], "blocked": True, "connection_status": "blocked",
+                 "blocked_at": record["blocked_at"]}
+                for record in self._all("peer_block") if self._belongs(record, owner_session) and record["blocked"]]
+
+    def _set_peer_block(self, urn, blocked, owner_session):
+        """Trusted owner mutation; the caller holds the Store write transaction.
+
+        It deliberately is not a model Runtime action. Existing pairing scopes
+        must explicitly grant contacts.block / contacts.unblock.
+        """
+        self._owner(owner_session)
+        urn = validate_urn(urn)
+        if urn == self.local_urn:
+            raise ValueError("Cannot block the local agent")
+        owner = self._principal(owner_session)
+        record_id = key(owner, urn)
+        old = self._get("peer_block", record_id)
+        revision = self._safety_revision(owner_session)
+        if bool(old and old["blocked"]) != blocked:
+            if revision >= 9007199254740991:
+                raise ValueError("Owner safety revision is exhausted")
+            revision += 1
+            self._put("peer_safety", key(owner), {"owner_id": owner, "revision": revision})
+        self._put("peer_block", record_id, {"owner_id": owner, "urn": urn, "blocked": blocked,
+            "blocked_at": old["blocked_at"] if old and old["blocked"] and blocked else self.clock(),
+            "updated_at": self.clock()})
+        if blocked:
+            # Tombstones are owner-scoped, so blocking one profile never edits
+            # another profile's retained mail. They survive unblocking.
+            for message in self._all("inbound"):
+                if message["sender_urn"] == urn:
+                    self._put("peer_message_block", key(owner, urn, message["message_id"]),
+                              {"owner_id": owner, "message_id": message["message_id"]})
+            for request in self._all("contact_request"):
+                if self._belongs(request, owner_session) and request["peer_urn"] == urn and request["status"] == "pending":
+                    request.update(status="blocked", updated_at=self.clock())
+                    self._put("contact_request", request["request_id"], request)
+                    self._friend_attention(request)
+            for pending in self._all("social_outbox"):
+                if self._belongs(pending, owner_session) and pending["message"]["recipient_urn"] == urn and pending["status"] not in {"accepted", "blocked"}:
+                    pending.update(status="blocked", updated_at=self.clock())
+                    self._put("social_outbox", pending["message_id"], pending)
+            # A blocked peer must not resume an old native decision or worker
+            # after unblocking; fresh intent is required for unfinished work.
+            contacts = {c["contact_id"] for c in self._all("contact") if self._belongs(c, owner_session) and c["urn"] == urn}
+            task_ids = {t["task_id"] for t in self._all("task") if self._belongs(t, owner_session)
+                        and contacts.intersection(t["scope"].get("recipient_ids", []) + t["scope"].get("participant_ids", []))}
+            for worker in self._all("worker_policy"):
+                if self._belongs(worker, owner_session) and worker["task_id"] in task_ids:
+                    worker.update(status="paused", waiting_reason="peer_blocked")
+                    self._put("worker_policy", worker["task_id"], worker)
+                    self._worker_attention(worker)
+            collaboration_ids = set()
+            for collaboration in self._all("v2_collaboration"):
+                if self._belongs(collaboration, owner_session) and collaboration["peer_urn"] == urn:
+                    collaboration_ids.add(collaboration["collaboration_id"])
+                    collaboration["peer_blocked_at"] = self.clock()
+                    if collaboration.get("maintenance"):
+                        collaboration["maintenance"]["revoked"] = True
+                    self._put("v2_collaboration", collaboration["collaboration_id"], collaboration)
+            for kind in ("operation", "v2_operation"):
+                for operation in self._all(kind):
+                    matching = operation.get("collaboration_id") in collaboration_ids if kind == "v2_operation" else any(
+                        recipient["urn"] == urn for recipient in operation.get("recipients", []))
+                    if self._belongs(operation, owner_session) and matching and operation["status"] not in {"accepted", "denied"}:
+                        # Keep accepted/uncertain delivery evidence, but retire
+                        # the unsent work. An unblock cannot replay old intent.
+                        operation.update(status="denied", invalidation_reason="peer_blocked")
+                        self._put(kind, operation["operation_id"], operation)
+            for approval in self._all("approval"):
+                payload = approval["payload"]
+                peer = payload.get("urn") or payload.get("recipient_urn") or (payload.get("contact") or {}).get("urn")
+                request = self._get("contact_request", approval["subject_id"]) if approval["kind"] == "contact_response" else None
+                if (self._belongs(approval, owner_session) and approval["status"] in {"pending", "presenting", "expired"}
+                        and (peer == urn or request and request["peer_urn"] == urn or self._approval_task_id(approval) in task_ids)):
+                    approval.update(status="superseded", invalidation_reason="peer_blocked")
+                    approval.pop("token_hash", None)
+                    approval.pop("lease_until", None)
+                    self._put("approval", approval["approval_id"], approval)
+                    self._attention_approval(approval, refresh=True)
+            # Close old notification revisions, including ones already read by
+            # another surface. Later refresh must not recreate them.
+            for item in self._all("attention"):
+                source = self._get("inbound", item["subject_id"]) if item["source_kind"] == "inbound" else None
+                if item["owner_id"] == owner and source and source["sender_urn"] == urn:
+                    self._attention_put(owner, item["source_kind"], item["source_id"], kind=item["kind"],
+                        subject_id=item["subject_id"], target_kind=item["target"]["kind"], task_id=item.get("task_id"),
+                        title=item["title"], summary=item["safe_summary"], state="superseded", source_revision="peer_blocked")
+        contact = next((c for c in self._all("contact") if self._belongs(c, owner_session) and c["urn"] == urn), None)
+        return {"urn": urn, "status": "blocked" if blocked else "unblocked", "blocked": blocked,
+                "safety_revision": revision,
+                "connection_status": "blocked" if blocked else self._contact_status(contact) if contact else "unverified"}
+
+    def set_peer_block(self, urn, blocked, owner_session):
+        """Local trusted-host API, never an LLM tool or JSON-supplied principal."""
+        if type(blocked) is not bool:
+            raise ValueError("Blocked must be a boolean")
+        with self._transaction():
+            return self._set_peer_block(urn, blocked, owner_session)
+
+    def consume_blocked_peer(self, message, owner_session):
+        """Shared Hermes legacy guard. Persist a terminal ACK-able record only
+        when this profile has blocked the authenticated helper sender.
+        """
+        self._owner(owner_session)
+        with self._transaction():
+            if not self._peer_blocked(message["sender_urn"], owner_session):
+                return False
+            from .store import identifier, digest
+            sender = validate_urn(message["sender_urn"])
+            message_id = identifier(message["message_id"], "message_id")
+            record_id = key(self._principal(owner_session), sender, message_id)
+            old = self._get("peer_message_block", record_id)
+            fingerprint = digest(message)
+            if old and old.get("fingerprint") not in (None, fingerprint):
+                raise ValueError("Blocked message ID conflicts with its durable contents")
+            self._put("peer_message_block", record_id, {"owner_id": self._principal(owner_session),
+                "message_id": message_id, "fingerprint": fingerprint})
+            return True
+
     def register_owner(self, owner_session):
         """Bind unsolicited local-agent mail to its trusted host profile once."""
         self._owner(owner_session)
@@ -28,7 +155,7 @@ class SocialMixin:
             if not profile:
                 self._put("local_profile", "owner", {"owner_id": owner})
                 for message in self._all("inbound"):
-                    if message.get("kind") in SOCIAL_KINDS:
+                    if message.get("kind") in SOCIAL_KINDS and self._message_visible(message, owner_session):
                         self._ingest_social(message)
             return (profile or {"owner_id": owner})["owner_id"]
 
@@ -47,6 +174,8 @@ class SocialMixin:
         return record
 
     def _request_contact(self, contact):
+        if self._peer_blocked(contact["urn"], contact["owner_id"]):
+            raise ValueError("Unblock this peer before requesting a connection")
         if not self.local_urn:
             return None  # Offline/local-only hosts can still maintain identity mappings.
         if contact["urn"] == self.local_urn:
@@ -76,6 +205,8 @@ class SocialMixin:
 
     def _prepare_existing_contact(self, contact, owner_session):
         status = self._contact_status(contact)
+        if status == "blocked":
+            raise ValueError("Unblock this peer before requesting a connection")
         if not self.local_urn or status == "connected":
             return {"decision": "allow", "contact": contact,
                     "status": "already_connected" if status == "connected" else "already_confirmed"}
@@ -92,6 +223,8 @@ class SocialMixin:
 
     def _contact_status(self, contact):
         owner, urn = contact["owner_id"], contact["urn"]
+        if self._peer_blocked(urn, owner):
+            return "blocked"
         if self._get("connection", key(owner, urn)):
             return "connected"
         requests = [r for r in self._all("contact_request") if r.get("owner_id") == owner
@@ -120,6 +253,8 @@ class SocialMixin:
         return "not_connected", None
 
     def _can_send_to(self, recipient_urn, owner_session):
+        if self._peer_blocked(recipient_urn, owner_session):
+            return False
         contacts = [c for c in self._all("contact") if c["urn"] == recipient_urn
                     and self._belongs(c, owner_session)]
         return bool(contacts and (not self.local_urn or any(
@@ -131,8 +266,11 @@ class SocialMixin:
         Unknown/rejected senders never enter this path. Each replay is isolated
         so malformed preconnection mail cannot undo the friendship decision.
         """
+        if self._mail_owner() and self._peer_blocked(sender_urn, self._mail_owner()):
+            return
         pending = sorted((m for m in self._all("inbound")
                           if m.get("sender_urn") == sender_urn
+                          and not self._get("peer_message_block", key(self._mail_owner(), sender_urn, m["message_id"]))
                           and m.get("quarantine_reason") == "pending_connection"
                           and m.get("quarantine_request_id") == request_id),
                          key=lambda m: (m["received_at"], m["message_id"]))
@@ -141,8 +279,13 @@ class SocialMixin:
             try:
                 visible = {k: v for k, v in message.items()
                            if k not in {"quarantined", "quarantine_reason", "quarantine_request_id"}}
+                if self._needs_peer_review(visible) and self._mail_owner():
+                    review = self._stage_peer_review(visible, self._mail_owner())
+                    if review["status"] != "approved":
+                        visible.update(quarantined=True, quarantine_reason="pending_review" if review["status"] == "pending" else "rejected_review")
                 self._put("inbound", message["message_id"], visible)
-                self.ingest_v2_record(visible)
+                if not visible.get("quarantined"):
+                    self.ingest_v2_record(visible)
                 self._db.execute("RELEASE SAVEPOINT promote_pending_message")
             except (ValueError, TypeError, UnicodeError, RecursionError, KeyError, OverflowError):
                 self._db.execute("ROLLBACK TO SAVEPOINT promote_pending_message")
@@ -159,7 +302,7 @@ class SocialMixin:
             presence = self._get("contact_presence", key(contact["owner_id"], contact["urn"])) or {}
             if status != "connected" or presence.get("cache_expires_at", 0) <= self.clock() or (presence.get("status") == "online" and (presence.get("expires_at") or 0) <= self.clock()):
                 presence = {"status": "unknown", "last_seen": presence.get("last_seen"), "expires_at": None}
-            result.append({**contact, "connection_status": status,
+            result.append({**contact, "connection_status": status, "blocked": status == "blocked",
                            "presence": {k: presence.get(k) for k in ("status", "last_seen", "expires_at")}})
         return result
 
@@ -266,6 +409,8 @@ class SocialMixin:
         request = self._get("contact_request", request_id)
         if not self._belongs(request, owner_session) or request["direction"] != "incoming":
             raise ValueError("No incoming friend request for this owner")
+        if self._peer_blocked(request["peer_urn"], owner_session):
+            raise ValueError("Unblock this peer before responding to its request")
         decision = params["decision"]
         if decision not in {"accept", "reject"}:
             raise ValueError("Contact decision must be accept or reject")
@@ -363,8 +508,11 @@ class SocialMixin:
         with self._transaction():
             return self._mark_read(message_id, owner_session)
 
-    def _message_visible(self, message, owner_session):
-        if message.get("quarantined"):
+    def _message_visible(self, message, owner_session, *, review_gate=True):
+        if (message.get("quarantined") or self._peer_blocked(message["sender_urn"], owner_session)
+                or self._get("peer_message_block", key(self._principal(owner_session), message["sender_urn"], message["message_id"]))):
+            return False
+        if review_gate and not self._message_review_safe(message, owner_session):
             return False
         owner = self._principal(owner_session)
         matched = [c for c in self._all("contact") if c["urn"] == message["sender_urn"]]
@@ -385,26 +533,27 @@ class SocialMixin:
     def flush_social_outbox(self, transport, limit=16):
         """Retry the identical helper ID after uncertain delivery; never invent a resend."""
         with self._lock:
-            all_pending = [r for r in self._all("social_outbox") if r["status"] != "accepted"]
-            pending = [r for r in all_pending if r["message"]["kind"] != "chat.message"
-                       or self._can_send_to(r["message"]["recipient_urn"], r["owner_id"])][:limit]
+            all_pending = [r for r in self._all("social_outbox") if r["status"] not in {"accepted", "blocked"}]
+            pending = [r for r in all_pending if not self._peer_blocked(r["message"]["recipient_urn"], r["owner_id"]) and (r["message"]["kind"] != "chat.message"
+                       or self._can_send_to(r["message"]["recipient_urn"], r["owner_id"]))][:limit]
         accepted = 0
         if not callable(getattr(transport, "store", None)):
             return {"accepted": 0, "pending": len(all_pending)}
         for record in pending:
-            if record["message"]["kind"] == "chat.message" and not self._can_send_to(
-                    record["message"]["recipient_urn"], record["owner_id"]):
-                continue
-            try:
-                result = transport.store(record["message"])
-                if result.get("success") is not True or result.get("message_id") != record["message_id"]:
-                    raise ValueError("Helper did not accept this exact outgoing message")
-            except OSError:
-                break  # One unavailable helper must not incur N serial timeouts.
-            except (ValueError, TypeError):
-                continue
             with self._transaction():
                 current = self._get("social_outbox", record["message_id"])
+                if (current["status"] in {"accepted", "blocked"} or self._peer_blocked(current["message"]["recipient_urn"], current["owner_id"])
+                        or current["message"]["kind"] == "chat.message" and not self._can_send_to(current["message"]["recipient_urn"], current["owner_id"])):
+                    continue
+                # Linearize block with bounded helper submission across processes.
+                try:
+                    result = transport.store(current["message"])
+                    if result.get("success") is not True or result.get("message_id") != current["message_id"]:
+                        raise ValueError("Helper did not accept this exact outgoing message")
+                except OSError:
+                    break
+                except (ValueError, TypeError):
+                    continue
                 current.update(status="accepted", updated_at=self.clock())
                 self._put("social_outbox", record["message_id"], current)
             accepted += 1

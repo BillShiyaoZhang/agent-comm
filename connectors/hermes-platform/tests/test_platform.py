@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
 _TEST_HOME = tempfile.TemporaryDirectory(prefix="agent-comm-hermes-tests-")
@@ -121,6 +122,8 @@ class TestAdapter(unittest.IsolatedAsyncioTestCase):
         adapter = AgentCommAdapter(PlatformConfig(enabled=True, extra={
             "platform_url": self.helper.url, "state_path": str(Path(self.temp.name) / "receipts.sqlite3"),
             "reconcile_interval": .05, "retry_delay": .1, "request_timeout": 1,
+            "urn": "urn:agent-comm:agent:local-test",
+            "collaboration_state_path": str(Path(self.temp.name) / "collaboration.sqlite3"),
         }))
         adapter.set_message_handler(self.handler)
         self.adapters.append(adapter)
@@ -175,7 +178,7 @@ class TestAdapter(unittest.IsolatedAsyncioTestCase):
         self.helper.publish(envelope())
         await self.until(lambda: adapter.is_connected)
         await self.until(lambda: "wire-1" in self.helper.acked)
-        self.assertEqual(len(self.received), 1)
+        self.assertEqual(self.received, [])
 
     async def test_malformed_pending_message_does_not_block_valid_message(self):
         adapter = self.adapter()
@@ -184,67 +187,53 @@ class TestAdapter(unittest.IsolatedAsyncioTestCase):
         self.helper.publish(envelope("good"))
         await self.until(lambda: "good" in self.helper.acked)
         self.assertIn("bad", self.helper.inbox)
-        self.assertEqual([event.message_id for event in self.received], ["good"])
+        self.assertEqual(self.received, [])
 
-    async def test_wire_id_dedup_and_completion_before_ack(self):
+    async def test_wire_id_dedup_ack_after_durable_quarantine(self):
         adapter = self.adapter()
-        started, finish = asyncio.Event(), asyncio.Event()
-        async def slow_handler(event):
-            self.received.append(event)
-            started.set()
-            await finish.wait()
-        adapter.set_message_handler(slow_handler)
         await adapter.connect()
         message = envelope(conversation_id="room", task_id="task", hop_limit=3)
         self.helper.publish(message)
-        await asyncio.wait_for(started.wait(), 2)
-        self.helper.publish(message)
-        await asyncio.sleep(.15)
-        self.assertEqual(len(self.received), 1)
-        self.assertEqual(self.helper.acked, [])
-        self.assertEqual(self.received[0].message_id, "wire-1")
-        finish.set()
         await self.until(lambda: "wire-1" in self.helper.acked)
+        self.assertEqual(self.received, [])
+        from agent_comm_runtime import Store
+        store = Store(adapter.config.extra["collaboration_state_path"])
+        try:
+            self.assertTrue(store._get("inbound", "wire-1")["quarantined"])
+        finally:
+            store.close()
         await adapter.disconnect()
-        # Lost/replayed local ACK after restart must not run Hermes again.
         self.helper.publish(message)
-        replacement = self.adapter()
-        await replacement.connect()
+        await self.adapter().connect()
         await self.until(lambda: self.helper.acked.count("wire-1") == 2)
-        self.assertEqual(len(self.received), 1)
+        self.assertEqual(self.received, [])
 
-    async def test_cancelled_processing_survives_restart(self):
+    async def test_failed_persistence_survives_restart_without_model_execution(self):
         first = self.adapter()
-        started = asyncio.Event()
-        async def interrupted_handler(event):
-            self.received.append(event)
-            started.set()
-            await asyncio.Event().wait()
-        first.set_message_handler(interrupted_handler)
         await first.connect()
-        self.helper.publish(envelope())
-        await asyncio.wait_for(started.wait(), 2)
-        await first.disconnect()
-        self.assertIn("wire-1", self.helper.inbox)
-        self.assertEqual(self.helper.acked, [])
-        replacement = self.adapter()
-        await replacement.connect()
+        with patch("agent_comm_runtime.store.Store.ingest_message", side_effect=OSError("disk failure")):
+            self.helper.publish(envelope())
+            await self.until(lambda: "wire-1" in first._retry_after)
+            await first.disconnect()
+            self.assertIn("wire-1", self.helper.inbox)
+            self.assertEqual(self.helper.acked, [])
+        await self.adapter().connect()
         await self.until(lambda: "wire-1" in self.helper.acked)
-        self.assertEqual(len(self.received), 2)
+        self.assertEqual(self.received, [])
 
     async def test_completed_receipt_survives_failed_ack(self):
         first = self.adapter()
         self.helper.reject_ack = True
         await first.connect()
         self.helper.publish(envelope())
-        await self.until(lambda: len(self.received) == 1)
+        await self.until(lambda: "wire-1" in first._retry_after)
         await asyncio.sleep(.15)
-        self.assertEqual(len(self.received), 1)
+        self.assertEqual(self.received, [])
         await first.disconnect()
         self.helper.reject_ack = False
         await self.adapter().connect()
         await self.until(lambda: "wire-1" in self.helper.acked)
-        self.assertEqual(len(self.received), 1)
+        self.assertEqual(self.received, [])
 
     async def test_three_messages_are_not_merged_by_busy_hermes_session(self):
         adapter = self.adapter()
@@ -256,17 +245,15 @@ class TestAdapter(unittest.IsolatedAsyncioTestCase):
         for index in range(3):
             self.helper.publish(envelope(f"wire-{index}"))
         await self.until(lambda: len(self.helper.acked) == 3)
-        self.assertEqual([e.message_id for e in self.received], ["wire-0", "wire-1", "wire-2"])
+        self.assertEqual(self.received, [])
 
-    async def test_no_handler_means_no_ack(self):
+    async def test_quarantine_ack_does_not_require_model_handler(self):
         adapter = self.adapter()
         adapter.set_message_handler(None)
         await adapter.connect()
         self.helper.publish(envelope())
-        await asyncio.sleep(.15)
-        self.assertEqual(self.helper.acked, [])
-        adapter.set_message_handler(self.handler)
         await self.until(lambda: "wire-1" in self.helper.acked)
+        self.assertEqual(self.received, [])
 
     async def test_permissions_and_conversation_isolation(self):
         adapter = self.adapter()
@@ -312,23 +299,19 @@ class TestAdapter(unittest.IsolatedAsyncioTestCase):
         self.helper.publish(envelope("expired", deadline=(datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()))
         self.helper.publish(envelope("last-hop", hop_limit=0))
         await self.until(lambda: len(self.helper.acked) == 2)
-        self.assertEqual([event.message_id for event in self.received], ["last-hop"])
+        self.assertEqual(self.received, [])
         self.assertEqual(self.helper.stored, [])
 
-    async def test_failed_completion_retries_without_ack(self):
+    async def test_failed_persistence_retries_without_ack(self):
         adapter = self.adapter()
-        async def failing(event):
-            self.received.append(event)
-            raise RuntimeError("temporary handler failure")
-        adapter.set_message_handler(failing)
         await adapter.connect()
-        self.helper.publish(envelope())
-        await self.until(lambda: bool(self.received))
-        await asyncio.sleep(.03)
-        self.assertEqual(self.helper.acked, [])
-        adapter.set_message_handler(self.handler)
+        with patch("agent_comm_runtime.store.Store.ingest_message", side_effect=OSError("disk failure")):
+            self.helper.publish(envelope())
+            await self.until(lambda: "wire-1" in adapter._retry_after)
+            self.assertEqual(self.helper.acked, [])
+            self.assertEqual(self.received, [])
         await self.until(lambda: "wire-1" in self.helper.acked)
-        self.assertEqual(len(self.received), 2)
+        self.assertEqual(self.received, [])
 
     async def test_config_nested_extra_and_local_endpoint_boundary(self):
         self.assertEqual(_apply_yaml_config({}, {"extra": {"state_path": "test"}, "platform_url": self.helper.url}),

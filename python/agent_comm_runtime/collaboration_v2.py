@@ -265,6 +265,8 @@ class CollaborationV2Mixin:
                 c = self._v2_collaboration(collaboration_id, owner_session)
                 if c["task_id"] != task_id:
                     raise ValueError("Shared collaboration ID cannot select another local mandate")
+                if not self._collaboration_review_safe(c, owner_session) and kind not in MAINTENANCE:
+                    return {"decision": "deny", "reasons": ["peer_review_required_or_blocked"]}
             wire_payload, action = self._v2_payload(c, kind, payload, task)
             if kind not in {"invite", "join"}:
                 self._v2_precondition(c, kind, wire_payload, self.local_urn)
@@ -351,6 +353,9 @@ class CollaborationV2Mixin:
         if op["status"] not in {"accepted", "denied"} and not self._v2_operation_current(op):
             result.update(decision="deny", reasons=["revoked_expired_or_superseded"])
         result["delivery_meaning"] = "accepted means queued locally, not peer consent"
+        c = self._get("v2_collaboration", op["collaboration_id"]) or op.get("new_collaboration")
+        if c and not self._collaboration_review_safe(c, op["owner_id"]):
+            result.update(text="", decision="deny", reasons=["peer_content_unavailable"])
         return result
 
     def _v2_operation_current(self, op):
@@ -368,6 +373,8 @@ class CollaborationV2Mixin:
                 return False
             c = c or op["new_collaboration"]
         if not c or c["owner_id"] != op["owner_id"]:
+            return False
+        if not self._collaboration_review_safe(c, op["owner_id"]):
             return False
         if op["maintenance"]:
             return bool(c.get("maintenance") and not c["maintenance"].get("revoked") and c["maintenance"]["until"] > self.clock()
@@ -463,6 +470,8 @@ class CollaborationV2Mixin:
             peer = self._get("v2_collaboration", op["collaboration_id"]) or op.get("new_collaboration")
             if not peer or not self._can_send_to(peer["peer_urn"], owner_session):
                 return {"decision": "deny", "reasons": ["contact_not_connected"]}
+            if not self._collaboration_review_safe(peer, owner_session):
+                return {"decision": "deny", "reasons": ["peer_review_required"]}
             if worker_context is not None:
                 worker, _ = self._check_worker_context(worker_context)
                 if (op["task_id"] != worker_context.task_id or op["owner_id"] != worker_context.principal_id
@@ -520,6 +529,8 @@ class CollaborationV2Mixin:
             c = self._v2_collaboration(op["collaboration_id"], owner_session)
             if not self._can_send_to(packet["recipient_urn"], owner_session):
                 return {"decision": "deny", "reasons": ["contact_not_connected"]}
+            if not self._collaboration_review_safe(c, owner_session):
+                return {"decision": "deny", "reasons": ["peer_review_required"]}
             record = self._v2_record(c, self.local_urn, packet["event_id"])
             if record["status"] == "reserved":
                 # Linearize the intention to send with the bounded helper call.
@@ -790,6 +801,16 @@ class CollaborationV2Mixin:
                 c.update(phase="reconciling", waiting_reason="event_chain_conflict")
                 break
             if record["status"] == "buffered":
+                if packet["kind"] in {"invite", "proposal", "change_request"}:
+                    review = self._event_review(packet, c["owner_id"])
+                    if review["status"] == "pending":
+                        c["waiting_reason"] = "peer_review_required"
+                        break
+                    if review["status"] == "rejected":
+                        record.update(status="rejected", reason="owner_rejected_content")
+                        self._put("v2_event", self._v2_key(c["collaboration_id"], packet["sender_urn"], packet["event_id"]), record)
+                        c.update(in_sequence=packet["sender_sequence"], last_in_event_id=packet["event_id"])
+                        continue
                 if instant(packet["expires_at"]) <= self.clock() and packet["kind"] != "agreement":
                     record.update(status="rejected", reason="expired_while_buffered")
                     self._put("v2_event", self._v2_key(c["collaboration_id"], packet["sender_urn"], packet["event_id"]), record)
@@ -826,6 +847,8 @@ class CollaborationV2Mixin:
         gaps = [r for r in self._all("v2_event") if r["owner_id"] == c["owner_id"]
                 and r["packet"]["collaboration_id"] == c["collaboration_id"]
                 and r["packet"]["sender_urn"] == c["peer_urn"] and r["status"] == "buffered"]
+        if gaps and c.get("waiting_reason") == "peer_review_required":
+            return
         if gaps and c.get("closure_reason") != "cancelled":
             c.update(phase="reconciling", waiting_reason="missing_event")
             self._v2_queue(c, "sync_request")
@@ -882,10 +905,12 @@ class CollaborationV2Mixin:
 
     def collaborations(self, owner_session, task_id=None):
         self._owner(owner_session)
-        with self._lock:
+        with self._projection_transaction():
+            self._ensure_peer_reviews(owner_session)
             if task_id is not None:
                 self._task(task_id, owner_session)
             items = [c for c in self._all("v2_collaboration") if self._belongs(c, owner_session)
+                     and self._collaboration_review_safe(c, owner_session)
                      and (task_id is None or c["task_id"] == task_id)]
             ids = {c["collaboration_id"] for c in items}
             peers = {c["urn"] for c in self._all("contact") if self._belongs(c, owner_session)
@@ -894,6 +919,7 @@ class CollaborationV2Mixin:
                             "sender_urn": r["packet"]["sender_urn"], "topic": r["packet"]["payload"]["topic"],
                             "expires_at": r["packet"]["expires_at"], "authority": "peer_statement"}
                            for r in self._all("v2_invitation") if r["packet"]["sender_urn"] in peers
+                           and self._message_visible(self._get("inbound", r["message_id"]) or {"message_id":r["message_id"], "sender_urn":r["packet"]["sender_urn"], "text":canonical(r["packet"])}, owner_session)
                            and not self._get("v2_collaboration", r["packet"]["collaboration_id"])]
             operations = [self._v2_operation_view(op) for op in self._all("v2_operation")
                           if self._belongs(op, owner_session) and (task_id is None or op["task_id"] == task_id)]

@@ -16,8 +16,8 @@ import time
 from .identity import validate_urn
 
 PROTOCOL = "agent-comm-control/v1"
-READ_METHODS = ("capabilities", "contacts.list", "collaboration.state", "inbox.list", "attention.list", "contacts.requests")
-WRITE_METHODS = ("contacts.add", "contacts.respond", "messages.send", "inbox.mark_read", "approval.respond")
+READ_METHODS = ("capabilities", "contacts.list", "collaboration.state", "inbox.list", "inbox.review_preview", "attention.list", "contacts.requests")
+WRITE_METHODS = ("contacts.add", "contacts.respond", "contacts.block", "contacts.unblock", "messages.send", "inbox.mark_read", "inbox.review", "approval.respond")
 CONVERSATION_METHODS = ("conversation.send", "conversation.get")
 CONTROL_KINDS = {"control.request", "control.response"}
 
@@ -56,13 +56,19 @@ class RemoteError(ValueError):
 
 
 class RemoteBridge:
-    def __init__(self, path, store, local_urn, *, clock=time.time, conversations=False, bound_principal=None):
+    def __init__(self, path, store, local_urn, *, clock=time.time, conversations=False, bound_principal=None, peer_content_safety=None):
         self.path = Path(path).expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.store = store
         self.local_urn = identity(local_urn)
         self.clock = clock
         self.conversations = conversations
+        if peer_content_safety is not None and type(peer_content_safety) is not bool:
+            raise ValueError("Peer content safety must be declared by trusted host code")
+        # Standalone has no model consumer. A conversational host must assert
+        # its updated admission path explicitly; a partially upgraded old
+        # Hermes adapter must not acquire a false safety claim from a new Store.
+        self.peer_content_safety_enabled = not conversations if peer_content_safety is None else peer_content_safety
         self.bound_principal = bound_principal
         if store is not None and bound_principal is not None:
             store.register_owner(bound_principal)
@@ -188,21 +194,37 @@ class RemoteBridge:
         if set(params) - set(required) - set(optional) or set(required) - set(params):
             raise RemoteError("invalid_params", "Unexpected or missing method parameters")
 
+    def _require_peer_model_safety(self, *, previously_accepted=False):
+        from .peer_review import PeerReviewMixin
+        if not self.conversations or not self.peer_content_safety_enabled or not isinstance(self.store, PeerReviewMixin):
+            if previously_accepted:
+                raise RemoteError("peer_content_safety_changed", "Host admission changed after this turn was accepted; read its existing conversation before retrying")
+            raise RemoteError("peer_content_safety_required", "Upgrade the host's owner-review admission path before starting a conversation")
+
     def _invoke(self, request, pairing):
         method, params = request["method"], request["params"]
         # Store separates profile visibility from exact native approval sessions.
         owner = pairing["owner_principal"] + "|remote:" + hashlib.sha256(pairing["console_urn"].encode()).hexdigest()[:24]
         if method == "capabilities":
             self._params(params)
+            from .peer_review import PEER_CONTENT_SAFETY, PeerReviewMixin
             names = [*READ_METHODS, *WRITE_METHODS, *CONVERSATION_METHODS, *self.handlers]
             available = {*READ_METHODS, *WRITE_METHODS, *self.handlers, *(CONVERSATION_METHODS if self.conversations else ())}
+            if not isinstance(self.store, PeerReviewMixin):
+                available.difference_update({"contacts.block", "contacts.unblock", "inbox.review_preview", "inbox.review"})
+            if not self.peer_content_safety_enabled or not isinstance(self.store, PeerReviewMixin):
+                available.discard("conversation.send")
             return {"protocol": PROTOCOL, "methods": [{"name": name,
                 "available": name in available and name in pairing["methods"],
                 **({"reason": "Not enabled by this adapter or local pairing"} if name not in available or name not in pairing["methods"] else {})}
-                for name in names], "pairing": {"expires_at": pairing["expires_at"]}}
+                for name in names], "pairing": {"expires_at": pairing["expires_at"]},
+                **({"peer_content_safety": PEER_CONTENT_SAFETY}
+                   if self.peer_content_safety_enabled and isinstance(self.store, PeerReviewMixin) else {})}
         if method in WRITE_METHODS:
             required = {"contacts.add": ("contact_id", "aliases", "urn"), "approval.respond": ("approval_id", "decision"),
                         "contacts.respond": ("request_id", "decision"), "messages.send": ("recipient_urn", "text"),
+                        "contacts.block": ("urn",), "contacts.unblock": ("urn",),
+                        "inbox.review": ("message_id", "decision"),
                         "inbox.mark_read": ("message_id",)}
             optional = {"contacts.respond": ("contact_id", "aliases"), "messages.send": ("message_id",)}
             self._params(params, required=required[method], optional=optional.get(method, ()))
@@ -213,9 +235,13 @@ class RemoteBridge:
         if method == "contacts.requests":
             self._params(params)
             return self.store.contact_requests(owner)
+        if method == "inbox.review_preview":
+            self._params(params, required=("message_id",))
+            return self.store.review_preview(params["message_id"], owner)
         if method == "contacts.list":
             self._params(params)
-            return {"contacts": self.store.state(owner)["contacts"]}
+            state = self.store.state(owner)
+            return {"contacts": state["contacts"], "blocked_peers": state["blocked_peers"], "safety_revision": state["safety_revision"]}
         if method == "attention.list":
             self._params(params, optional=("after", "limit"))
             self._sync_conversation_events(pairing)
@@ -227,6 +253,7 @@ class RemoteBridge:
                 identifier(task_id)
             return self.store.state(owner, task_id) if method == "collaboration.state" else self.store.inbox(owner, task_id)
         if method == "conversation.send" and self.conversations:
+            self._require_peer_model_safety()
             self._params(params, required=("text",), optional=("conversation_id",))
             text = params["text"]
             if not isinstance(text, str) or not text.strip() or len(text.encode()) > 24000:
@@ -303,6 +330,9 @@ class RemoteBridge:
                 if old:
                     if old["fingerprint"] != fingerprint or old["owner_principal"] != pairing["owner_principal"]:
                         raise RemoteError("request_conflict", "This request ID was already used for different contents or owner")
+                if request["method"] == "conversation.send":
+                    self._require_peer_model_safety(previously_accepted=old is not None)
+                if old:
                     return old["response"]
                 result = self._invoke(request, pairing)
                 response = self._response(request, result=result)
@@ -375,11 +405,13 @@ class RemoteBridge:
                 if job["status"] != "submitted":
                     continue
                 try:
+                    self._require_peer_model_safety()
                     pairing = self._authorized(job["console_urn"], "conversation.send")
                     if pairing["owner_principal"] != job["owner_principal"]:
                         raise RemoteError("owner_changed", "Local pairing owner changed")
-                except RemoteError:
-                    job.update(status="failed", error="Pairing expired, changed or revoked before execution", updated_at=self.clock())
+                except RemoteError as exc:
+                    job.update(status="failed", error="Host lacks owner-review model admission" if exc.code == "peer_content_safety_required"
+                               else "Pairing expired, changed or revoked before execution", updated_at=self.clock())
                     self._put("turn", job["turn_id"], job)
                     changed.append(job)
                     continue

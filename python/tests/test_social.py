@@ -10,6 +10,7 @@ from agent_comm_runtime.store import Store
 from agent_comm_runtime.social import key as social_key
 from agent_comm_runtime.remote import RemoteBridge, READ_METHODS, WRITE_METHODS, PROTOCOL
 from test_remote import MailNetwork
+from owner_review_fixture import allow_pending
 
 A = 'urn:agent-comm:agent:alice'
 B = 'urn:agent-comm:agent:bob'
@@ -131,6 +132,7 @@ class TestSocial(unittest.TestCase):
         self.assertEqual(sent['status'], 'queued')
         self.a.flush_social_outbox(self.ta)
         self.b.sync_inbox(self.tb)
+        allow_pending(self.b, 'bob|native')
         before = self.b.attention('bob|native')
         item = next(i for i in before['items'] if i['subject_id'] == 'hello')
         self.assertEqual(item['state'], 'open')
@@ -148,10 +150,12 @@ class TestSocial(unittest.TestCase):
     def test_old_message_read_and_details_do_not_depend_on_latest_inbox_window(self):
         self.connect()
         self.b.ingest_message({'message_id': 'old-message', 'sender_urn': A, 'text': 'Old pending message'})
+        allow_pending(self.b, 'bob')
         old = next(i for i in self.b.attention('bob')['items'] if i['subject_id'] == 'old-message')
         for index in range(101):
             self.now += 1
             self.b.ingest_message({'message_id': 'new-' + str(index), 'sender_urn': A, 'text': 'Later'})
+        allow_pending(self.b, 'bob')
         self.assertNotIn('old-message', [m['message_id'] for m in self.b.inbox('bob')['messages']])
         self.assertEqual(self.b.attention_detail('bob', old['attention_id'])['item']['details']['peer_message']['text'], 'Old pending message')
         result = self.mutate(self.b, 'inbox.mark_read', {'message_id': 'old-message'}, 'bob')
@@ -206,6 +210,8 @@ class TestSocial(unittest.TestCase):
         self.assertFalse(any(m['message_id'] == 'reordered' for m in self.a.inbox('alice')['messages']))
         self.a.ingest_message(response)
         self.assertEqual(self.a.state('alice')['contacts'][0]['connection_status'], 'connected')
+        self.assertEqual(self.a._get('inbound', 'reordered')['quarantine_reason'], 'pending_review')
+        allow_pending(self.a, 'alice')
         self.assertTrue(any(m['message_id'] == 'reordered' for m in self.a.inbox('alice')['messages']))
         self.assertFalse(self.a._get('inbound', 'reordered').get('quarantined'))
 
@@ -271,6 +277,7 @@ class TestSocial(unittest.TestCase):
         self.b.finish_confirmation(pending['approval_id'], lease['token'], 'bob|native', '同意')
         self.b.flush_social_outbox(self.tb)
         self.a.sync_inbox(self.ta)
+        allow_pending(self.a, 'alice')
         self.assertTrue(any(m['text'] == 'Native message' for m in self.a.inbox('alice')['messages']))
 
     def test_failed_send_retry_uses_same_id_and_offline_presence_expires(self):

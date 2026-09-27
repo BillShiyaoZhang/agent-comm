@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from owner_review_fixture import allow_pending
 
 from agent_comm_runtime.identity import validate_urn
 from agent_comm_runtime.store import Store
@@ -32,6 +33,7 @@ class TestNetworkIdentity(unittest.TestCase):
                 store.finish_confirmation(pending["approval_id"], lease["token"], owner, "同意")
                 store.ingest_message({"message_id": "from-real-web-namespace", "sender_urn": fixture["urn"], "text": "A bounded peer statement"})
                 self.assertEqual(store.resolve_contact("主人工作台", owner)["contacts"][0]["urn"], fixture["urn"])
+                allow_pending(store, owner)
                 self.assertEqual(store.inbox(owner)["messages"][0]["sender_urn"], fixture["urn"])
             finally:
                 store.close()

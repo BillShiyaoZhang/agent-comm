@@ -1,5 +1,11 @@
 # Remote console: pairing and methods
 
+## Peer content safety in updated source
+
+The updated source implements persistent owner+URN blocking and owner content review. Free text and collaboration invites/proposals/change requests first appear as metadata-only `pending_review`. Separate READ `inbox.review_preview` and WRITE `inbox.review` permissions let the owner inspect complete content and decide. `contacts.block` / `contacts.unblock` are separate owner permissions. Existing pairings never expand automatically; model Runtime actions cannot make these decisions.
+
+Blocking receipts and contacts/state include monotone `safety_revision`; historical replies cannot overwrite newer state. Actual `capabilities.peer_content_safety={version:1,mode:"owner_review",automatic_peer_model_execution:false}` identifies this implemented local boundary. Neither Hermes mode directly starts a model turn for peer input. Unblocking/approval never automatically replays history. Owner review does not replace business/disclosure consent or Web operator moderation; `review_policy` is not a Web/App display attestation. See [peer blocking and owner review](peer-safety-en.md) for exact contracts and host boundaries.
+
 Read for local pairing administration or Web/host integration with the installed `agent-comm-runtime`. It exchanges `control.request` / `control.response` through the helper's encrypted mailbox, without exposing an additional local HTTP listener. Ordinary contacts do not receive console authority.
 
 ## Local CLI
@@ -37,12 +43,15 @@ Availability depends on both the pairing allowlist and the host adapter. First c
 | --- | --- | --- |
 | `capabilities` | `{}` | Protocol, method availability/reasons, pairing expiry |
 | `contacts.list` | `{}` | Runtime contacts, connection state and `presence` for the paired owner, separate from helper key caches |
+| `contacts.block` / `contacts.unblock` | Required `urn` | Separate owner WRITE; persistent blocking with exact `urn`, `status`, `blocked`, `connection_status`, `safety_revision` receipt |
 | `contacts.requests` | `{}` | Incoming/outgoing friend requests with `pending`, `accepted` or `rejected` state |
 | `contacts.add` | Required `contact_id`, `aliases` (string array), `urn` | Confirms the user's local contact entry and durably sends a friend request; connection requires peer acceptance |
 | `contacts.respond` | Required `request_id`, `decision=accept\|reject`; optional `contact_id`, `aliases` | Handles an incoming request; acceptance saves a contact and establishes communication without granting trust or collaboration authority, then sends the response to synchronize both agents |
 | `messages.send` | Required `recipient_urn`, `text`; optional stable `message_id` | Durably submits the user's exact content only to a `connected` contact, reusing the ID after failures; does not imply peer reading |
 | `collaboration.state` | Optional `task_id` | Contacts, requests, resources, tasks, actions, pending/completed decisions, inbox, sent messages and proposals; reads confer no approval authority |
-| `inbox.list` | Optional `task_id` | Previously persisted message content and `read` / `read_at`, without a fresh helper retrieval |
+| `inbox.list` | Optional `task_id` | Approved persisted content and `read` / `read_at`, plus metadata-only `pending_review`; no fresh helper retrieval |
+| `inbox.review_preview` | Required `message_id` | Separate READ; complete body, authenticated sender and immutable `fingerprint`; unavailable to model tools |
+| `inbox.review` | Required `message_id`, `decision=approve\|reject` | Separate owner WRITE; approval requires full same-session preview; terminal rejection; no automatic replay |
 | `inbox.mark_read` | Required `message_id` | Stores read state on the agent; both clients clear the message reminder on their next sync. Does not accept friends or approve actions |
 | `attention.list` | Optional `after`, `limit` (1–100) | Durable attention changes from the same agent; follow `cursor` / `has_more`. Handled items become resolved |
 | `approval.respond` | Required `approval_id`, `decision=approve\|deny` | Records a user's explicit decision on a trusted Web approval card in the same Store and invalidates late native answers. Never a model tool for answering on the owner's behalf |

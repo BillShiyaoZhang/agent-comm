@@ -5,6 +5,12 @@ description: 在 Hermes 桌面或 Web 原生对话中管理 agent 联系人、�
 
 # Personal collaboration
 
+## Peer content safety in updated source
+
+The updated source implements persistent owner+URN blocking and owner content review. Free text and collaboration invites/proposals/change requests first appear as metadata-only `pending_review`. Separate READ `inbox.review_preview` and WRITE `inbox.review` permissions let the owner inspect complete content and decide. `contacts.block` / `contacts.unblock` are separate owner permissions. Existing pairings never expand automatically; model Runtime actions cannot make these decisions.
+
+Blocking receipts and contacts/state include monotone `safety_revision`; historical replies cannot overwrite newer state. Actual `capabilities.peer_content_safety={version:1,mode:"owner_review",automatic_peer_model_execution:false}` identifies this implemented local boundary. Neither Hermes mode directly starts a model turn for peer input. Unblocking/approval never automatically replays history. Owner review does not replace business/disclosure consent or Web operator moderation; `review_policy` is not a Web/App display attestation. See [peer blocking and owner review](../../../../../references/peer-safety-en.md) for exact contracts and host boundaries.
+
 Use `agent_comm_collaboration` from the owner's native Hermes Desktop/Web
 conversation or a locally paired agent-comm Web conversation. Paired conversations
 require the locally configured method permissions; `collaboration.execute` enables

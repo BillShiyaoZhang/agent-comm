@@ -46,6 +46,24 @@ class AttentionResumeMixin:
                 raise ValueError("Attention source is unavailable")
         elif not self._belongs(source, owner_session):
             raise ValueError("Attention source is unavailable")
+        if source_kind == "v2_collaboration" and not self._collaboration_review_safe(source, owner_session):
+            raise ValueError("Peer content is unavailable until owner review")
+        if source_kind == "approval":
+            if source.get("invalidation_reason") == "peer_blocked":
+                raise ValueError("Attention approval was blocked by the owner")
+            if source["kind"] == "collaboration_v2":
+                op = self._get("v2_operation", source["subject_id"])
+                c = (self._get("v2_collaboration", op["collaboration_id"]) or op.get("new_collaboration")) if op else None
+                if c and not self._collaboration_review_safe(c, owner_session):
+                    raise ValueError("Peer content is unavailable until owner review")
+            if source["kind"] == "operation":
+                op = self._get("operation", source["subject_id"])
+                if op and self._operation_view(op).get("reasons") == ["peer_content_unavailable"]:
+                    raise ValueError("Peer content is unavailable until owner review")
+        if source_kind == "v2_operation":
+            c = self._get("v2_collaboration", source["collaboration_id"]) or source.get("new_collaboration")
+            if c and not self._collaboration_review_safe(c, owner_session):
+                raise ValueError("Peer content is unavailable until owner review")
         task = self._get("task", item.get("task_id", ""))
         if task and not self._belongs(task, owner_session):
             task = None

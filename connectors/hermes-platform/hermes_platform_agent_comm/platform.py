@@ -297,13 +297,29 @@ class AgentCommAdapter(BasePlatformAdapter):
             raise
 
     async def _store_business(self, body):
-        disclosure = await self._disclosure()
-        if disclosure.get("state") == "legacy_helper":
-            return await self._request_json("POST", "store", body)
-        if disclosure.get("policy_verified") is True and disclosure.get("v2_send_ready") is True:
-            return await self._request_json("POST", "v2-store", body)
-        code = disclosure.get("legacy_send_code") or "policy_unavailable"
-        raise RuntimeError(f"{code}: inspect the helper /api/v2/disclosure status before sending")
+        from .collaboration.hermes import profile_principal, state_path
+        from .collaboration.store import Store
+        from agent_comm_runtime.social import key as peer_key
+        owner = profile_principal()
+        store = Store(state_path(self._extra), local_urn=self._extra.get("urn"), owner_principal=owner)
+        try:
+            # Keep the owner block and this bounded helper admission serialized.
+            # A completed block cannot race a legacy send's stale ACL read.
+            with store._transaction():
+                if store._peer_blocked(body["recipient_urn"], owner):
+                    raise ValueError("Recipient is blocked by the local owner")
+                anchor = body.get("in_reply_to")
+                if anchor and store._get("peer_message_block", peer_key(owner, body["recipient_urn"], anchor)):
+                    raise ValueError("Blocked historical input cannot trigger a reply")
+                disclosure = await self._disclosure()
+                if disclosure.get("state") == "legacy_helper":
+                    return await self._request_json("POST", "store", body)
+                if disclosure.get("policy_verified") is True and disclosure.get("v2_send_ready") is True:
+                    return await self._request_json("POST", "v2-store", body)
+                code = disclosure.get("legacy_send_code") or "policy_unavailable"
+                raise RuntimeError(f"{code}: inspect the helper /api/v2/disclosure status before sending")
+        finally:
+            store.close()
 
     async def _store_managed_control(self, body):
         if body.get("kind") != "control.response":
@@ -421,34 +437,35 @@ class AgentCommAdapter(BasePlatformAdapter):
                     consumed = True
                     continue
                 from .collaboration.hermes import collaboration_enabled, profile_principal, state_path
-                if collaboration_enabled(self._extra) or self._extra.get("remote_enabled") is True:
-                    # Peers are durable input, not private-owner LLM turns. Only
-                    # the native owner can inspect these records and act on them.
-                    def persist_collaboration_input():
-                        from .collaboration.store import Store
-                        settings = self._extra
-                        store = Store(state_path(settings), local_urn=settings.get("urn"), owner_principal=profile_principal())
-                        try:
-                            store.ingest_message(message)
-                        finally:
-                            store.close()
-                    await asyncio.to_thread(persist_collaboration_input)
-                    await asyncio.to_thread(self._flush_social_outbox)
-                    await asyncio.to_thread(self._receipts.complete, message_id, "processed")
+                # This guard is always active, including the legacy direct-model
+                # mode. It reads the same persisted owner ACL/review state, never
+                # a peer supplied principal or a Web operator's approval.
+                def screen_peer_input():
+                    from .collaboration.store import Store
+                    settings = self._extra
+                    owner = profile_principal()
+                    store = Store(state_path(settings), local_urn=settings.get("urn"), owner_principal=owner)
+                    try:
+                        if store.consume_blocked_peer(message, owner):
+                            return True
+                        outcome = store.ingest_message(message)
+                        saved = store._get("inbound", message_id)
+                        return outcome["status"] in {"pending_review", "blocked", "quarantined"} or bool(saved and saved.get("quarantined"))
+                    finally:
+                        store.close()
+                screened = await asyncio.to_thread(screen_peer_input)
+                if screened:
+                    await asyncio.to_thread(self._receipts.complete, message_id, "quarantined")
                     await self._ack(message_id)
                     consumed = True
                     continue
-                future = asyncio.get_running_loop().create_future()
-                self._completion[message_id] = future
-                event = self._build_event(message)
-                self._active_event = event
-                await self.handle_message(event)
-                if not getattr(event, "_gateway_accepted", False):
-                    raise RuntimeError("Hermes did not accept the message; leaving it in the helper inbox")
-                # handle_message only starts a task; ONLY the completion hook signals this receipt.
-                if await future:
-                    await self._ack(message_id)
-                    consumed = True
+                # Both modes now persist peer input without creating model
+                # turns. An owner review allows later explicit owner handling;
+                # it never automatically replays mail into a private model.
+                await asyncio.to_thread(self._flush_social_outbox)
+                await asyncio.to_thread(self._receipts.complete, message_id, "processed")
+                await self._ack(message_id)
+                consumed = True
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -524,7 +541,7 @@ class AgentCommAdapter(BasePlatformAdapter):
         path = settings.get("remote_state_path") or get_hermes_home() / "agent-comm" / "remote.sqlite3"
         self._remote_store = Store(state_path(settings), local_urn=settings.get("urn"))
         self._remote_bridge = RemoteBridge(path, self._remote_store, settings.get("urn"), conversations=True,
-            bound_principal=profile_principal())
+            bound_principal=profile_principal(), peer_content_safety=True)
         from .collaboration.remote import register_remote_actions
         register_remote_actions(self._remote_bridge, settings)
         await asyncio.to_thread(self._remote_bridge.recover_interrupted_turns)

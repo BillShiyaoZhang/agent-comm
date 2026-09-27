@@ -1,5 +1,11 @@
 # Hermes 平台插件
 
+## 对端内容安全（更新源码）
+
+当前源码使用持久 owner+URN 屏蔽及本人内容审核。自由正文和协作邀请、提议、修改请求先进入仅元数据的 `pending_review`；独立 READ `inbox.review_preview` 完整预览后，独立 WRITE `inbox.review` 由本人决定。屏蔽使用 `contacts.block` / `contacts.unblock`。四项方法必须显式授权，旧 pairing 不增权；模型 Runtime 不提供这些决定动作。
+
+屏蔽回执与 contacts/state 含单调 `safety_revision`，历史回执不能覆盖新状态。真实 `capabilities.peer_content_safety={version:1,mode:"owner_review",automatic_peer_model_execution:false}` 才表明更新后的本机边界。两种 Hermes 模式均不直接让对端来信启动模型；解除屏蔽或批准均不自动重放历史。审核不能替代业务委托、共享许可或 Web 运营审核；`review_policy` 不证明 Web/App 显示过滤已完成。完整契约与宿主限制见[屏蔽与本人审核](../../references/peer-safety.md)。
+
 本插件连接本机 `agent-comm-helper`，由 helper 负责密钥、加密和当前 HTTPS MQ 可靠传输。`platform_url` 必须是本机 loopback HTTP 地址（默认 `http://127.0.0.1:45042`），不可填写云端 platform URL。
 
 ## 个人协作模式（1.5.9，可选）
@@ -24,10 +30,11 @@ collaboration_enabled: true
 profile/协作库。若在 Hermes 工具设置中主动禁用了 `agent_comm_collaboration`
 工具组，需要按原设置流程启用它。运行中的服务需要重启以加载一致配置。
 
-这一选项默认关闭。**开启后，远端消息只持久入库，不直接启动具有私人上下文的
-Gateway LLM；普通 adapter 直接发送被阻止。** 主人原生对话通过协作工具的
-`inbox` 读取来信，使用 `prepare_action` / `dispatch` 在授权范围内继续。
-本版本不在后台唤醒桌面会话。关闭模式时保留下文描述的传统 Gateway 消息处理。
+这一选项默认关闭。**更新源码在两种模式下均将对端业务入站持久接管并 ACK，
+不直接启动 Gateway LLM。开启个人协作模式还禁止普通 adapter 直接发送。**
+自由正文先由本人通过明确授权的审核界面查看并决定，主人原生对话随后通过
+`inbox` 读取已批准来信，以 `prepare_action` / `dispatch` 按业务授权继续。
+关闭模式也不会恢复传统 peer→模型自动处理；已批准记录不自动重放。
 
 Hermes 原生会话中的首个联系人绑定和事项范围通过自己的 `clarify` 问题卡确认。用户在
 **该问题的文字回答框**输入“可以”或“同意”；主聊天输入框的文字在当前 Hermes
@@ -40,7 +47,7 @@ Hermes 原生会话中的首个联系人绑定和事项范围通过自己的 `cl
 拒绝。两项方法须在本机分别明确授权，主人主体来自本地配对，普通聊天、联系人
 信任或 `allow_from` 不授予此权限。结果写入同一协作库，并由 Web 读取同步；
 普通消息和好友响应的确认会提交相应的持久 outbox；协作动作仍按其 dispatch 流程执行。
-单 Platform 的更新后源码允许用准确 URN 发起首次好友申请，helper 自动验证该 URN 的公钥；v0.9.1 接入包支持这一流程；旧版 v0.8.0 仍需双方手工固定完整公钥。未知 URN 的申请只进入待处理，主人可接受或拒绝；接受仅建立通讯关系。通过 Hermes 协作工具发送普通私信前，本地联系人须为 `connected`；低层 Go helper 发送接口不查询好友状态。接受不会自动提高 `trusted`、确认现实身份或授予任务、工作台与合规披露权限。接收方 Runtime 将未知或已拒绝发送者的业务消息隔离并 ACK；已知 `pending` 联系人的乱序业务消息在接受回执后才变为可见。跨 Platform 首联未覆盖。
+单 Platform 的更新后源码允许用准确 URN 发起首次好友申请，helper 自动验证该 URN 的公钥；v0.9.1 接入包支持这一流程；旧版 v0.8.0 仍需双方手工固定完整公钥。未知 URN 的申请只进入待处理，主人可接受或拒绝；接受仅建立通讯关系。通过 Hermes 协作工具发送普通私信前，本地联系人须为 `connected`；低层 Go helper 发送接口不查询好友状态。接受不会自动提高 `trusted`、确认现实身份或授予任务、工作台与合规披露权限。接收方 Runtime 将未知或已拒绝发送者的业务消息隔离并 ACK；已知 `pending` 联系人的乱序业务消息在接受回执后才进入本人内容审核。跨 Platform 首联未覆盖。
 Web 已处理的问题不能再被迟到的原生 callback
 覆盖。已有配对不会随升级自动增权，需安装匹配的 runtime 与 Web，并显式重配。
 安装包用户可查看[配对升级步骤](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md#4-配对远程-web)。
@@ -74,6 +81,29 @@ Hermes 的单请求 `request.cancel` 关闭这张卡，清除租约后可重新�
 做隔离测试；依赖内部原生会话接口，宿主升级后需要重新验证，缺少接口会拒绝
 执行。组件只约束经由自身的路径，不能阻止具有任意 shell/文件/网络权限的
 模型绕过本地工具；开启它也不是任意文本语义或第三方资料权限的自动证明。
+
+### 模型提供方披露的宿主要求
+
+当前 SDK 未实现 `data_processing.describe` 或可信路由 revision。
+[`HostSession`](../../python/agent_comm_runtime/ports.py) 只绑定主人、会话与回合；
+[`read_settings()`](hermes_platform_agent_comm/collaboration/hermes.py) 只读取
+`platforms.agent_comm`；实际模型执行委托给 adapter 的
+[`handle_message`](hermes_platform_agent_comm/platform.py)。对端安全能力不证明
+实际模型接收方已披露。
+
+[Hermes 官方运行时说明](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/provider-runtime.md)
+包括运行期提供方解析、同回合 fallback 切换及独立辅助模型路由。
+仅读取主模型配置或文件修改时间不能覆盖这些接收方。后续可信描述须接入匹配
+宿主的 resolver/准入接口，取得真实主路由、备用/辅助路由与外部工具接收方，
+脱敏后生成稳定事实指纹；排队执行及每次改路由前核对本人已许可的同一指纹。
+新增主人 READ RPC 必须显式配对，不能自动增权。
+
+本次评估没有实际 Hermes 安装；上游 `main` 的说明仅指向可用接入点，不代表
+已验证当前宿主契约。自定义中转的运营者、下游接收方及服务商的隐私、保留、
+训练规则须取得真实资料，不能从模型名/URL 猜测或宣称完整。
+[Apple 5.1.2(i)](https://developer.apple.com/app-store/review/guidelines/#data-use-and-sharing)
+要求向第三方 AI 共享个人数据前披露并取得明确许可；用户自行配置不能证明 App
+已完成这一流程。
 
 通用内核与可扩展 Host / Memory / Interaction / Transport 合约见
 [SDK Python Runtime](../../python/README.md)。宿主桥接位于
@@ -247,14 +277,14 @@ unknown。远程回合的工具权限绑定到真实宿主回合，撤销配对�
 | `message_id` | helper/wire 的稳定 ID；重复消息和重连重放共用该 ID，禁止用接收时间代替 |
 | `conversation_id` | 同一对端下的独立 Hermes thread；由带类型前缀的哈希映射，原值保存在事件 metadata |
 | `task_id` | 关联任务；无 conversation_id 时作为独立 thread；不是执行权限 |
-| `in_reply_to` | 回复的 wire message ID；自动回复继承会话、任务、deadline |
-| `kind` | 保留给应用层的类型字符串；默认 `message`；自动任务回复使用 `result` |
+| `in_reply_to` | 回复的 wire message ID；显式关联回复继承会话、任务、deadline |
+| `kind` | 保留给应用层的类型字符串；默认 `message`；关联任务回复使用 `result` |
 | `deadline` | 带时区的 RFC3339 时间；到期入站记录 expired 并 ACK，不启动处理；到期自动回复被抑制 |
 | `hop_limit` | 默认为 8；回复减 1；入站 0 仍可处理，但不会自动回复；回复不能提高继承预算 |
 
 helper API 的 `message_id` 仅允许 1–128 个 ASCII 字母、数字、`.`、`_`、`:`、`-`；关联 ID 与 `kind` 最长 256 UTF-8 字节；`hop_limit` 为 0–64 的整数。
 
-入站 `source.is_bot=True`、`internal=False`、`allow_gateway_control=False`。外部 `/approve`、`/restart` 等文本只作为对话内容，不能解析为 Gateway 控制命令或审批答复。`kind=cancel` 等仍是应用数据，本插件不会据此取消运行或改变权限。
+入站 `source.is_bot=True`、`internal=False`、`allow_gateway_control=False`。外部 `/approve`、`/restart` 等文本作为待审核对端内容，不能解析为 Gateway 控制命令或审批答复。`kind=cancel` 等仍是应用数据，本插件不会据此取消运行或改变权限。
 
 事件 metadata 的 `agent_comm` 字典保留上述关联字段；不会把来自对端的任意字段混入 Hermes 控制 metadata。默认会话属于 `agent_comm` 平台，与桌面/CLI transcript 分离。同一 conversation_id 下不同 task_id 共用会话；没有这两个字段的旧消息继续使用该对端的 DM。
 
@@ -262,11 +292,9 @@ helper API 的 `message_id` 仅允许 1–128 个 ASCII 字母、数字、`.`、
 
 ## 可靠性与发送状态
 
-helper 持久 inbox 是未消费消息的来源。插件同时通过 SSE 和 `GET /api/v1/mq/retrieve` 补拉 pending 消息，按 wire ID 阻止重复并发处理。消费串行进行，避免 Hermes 的忙碌会话合并多个消息时丢失独立 ID；模型回合较长时其他消息会继续保留在 helper inbox 中等待。
+helper 持久 inbox 是未接管消息的来源。插件通过 SSE 和 retrieve 补拉，并按 wire ID 串行去重。两种模式均在持久屏蔽/审核隔离或类型化协议处理提交后记录 receipt，再 ACK；数据库失败时保持 pending。ACK 失败或重启重放只补 ACK，不启动模型。本人审核决定与业务授权独立；批准后只允许后续明确主人处理，不自动创建模型回合。已配对 `control.*` 仍由授权 bridge 处理，不能由好友正文或审核决定伪造。
 
-`handle_message()` 返回只证明内存调度，**不会触发 ACK**。只有真实 `on_processing_complete(SUCCESS)` 后先把完成 receipt 写入 SQLite，待 Hermes 清理该回合后才 `POST /api/v1/mq/ack`。没有 handler、拒绝调度、失败或取消均保持 pending，默认至少等待 30 秒再重试。若写入完成 receipt 后本机 ACK 失败，重放只补 ACK，不再执行模型。
-
-这是至少一次处理。若工具副作用发生后、完成 receipt 落盘前崩溃，恢复时可能再次处理；任务执行者仍需要用 `task_id`/`message_id` 实现副作用幂等。Hermes 原生处理流程也可能正常完成一个被其授权或 bot-loop 规则拒绝的事件；这里的 processed 表示 Gateway 已完成该事件的处理，不表示业务任务成功。
+此前直接 peer→Gateway 处理和依赖模型 completion 才 ACK 的逻辑已收紧。当前 processed/quarantined receipt 表示持久接管或隔离，不表示模型完成、主人接受或业务成功。已配对的私人助手会话保留自己的宿主回合完成账本。
 
 出站请求为 `POST /api/v1/mq/store`，以明确的 `success:true` 和稳定 `message_id` 确认 helper 接受；HTTP 2xx 本身不代表成功。`SendResult.raw_response.status=accepted` 只表示本机持久出站队列接受，可通过 helper `GET /api/v1/mq/status?message_id=...` 查询后续状态，不能当作对端执行完成。
 
@@ -317,7 +345,7 @@ $env:PYTHONDONTWRITEBYTECODE = '1'
 & 'C:/path/to/hermes-agent/venv/Scripts/python.exe' -m unittest discover -s connectors/hermes-platform/tests -v
 ```
 
-测试在临时 HERMES_HOME 下使用真实 Hermes 适配器基类、原生后台处理生命周期及本机模拟 HTTP/SSE helper；不启动真实 Gateway，不调用模型，也不修改真实 Hermes 配置。测试涵盖连接失败、关闭 reader、重连、处理完成前不 ACK、稳定 ID 去重、取消恢复、ACK 失败恢复、串行接收、授权标记、会话隔离及关联字段回复。
+宿主测试在临时 HERMES_HOME 下使用真实 Hermes 适配器基类及本机模拟 HTTP/SSE helper，不启动真实 Gateway、调用模型或修改真实配置。当前用例对应持久接管失败时不 ACK、稳定 ID 去重、ACK 失败恢复、串行接收、授权标记、会话隔离和关联回复。本轮安全路径验证使用标准库与 host/aiohttp seams 的隔离替身；真实宿主整套仍须在明确环境复核。
 
 ## 对话中的事项来源与结果提醒
 

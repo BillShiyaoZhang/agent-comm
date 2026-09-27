@@ -87,7 +87,9 @@ class AttentionMixin(AttentionResumeMixin):
         approval_kind = approval["kind"]
         task_id = self._approval_task_id(approval)
         state = "open"
-        if approval["status"] in {"approved", "denied"}:
+        if approval.get("invalidation_reason") == "peer_blocked":
+            state = "superseded"
+        elif approval["status"] in {"approved", "denied"}:
             state = "resolved"
         elif refresh and not self._approval_current(approval):
             state = "superseded"
@@ -197,6 +199,13 @@ class AttentionMixin(AttentionResumeMixin):
         """Project actionable local protocol facts, excluding routine receipts."""
         c = collaboration
         owner, subject = c["owner_id"], c["collaboration_id"]
+        if not self._collaboration_review_safe(c, owner):
+            previous = self._get("attention", "attention-" + _key(owner, "v2_collaboration", subject)[:48])
+            if previous:
+                self._attention_put(owner, "v2_collaboration", subject, kind=previous["kind"], title=previous["title"],
+                    summary="对端内容尚未允许使用。", state="superseded", task_id=c["task_id"], subject_id=subject,
+                    source_revision="content_unavailable")
+            return
         phase, reason = c["phase"], c.get("waiting_reason")
         own_acceptance = c.get("acceptances", {}).get(self.local_urn, {})
         request = c.get("cancel_request")
@@ -218,6 +227,8 @@ class AttentionMixin(AttentionResumeMixin):
         if not kind and not previous:
             return
         state = "open" if kind else "resolved"
+        if c.get("peer_blocked_at") is not None or self._peer_blocked(c["peer_urn"], owner):
+            state = "superseded"
         task = self._get("task", c["task_id"])
         cancellation_decision = request and request["sender_urn"] != self.local_urn and c.get("agreement")
         if kind == "needs_response" and not cancellation_decision and (not task or not self._live(task)):
@@ -232,6 +243,14 @@ class AttentionMixin(AttentionResumeMixin):
                             source_revision=source, created_at=c.get("created_at"))
 
     def _refresh_attention(self, owner_session):
+        self._ensure_peer_reviews(owner_session)
+        for item in self._all("attention"):
+            if item["owner_id"] == self._principal(owner_session) and item["source_kind"] == "inbound":
+                message = self._get("inbound", item["subject_id"])
+                if message and not self._message_visible(message, owner_session) and item["state"] == "open":
+                    self._attention_put(item["owner_id"], item["source_kind"], item["source_id"], kind=item["kind"],
+                        subject_id=item["subject_id"], target_kind=item["target"]["kind"], task_id=item.get("task_id"),
+                        title=item["title"], summary="对端内容尚未允许使用。", state="superseded", source_revision="content_unavailable")
         for approval in self._all("approval"):
             if self._belongs(approval, owner_session):
                 self._attention_approval(approval, refresh=True)
