@@ -103,6 +103,12 @@ class AttentionTests(unittest.TestCase):
                 "native-owner|attention", request_key="e" * 64, fingerprint="f" * 64,
                 valid_until=time.time() + 300)
             store.ingest_message({"message_id": "incoming", "sender_urn": "urn:agent-comm:agent:peer", "text": "完整消息"})
+            pending = store.inbox("native-owner|attention")
+            self.assertFalse(any(message["message_id"] == "incoming" for message in pending["messages"]))
+            self.assertEqual(pending["pending_review"][0]["message_id"], "incoming")
+            preview = store.review_preview("incoming", "native-owner|attention")
+            self.assertEqual(preview["text"], "完整消息")
+            store.review_peer("incoming", "approve", "native-owner|attention")
         finally:
             store.close()
         with patch.object(attention, "Store", Store), patch.object(attention, "read_settings", return_value=settings):
