@@ -1,6 +1,6 @@
 # Hermes 平台插件
 
-## 对端内容安全（v0.9.4 配套版本）
+## 对端内容安全（v0.9.5 配套版本）
 
 当前源码使用持久 owner+URN 屏蔽及本人内容审核。自由正文和协作邀请、提议、修改请求先进入仅元数据的 `pending_review`；独立 READ `inbox.review_preview` 完整预览后，独立 WRITE `inbox.review` 由本人决定。屏蔽使用 `contacts.block` / `contacts.unblock`。四项方法必须显式授权，旧 pairing 不增权；模型 Runtime 不提供这些决定动作。
 
@@ -8,7 +8,7 @@
 
 本插件连接本机 `agent-comm-helper`，由 helper 负责密钥、加密和当前 HTTPS MQ 可靠传输。`platform_url` 必须是本机 loopback HTTP 地址（默认 `http://127.0.0.1:45042`），不可填写云端 platform URL。
 
-v0.9.4 提供 connector 1.5.11，依赖 `agent-comm-runtime>=0.1.9,<0.2`；helper 与协作协议不变。升级原安装时先停同一 helper 的消费者并备份，再用实际运行 Hermes 的 Python 更新两个匹配 wheel，保留原身份、profile、mailbox、协作/远程/回执数据库及 WAL。Gateway 与桌面后端须一起更新，不能同时运行旧、新消费者；已有配对不自动增加审核或屏蔽权限。schema 2 的旧组件拒绝打开已升级库，回装旧 wheel 不能作为安全状态回退。详见 [v0.9.4 发布与升级说明](../../docs/releases/v0.9.4.md)。
+v0.9.5 提供 connector 1.5.12，依赖 `agent-comm-runtime>=0.1.10,<0.2`；已审核、已应用事件的旧协作等待状态由 runtime 的受信任 worker tick 核验恢复，待审或拒绝内容仍隔离。helper 与协作协议不变。升级原安装时先停同一 helper 的消费者并备份，再用实际运行 Hermes 的 Python 更新两个匹配 wheel，保留原身份、profile、mailbox、协作/远程/回执数据库及 WAL。Gateway 与桌面后端须一起更新，不能同时运行旧、新消费者；已有配对不自动增加审核或屏蔽权限。schema 2 的旧组件拒绝打开已升级库，回装旧 wheel 不能作为安全状态回退。详见 [v0.9.5 发布与升级说明](../../docs/releases/v0.9.5.md)。
 
 ## 个人协作模式（1.5.9，可选）
 

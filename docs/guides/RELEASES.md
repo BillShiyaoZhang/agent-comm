@@ -2,7 +2,7 @@
 
 实际发布逻辑见 [.github/workflows/release.yml](../../.github/workflows/release.yml)。发布由 SDK 仓库的 `v*` tag 或维护者触发工作流。
 
-v0.9.4 的版本、对端内容安全门禁与原身份升级要求见[配套发布说明](../releases/v0.9.4.md)。runtime 为 0.1.9，Hermes connector 为 1.5.11 并要求 runtime `>=0.1.9,<0.2`；helper 与协作协议不变。该说明描述包行为，实际资产发布以清单和相应验收记录为准。
+v0.9.5 的协作 worker 持久等待状态修复及原身份升级要求见[配套发布说明](../releases/v0.9.5.md)。runtime 为 0.1.10，Hermes connector 为 1.5.12 并要求 runtime `>=0.1.10,<0.2`；helper、协作 wire 与 SQLite schema 不变。v0.9.4 的对端内容安全门禁仍适用。说明描述包行为，实际资产发布以清单和相应验收记录为准。
 
 ## 当前产物
 

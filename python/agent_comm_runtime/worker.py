@@ -206,6 +206,12 @@ def run_worker_tick(store, principal_id, transport, *, max_tasks=10):
                 store._put("worker_run", run_id, {"run_id": run_id, "task_id": policy["task_id"], "policy_revision": policy["policy_revision"], "status": "running", "started_at": store.clock()})
                 store._put("worker_policy", policy["task_id"], policy)
                 c = store._v2_collaboration(policy["policy"]["collaboration_id"], context.owner_session)
+                # Older records can retain this wait after the last reviewed event
+                # was applied. A trusted tick must reconcile that persisted state;
+                # no new inbound event is guaranteed to call _v2_drain again.
+                if c.get("waiting_reason") == "peer_review_required" and store._collaboration_review_safe(c, context.owner_session):
+                    store._v2_drain(c)
+                    store._put("v2_collaboration", c["collaboration_id"], c)
                 if not store._collaboration_review_safe(c, context.owner_session):
                     policy.update(status="paused", waiting_reason="peer_content_unavailable")
                     store._put("worker_policy", policy["task_id"], policy)
