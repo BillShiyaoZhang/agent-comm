@@ -207,6 +207,80 @@ class ProtocolPeerSafetyTests(unittest.TestCase):
             f.b.review_preview(item["message_id"], protocol.OWNER_B)
             f.b.review_peer(item["message_id"], "approve", protocol.OWNER_B)
         self.assertIsNotNone(f.b.collaborations(protocol.OWNER_B)["collaborations"][0]["terms"])
+        self.assertNotEqual(f.b._get("v2_collaboration", "shared-1")["waiting_reason"], "peer_review_required")
+
+    def test_trusted_worker_tick_recovers_persisted_review_wait_without_replaying_peer_event(self):
+        f = self.f
+        f.send(f.a, "proposal", protocol.proposal())
+        proposal_message = next(m for m in f.tb.retrieve() if json.loads(m["text"])["kind"] == "proposal")
+        self.assertEqual(f.b.ingest_message(proposal_message)["status"], "pending_review")
+        pending = f.b.inbox(protocol.OWNER_B)["pending_review"]
+        self.assertEqual([r["message_id"] for r in pending], [proposal_message["message_id"]])
+        self.assertIsNone(f.b._get("v2_collaboration", "shared-1")["terms"])
+        f.b.review_preview(proposal_message["message_id"], protocol.OWNER_B)
+        f.b.review_peer(proposal_message["message_id"], "approve", protocol.OWNER_B)
+        self.assertIsNone(f.b._get("v2_collaboration", "shared-1").get("waiting_reason"))
+        self.assertEqual(f.b._get("v2_event", f.b._v2_key("shared-1", protocol.ALICE,
+                         json.loads(proposal_message["text"])["event_id"]))["status"], "applied")
+        f.pump()  # Drain ordinary receipts before exercising the worker's accept branch.
+        policy = {"collaboration_id": "shared-1", "allow_propose": False, "allow_accept": True,
+            "proposal": None, "max_runs": 40, "max_sends": 24, "interval_seconds": 15, "expires_at": "2026-10-06T00:00:00Z"}
+        protocol.approve(f.b, f.b.prepare_worker_policy("task-b", policy, protocol.OWNER_B), protocol.OWNER_B)
+        # Model an old on-disk snapshot after the peer review and event were
+        # durably completed, then open it with the upgraded runtime.
+        with f.b._transaction():
+            c = f.b._get("v2_collaboration", "shared-1")
+            c["waiting_reason"] = "peer_review_required"
+            f.b._put("v2_collaboration", "shared-1", c)
+        reopened = Store(Path(f.temp.name) / "b.sqlite3", local_urn=protocol.BOB,
+                         clock=lambda: f.now, owner_principal="profile-b")
+        self.addCleanup(reopened.close)
+        before = copy.deepcopy(f.bus.sent)
+        result = run_worker_tick(reopened, "profile-b", f.tb)
+        self.assertEqual(reopened._get("v2_collaboration", "shared-1")["waiting_reason"], None)
+        self.assertEqual(reopened.inbox(protocol.OWNER_B)["pending_review"], [])
+        self.assertEqual(reopened._get("worker_policy", "task-b")["sends_used"], 1)
+        self.assertEqual([json.loads(body["text"])["kind"] for key, body in f.bus.sent.items() if key not in before], ["accept"])
+        self.assertEqual(result["results"][0]["waiting_reason"], None)
+        self.assertEqual(run_worker_tick(reopened, "profile-b", f.tb)["results"], [])
+
+    def test_unreviewed_or_rejected_peer_event_never_clears_review_wait_on_tick(self):
+        for decision in (None, "reject"):
+            with self.subTest(decision=decision):
+                f = protocol.CollaborationV2Tests()
+                f.setUp()
+                self.addCleanup(f.doCleanups)
+                f.joined()
+                policy = {"collaboration_id": "shared-1", "allow_propose": False, "allow_accept": True,
+                    "proposal": None, "max_runs": 40, "max_sends": 24, "interval_seconds": 15,
+                    "expires_at": "2026-10-06T00:00:00Z"}
+                protocol.approve(f.b, f.b.prepare_worker_policy("task-b", policy, protocol.OWNER_B), protocol.OWNER_B)
+                f.send(f.a, "proposal", protocol.proposal())
+                f.send(f.a, "accept")
+                messages = f.tb.retrieve()
+                accepted = next(m for m in messages if json.loads(m["text"])["kind"] == "accept")
+                f.b.ingest_message(accepted)
+                f.tb.ack([m["message_id"] for m in messages])
+                f.send(f.b, "sync_request")
+                f.transfer(f.a)
+                for op in f.a.collaborations(protocol.OWNER_A)["operations"]:
+                    if op["kind"] == "sync_response" and op["status"] == "ready":
+                        f.a.dispatch(op["operation_id"], protocol.OWNER_A, f.ta)
+                recovery = next(m for m in f.tb.retrieve() if json.loads(m["text"])["kind"] == "sync_response")
+                f.b.ingest_message(recovery)
+                pending = f.b.inbox(protocol.OWNER_B)["pending_review"]
+                self.assertTrue(pending)
+                self.assertEqual(f.b._get("v2_collaboration", "shared-1")["waiting_reason"], "peer_review_required")
+                if decision:
+                    for item in pending:
+                        f.b.review_peer(item["message_id"], decision, protocol.OWNER_B)
+                before = copy.deepcopy(f.bus.sent)
+                run_worker_tick(f.b, "profile-b", f.tb)
+                self.assertEqual(f.bus.sent, before)
+                self.assertFalse(f.b.collaborations(protocol.OWNER_B)["collaborations"])
+                self.assertEqual(f.b._get("worker_policy", "task-b")["waiting_reason"], "peer_content_unavailable")
+                self.assertIn(f.b._get("v2_collaboration", "shared-1")["waiting_reason"],
+                              {"peer_review_required", "missing_event"})
 
     def test_block_denies_v2_queue_approval_and_worker_after_unblock(self):
         f = self.f

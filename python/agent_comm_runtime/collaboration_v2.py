@@ -847,12 +847,13 @@ class CollaborationV2Mixin:
         gaps = [r for r in self._all("v2_event") if r["owner_id"] == c["owner_id"]
                 and r["packet"]["collaboration_id"] == c["collaboration_id"]
                 and r["packet"]["sender_urn"] == c["peer_urn"] and r["status"] == "buffered"]
-        if gaps and c.get("waiting_reason") == "peer_review_required":
+        if gaps and c.get("waiting_reason") == "peer_review_required" and not self._collaboration_review_safe(c, c["owner_id"]):
             return
         if gaps and c.get("closure_reason") != "cancelled":
             c.update(phase="reconciling", waiting_reason="missing_event")
             self._v2_queue(c, "sync_request")
-        elif c.get("waiting_reason") == "missing_event":
+        elif c.get("waiting_reason") == "missing_event" or (c.get("waiting_reason") == "peer_review_required"
+                and self._collaboration_review_safe(c, c["owner_id"])):
             if c.get("agreement"):
                 c.update(phase="closed" if c["agreement_synced"] else "agreed",
                          waiting_reason=None if c["agreement_synced"] else "agreement_sync")

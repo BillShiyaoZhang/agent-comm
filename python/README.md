@@ -1,14 +1,14 @@
 # Agent Comm 本地协作 Runtime
 
-## 对端内容安全（v0.9.4 配套版本）
+## 对端内容安全（v0.9.5 配套版本）
 
 当前源码使用持久 owner+URN 屏蔽及本人内容审核。自由正文和协作邀请、提议、修改请求先进入仅元数据的 `pending_review`；独立 READ `inbox.review_preview` 完整预览后，独立 WRITE `inbox.review` 由本人决定。屏蔽使用 `contacts.block` / `contacts.unblock`。四项方法必须显式授权，旧 pairing 不增权；模型 Runtime 不提供这些决定动作。
 
 屏蔽回执与 contacts/state 含单调 `safety_revision`，历史回执不能覆盖新状态。真实 `capabilities.peer_content_safety={version:1,mode:"owner_review",automatic_peer_model_execution:false}` 才表明更新后的本机边界。两种 Hermes 模式均不直接让对端来信启动模型；解除屏蔽或批准均不自动重放历史。审核不能替代业务委托、共享许可或 Web 运营审核；`review_policy` 不证明 Web/App 显示过滤已完成。完整契约与宿主限制见[屏蔽与本人审核](../references/peer-safety.md)。
 
-`agent-comm-runtime` 0.1.9 是可独立安装的 Python 3.11+ 包，标准库即可运行。它不导入 Hermes、模型 SDK 或任何记忆库。联系人、授权、任务、不可变动作、资源快照、入站和审计的唯一实现位于这里；Hermes connector 是它的首个实际宿主适配器。Web 通过明确配对的远程控制协议同步 agent 侧状态；拥有对应权限后可直接添加联系人和确认授权，所有决定仍写入 agent 的同一个 Store。
+`agent-comm-runtime` 0.1.10 是可独立安装的 Python 3.11+ 包，标准库即可运行。它不导入 Hermes、模型 SDK 或任何记忆库。联系人、授权、任务、不可变动作、资源快照、入站和审计的唯一实现位于这里；Hermes connector 是它的首个实际宿主适配器。Web 通过明确配对的远程控制协议同步 agent 侧状态；拥有对应权限后可直接添加联系人和确认授权，所有决定仍写入 agent 的同一个 Store。
 
-v0.9.4 与 Hermes connector 1.5.11 配套。升级时保留原身份、实际 profile、helper mailbox、协作/远程/消费回执数据库及 WAL；先停下该身份的所有消费者并备份，再用实际运行 Hermes 的 Python 安装匹配 wheel。SQLite schema 2 保留已有记录，旧 runtime 拒绝打开升级后的库；不能靠回装旧 wheel 或重建身份撤销安全门禁。已有 pairing 的方法和到期时间保持不变。发布与升级说明见 [v0.9.4](../docs/releases/v0.9.4.md)。
+v0.9.5 与 Hermes connector 1.5.12 配套。已审核、已应用的协作事件留下的旧 `peer_review_required` 等待标记，可由后续受信任 worker tick 核验后恢复；待审或拒绝的内容仍隔离，旧事件不重发。升级时保留原身份、实际 profile、helper mailbox、协作/远程/消费回执数据库及 WAL；先停下该身份的所有消费者并备份，再用实际运行 Hermes 的 Python 安装匹配 wheel。SQLite schema 2 保留已有记录，旧 runtime 拒绝打开升级后的库；不能靠回装旧 wheel 或重建身份撤销安全门禁。已有 pairing 的方法和到期时间保持不变。发布与升级说明见 [v0.9.5](../docs/releases/v0.9.5.md)。
 
 ## 安装与独立运行
 
@@ -46,7 +46,7 @@ flowchart LR
     TP --> G["Go helper<br/>身份、密钥与持久收发"]
 ```
 
-扩展协议版本 `1.0`、Python 包版本 `0.1.9`、协作消息 `agent-comm-collaboration/v1` / `v2`、SQLite schema `2` 是不同版本维度。当前 adapter API 要求版本精确相同；未来改变合约时显式升级，避免静默兼容猜测。v2 与 attention 使用新增记录类型，旧 v1 行保留；原 `hermes-native-<profile hash>` 主体仍能读取旧记录。不能用旧二进制继续处理已建立的 v2 协作。
+扩展协议版本 `1.0`、Python 包版本 `0.1.10`、协作消息 `agent-comm-collaboration/v1` / `v2`、SQLite schema `2` 是不同版本维度。当前 adapter API 要求版本精确相同；未来改变合约时显式升级，避免静默兼容猜测。v2 与 attention 使用新增记录类型，旧 v1 行保留；原 `hermes-native-<profile hash>` 主体仍能读取旧记录。不能用旧二进制继续处理已建立的 v2 协作。
 
 ## 双边协作与持久提醒
 
