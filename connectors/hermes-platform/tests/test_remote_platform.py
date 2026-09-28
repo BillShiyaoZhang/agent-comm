@@ -242,7 +242,9 @@ class TestRemotePlatform(unittest.IsolatedAsyncioTestCase):
     async def test_reconnect_recovers_durable_turns_without_another_rpc(self):
         await self.adapter.disconnect()
         store = Store(self.settings["collaboration_state_path"], local_urn=AGENT)
-        bridge = RemoteBridge(self.settings["remote_state_path"], store, AGENT, conversations=True)
+        # Seed durable jobs as a safe trusted fixture host; an old host must
+        # still fail admission when it omits the explicit safety declaration.
+        bridge = RemoteBridge(self.settings["remote_state_path"], store, AGENT, conversations=True, peer_content_safety=True)
         try:
             # These requests were durably accepted and ACKed before the previous
             # process exited. The helper has no pending message to wake recovery.
@@ -265,7 +267,7 @@ class TestRemotePlatform(unittest.IsolatedAsyncioTestCase):
     async def test_reconnect_rechecks_pairing_before_recovering_queued_turn(self):
         await self.adapter.disconnect()
         store = Store(self.settings["collaboration_state_path"], local_urn=AGENT)
-        bridge = RemoteBridge(self.settings["remote_state_path"], store, AGENT, conversations=True)
+        bridge = RemoteBridge(self.settings["remote_state_path"], store, AGENT, conversations=True, peer_content_safety=True)
         try:
             response = bridge.handle(self.wire("revoked-queued", "conversation.send", {"text": "queued work"}))
             turn_id = json.loads(response["text"])["result"]["turn_id"]

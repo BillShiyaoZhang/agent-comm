@@ -49,6 +49,13 @@ def accepted_contact(store, owner, urn):
                    {"owner_id": principal, "peer_urn": urn,
                     "request_id": "accepted-" + urn.rsplit(":", 1)[-1], "connected_at": NOW})
 
+def review_message(store, message_id, owner):
+    """A trusted fixture owner explicitly reviews one immutable full body."""
+    preview = store.review_preview(message_id, owner)
+    assert preview["text_truncated"] is False and preview["status"] == "pending"
+    approved = store.review_peer(message_id, "approve", owner)
+    assert approved["fingerprint"] == preview["fingerprint"] and approved["status"] == "approved"
+
 
 class Bus:
     def __init__(self):
@@ -108,6 +115,8 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.prepare_action("meeting", "propose-1", meeting(), self.owner)["decision"], "allow")
         self.assertEqual(self.store.dispatch("propose-1", self.owner, alice_transport)["status"], "accepted")
         peer.sync_inbox(bob_transport)
+        self.assertEqual(peer.inbox(peer_owner, "meeting")["messages"], [])
+        review_message(peer, peer.inbox(peer_owner)["pending_review"][0]["message_id"], peer_owner)
         message = peer.inbox(peer_owner, "meeting")["messages"][0]
         self.assertNotIn("老王", message["text"])
         self.assertNotIn('"bob"', message["text"])
@@ -118,6 +127,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(peer.prepare_action("meeting", "bob-accept", action, peer_owner)["decision"], "allow")
         peer.dispatch("bob-accept", peer_owner, bob_transport)
         self.store.sync_inbox(alice_transport)
+        review_message(self.store, self.store.inbox(self.owner)["pending_review"][0]["message_id"], self.owner)
         received = self.store.inbox(self.owner, "meeting")["messages"][0]
         self.assertEqual(json.loads(received["text"])["capability"], "accept_meeting")
         self.assertEqual(received["trust"], "peer_statement_not_owner_authority")
@@ -129,6 +139,9 @@ class StoreTests(unittest.TestCase):
         state = self.store.state(self.owner)
         self.assertEqual(state["tasks"], [])
         self.assertEqual(state["pending_confirmations"], [])
+        self.assertEqual(state["inbox"], [])
+        review_message(self.store, "peer-msg", self.owner)
+        state = self.store.state(self.owner)
         self.assertNotIn("approved", state["inbox"][0])
         self.assertEqual(self.store.ingest_message(message)["status"], "already_recorded")
         with self.assertRaises(ValueError):
@@ -142,6 +155,8 @@ class StoreTests(unittest.TestCase):
         receiver.ack = lambda _: (_ for _ in ()).throw(OSError("ack unavailable"))
         with self.assertRaises(OSError):
             self.store.sync_inbox(receiver)
+        self.assertEqual(self.store.inbox(self.owner)["messages"], [])
+        review_message(self.store, "in-1", self.owner)
         self.assertEqual(len(self.store.inbox(self.owner)["messages"]), 1)
         receiver.ack = original
         self.store.sync_inbox(receiver)

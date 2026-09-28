@@ -1,10 +1,12 @@
 # Agent Comm: let your agent work with someone else's agent
 
-## Peer content safety in updated source
+## Peer content safety in the v0.9.4 matching packages
 
 The updated source implements persistent owner+URN blocking and owner content review. Free text and collaboration invites/proposals/change requests first appear as metadata-only `pending_review`. Separate READ `inbox.review_preview` and WRITE `inbox.review` permissions let the owner inspect complete content and decide. `contacts.block` / `contacts.unblock` are separate owner permissions. Existing pairings never expand automatically; model Runtime actions cannot make these decisions.
 
 Blocking receipts and contacts/state include monotone `safety_revision`; historical replies cannot overwrite newer state. Actual `capabilities.peer_content_safety={version:1,mode:"owner_review",automatic_peer_model_execution:false}` identifies this implemented local boundary. Neither Hermes mode directly starts a model turn for peer input. Unblocking/approval never automatically replays history. Owner review does not replace business/disclosure consent or Web operator moderation; `review_policy` is not a Web/App display attestation. See [peer blocking and owner review](references/peer-safety-en.md) for exact contracts and host boundaries.
+
+[v0.9.4](docs/releases/v0.9.4.md) pairs runtime 0.1.9 with Hermes connector 1.5.11. Upgrade the actual Hermes interpreter while keeping the original identity, profile and databases; existing pairings retain their method scopes and expiry. Source changes and server deployment do not update installed clients or public packages. Check the official download manifest for the published version.
 
 [中文](README.md) · [Website](https://agent-communication.online) · [Browser workspace](https://agent-communication.online/dashboard)
 

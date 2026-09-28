@@ -502,8 +502,20 @@ class TestNativeBridge(unittest.TestCase):
                     return {"success": True}
             with patch("hermes_platform_agent_comm.collaboration.transport.HelperTransport", return_value=Transport()):
                 inbox = self.call("inbox", task_id="meeting")
+            self.assertEqual(inbox["messages"], [])
+            self.assertEqual(inbox["pending_review"][0]["message_id"], "proposal-message")
+            owner = hermes.profile_principal() + "|native-session"
+            store = Store(self.db, local_urn=self.settings["urn"], owner_principal=hermes.profile_principal())
+            try:
+                preview = store.review_preview("proposal-message", owner)
+                self.assertEqual(json.loads(preview["text"]), packet)
+                store.review_peer("proposal-message", "approve", owner)
+            finally:
+                store.close()
+            with patch("hermes_platform_agent_comm.collaboration.transport.HelperTransport", return_value=Transport()):
+                inbox = self.call("inbox", task_id="meeting")
             self.assertEqual([m["message_id"] for m in inbox["messages"]], ["proposal-message"])
-            self.assertEqual(acknowledged, ["proposal-message"])
+            self.assertEqual(acknowledged, ["proposal-message", "proposal-message"])
             imported = self.call("import_proposal", task_id="meeting", message_id="proposal-message")
             self.assertEqual(imported["decision"], "recorded_not_accepted", imported)
             self.assertEqual(set(imported["proposal"]["participant_ids"]), {"wang", "self"})

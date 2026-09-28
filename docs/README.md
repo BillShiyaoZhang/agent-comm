@@ -9,6 +9,7 @@
 - [Persistent helper services](guides/HELPER_SERVICE.md)：常驻服务配置。
 - [Source tutorial](guides/TUTORIAL.md)：从源码和本地示例开始。
 - [Releases](guides/RELEASES.md)：二进制、文档包与机器可读清单。
+- [v0.9.4](releases/v0.9.4.md)：匹配 runtime/connector、对端内容安全门禁与保留原身份的升级。
 
 ## Architecture
 

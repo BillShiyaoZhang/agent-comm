@@ -2,6 +2,8 @@
 
 实际发布逻辑见 [.github/workflows/release.yml](../../.github/workflows/release.yml)。发布由 SDK 仓库的 `v*` tag 或维护者触发工作流。
 
+v0.9.4 的版本、对端内容安全门禁与原身份升级要求见[配套发布说明](../releases/v0.9.4.md)。runtime 为 0.1.9，Hermes connector 为 1.5.11 并要求 runtime `>=0.1.9,<0.2`；helper 与协作协议不变。该说明描述包行为，实际资产发布以清单和相应验收记录为准。
+
 ## 当前产物
 
 - `agent-comm-helper`：Linux amd64、Windows amd64、macOS amd64/arm64。支持矩阵以工作流为准。
