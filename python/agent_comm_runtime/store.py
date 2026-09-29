@@ -700,7 +700,9 @@ class Store(TaskHistoryMixin, SourceContextMixin, PeerReviewMixin, SocialMixin, 
             request = self._get("contact_request", approval["subject_id"])
             return bool(request and self._belongs(request, approval["owner_session"]) and request["status"] == "pending")
         if approval["kind"] == "direct_message":
-            return not self._get("social_outbox", approval["subject_id"]) and approval["expires_at"] > self.clock()
+            return (not self._get("social_outbox", approval["subject_id"])
+                    and not self._get("inbound", approval["subject_id"])
+                    and approval["expires_at"] > self.clock())
         if approval["kind"] == "worker_policy":
             return self._worker_approval_current(approval)
         if approval["kind"] == "collaboration_v2":

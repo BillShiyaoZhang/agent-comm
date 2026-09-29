@@ -24,6 +24,18 @@ type HTTPClient struct {
 	Client             *http.Client
 }
 
+// HTTPError preserves the Platform status and path so callers can distinguish
+// a permanent admission conflict from a temporary policy or network failure.
+type HTTPError struct {
+	Path       string
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("v2 platform %s: HTTP %d: %s", e.Path, e.StatusCode, e.Body)
+}
+
 type MessageItem struct {
 	MessageID string `json:"message_id"`
 	Envelope  []byte `json:"envelope"`
@@ -90,7 +102,7 @@ func (c *HTTPClient) doJSON(ctx context.Context, method, path string, request, r
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("v2 platform %s: HTTP %d: %s", path, resp.StatusCode, string(message))
+		return &HTTPError{Path: path, StatusCode: resp.StatusCode, Body: string(message)}
 	}
 	if response != nil {
 		return json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(response)

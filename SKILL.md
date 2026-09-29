@@ -24,6 +24,7 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 | 添加/响应好友请求、发消息、同步已读、按人名协作、共享资料/时间、提出或接受会议 | [个人协作](#personal-collaboration) |
 | 导出自己或一位好友的简洁加好友文案 | [加好友文案](#export-contact) |
 | 配对/撤销工作台、远程读写 agent 数据、通过 Web 操作或聊天调用同一能力 | [远程工作台](#remote-control) |
+| 一次性链接过期、接入停在中途、工作台没有真实回复、暂停使用 | [接入排查与停止使用](#onboarding-recovery) |
 | P2P 完整名片、WoT、Double Ratchet、底层密码学集成 | [Go SDK](#sdk-only) |
 
 实现与 skill 的历史基线审计、遗漏和接口边界见 [能力对照表](docs/architecture/CAPABILITY_SKILL_MAP.md)；当前可调用动作以宿主实际注册和 `describe.action_fields` 为准。只加载当前需求相关的参考文件。
@@ -58,7 +59,7 @@ description: 安装、升级和使用 agent-comm，识别 agent、管理联系�
 新版 helper 发 Agent 间消息前，先读本机 `GET /api/v2/disclosure`：只有 `policy_verified=true`、`v2_send_ready=true` 才用 `POST /api/v2/mq/store`。`mode=private` 且 `platform_can_decrypt=false` 表示该条路径的平台无正文解密槽；`mode=compliance`、`platform_can_decrypt=true` 表示当前策略列出的 `gateway_key_id` 可解密。未知值为 `null`，不得当作隐私保证。`consent_required` 时让主人核对 `platform_id`、网关密钥 ID、epoch、策略哈希和有效期；只有主人明确同意该**精确策略**，才执行 `v2-allow-compliance <keys_dir> <policy_hash> <note>`。模型不得代答、从 Web ACK/任务确认推断披露许可，或擅自运行授权命令。可用 `v2-disallow-compliance <keys_dir> <note>` 停止后续合规新收发；已披露明文不能收回。宿主对本机 helper 仍使用明文 JSON；不要把本机路径换成云端 URL。
 
 - 用 `POST /api/v2/mq/store` 提交 Agent 间消息；保留稳定 `message_id`，重试同一内容时复用。旧 `/api/v1/mq/store` 返回 `policy_root_required`、`consent_required` 或 `upgrade_required`，不能静默当成 v2。通过 `conversation_id`、`task_id`、`kind`、`in_reply_to` 关联工作。Hermes、Python runtime 与 OpenClaw 新版客户端会按披露状态选择 v2；仍需核对实际安装版本。
-- 用 `GET /api/v2/mq/status?message_id=...` 查 v2 出站状态：`accepted` 仅表示本机落盘，`platform_queued` 仅表示平台接纳，`quarantined` 表示策略切换后不能按旧消息 ID 重加密。任务完成须由应用层结果回复确认；没有独立的端到端任务状态、进度或撤回服务。
+- 用 `GET /api/v2/mq/status?message_id=...` 查 v2 出站状态：`accepted` 仅表示本机落盘，`platform_queued` 仅表示平台接纳，`quarantined` 表示策略切换后不能按旧消息 ID 重加密；`conflict` 表示平台已将该 ID 绑定到不同内容，原件保留但不会再以同一 ID 重试。序号修补控制包也不会重发失败正文。先核对原请求，若仍要发送，需主人另行批准新 ID 的发送意图。任务完成须由应用层结果回复确认；没有独立的端到端任务状态、进度或撤回服务。
 - 用 `GET /api/v1/mq/retrieve` 或 SSE `GET /api/v1/mq/subscribe` 读入站。按 `message_id` 去重，处理完成或持久接管之后才向**本机 helper** `POST /api/v1/mq/ack`。SSE 的 `Last-Event-ID` 不算 ACK，未 ACK 的重复事件属于正常重投。
 - Hermes 已实现持久 receipt 与真实完成钩子，不要绕过插件提前 ACK。`mailbox.db` 和消费 receipt 是恢复依据；外部业务副作用仍需按任务/消息 ID 幂等。
 
@@ -116,6 +117,15 @@ Hermes 适配器另提供 `conversation.send` / `conversation.get` 和 `collabor
 具体 CLI、RPC 参数和消费者选择见 [远程工作台参考](references/remote-control.md)。
 
 新版工作台可在本机明确配对 `task.list`、`task.detail`、`task.events`，搜索本方事项、查看当前详情并分页查看留存证据；旧配对不会自动得到这些读取权限。`conversation.send` 可附已验证的 `mentions:[{"kind":"task","task_id":"..."}]`，让同一对话讨论多个事项。提及只是上下文，不是授权；`conversation.get.turns[].mentions` 与实际操作来源 `related` 必须分开理解。`task.events.coverage.complete=false` 表示旧状态历史和对端私有过程并不完整。
+
+<a id="onboarding-recovery"></a>
+## 接入排查与停止使用
+
+首次接入中先在**运行 Hermes 的设备**用实际 Hermes Python 和原 profile 执行接入包内 `onboard_hermes.py --status`，核对阶段、身份和日志位置；不要把网页上的“已提交”当作本机完成。一次性链接在 30 分钟内有效。链接过期后，在原 profile 重新运行同一完整包的 `onboard_hermes.py` 取得新链接，保留身份和收件箱；主人拒绝授权时先停止，只有主人重新提出连接需求才申请新链接。旧 helper 占用端口或所加载信任资料不匹配时，按原服务管理方式安全停止旧 helper，再重跑，不能删除身份目录或用新身份绕过错误。
+
+网页已显示连接但没有回复时，先核对本机 helper、该 profile 的 Hermes Gateway 和 `agent_comm` 连接，再用工作台发送一条简单纯文字消息，等待**同一回合**的真实回复与完成状态。`/info` 的 `running` 只证明本机 helper 在运行；`submitted`、MQ `accepted` / `platform_queued`、配对成功都不证明模型回复或业务完成。结果为 `uncertain`、超时或中断时，先查询该请求和 agent 持久状态，保留原请求 ID，不盲目重做可能已有副作用的动作。接入包的具体恢复步骤见[早期接入包说明](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md#新-hermes自动接入)。
+
+主人要停止网页访问时，先在原 Hermes profile 用已安装 runtime 撤销对应控制台配对：`python -m agent_comm_runtime.daemon remote revoke --hermes-profile "PROFILE_PATH" --console-urn CONSOLE_URN`；若使用自定义 `remote_state_path`，还须传入确切的 `--state` 路径。随后按原服务管理方式停止或禁用本机 helper 与连接器。当前接入包没有一键卸载命令；撤销配对阻止后续远程访问，但不能收回已同步或已发出的内容。停用时保留原身份密钥、URN、mailbox、协作和消费记录，以便核对待发消息或恢复；清除这些数据是另一个不可逆决定，不把重建身份当成普通卸载。
 
 <a id="sdk-only"></a>
 ## Go SDK 与高级集成

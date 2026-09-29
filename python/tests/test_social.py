@@ -280,6 +280,32 @@ class TestSocial(unittest.TestCase):
         allow_pending(self.a, 'alice')
         self.assertTrue(any(m['text'] == 'Native message' for m in self.a.inbox('alice')['messages']))
 
+    def test_reply_cannot_reuse_received_message_id(self):
+        request_id = self.connect()
+        self.assertIsNotNone(self.b._get('inbound', request_id))
+        params = {'recipient_urn': A, 'text': 'A reply', 'message_id': request_id}
+        with self.assertRaisesRegex(ValueError, 'already received'):
+            self.b.prepare_message(params, 'bob|native')
+        with self.assertRaisesRegex(ValueError, 'already received'):
+            self.mutate(self.b, 'messages.send', params, 'bob')
+        with self.b._transaction():
+            with self.assertRaisesRegex(ValueError, 'already received'):
+                self.b._queue_social({'message_id': request_id, 'recipient_urn': A,
+                                      'kind': 'chat.message', 'text': 'A reply'}, 'bob')
+        self.assertIsNone(self.b._get('social_outbox', request_id))
+
+    def test_inbound_id_arriving_during_confirmation_supersedes_send(self):
+        self.connect()
+        pending = self.b.prepare_message({'recipient_urn': A, 'text': 'A reply',
+                                          'message_id': 'approval-collision'}, 'bob|native')
+        lease = self.b.begin_confirmation(pending['approval_id'], 'bob|native')
+        self.b.ingest_message({'message_id': 'approval-collision', 'sender_urn': A,
+                               'kind': 'chat.message', 'text': 'New inbound'})
+        result = self.b.finish_confirmation(pending['approval_id'], lease['token'], 'bob|native', '同意')
+        self.assertEqual(result['decision'], 'deny')
+        self.assertEqual(result['reasons'], ['expired_or_superseded'])
+        self.assertIsNone(self.b._get('social_outbox', 'approval-collision'))
+
     def test_failed_send_retry_uses_same_id_and_offline_presence_expires(self):
         self.connect()
         self.mutate(self.a, 'messages.send', {'recipient_urn': B, 'text': 'Retry', 'message_id': 'retry-me'}, 'alice')

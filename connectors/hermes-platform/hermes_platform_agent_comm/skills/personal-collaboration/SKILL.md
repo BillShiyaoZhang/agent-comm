@@ -152,6 +152,8 @@ resource disclosure, tool action, console access, or gateway disclosure consent.
 
 For an ordinary message, resolve a `connected` contact and call `prepare_message` with
 `recipient_urn`, `text` and optionally a stable `message_id`, then `confirm`.
+When replying, omit `message_id` to generate a fresh outbound ID; the received
+message's ID identifies that inbound item and must never be reused as the reply ID.
 The approved exact content is durably queued; the same ID is retried after a
 connection failure. `inbox` shows message content; `mark_read` with `message_id`
 records the read state on the agent and dismisses that message's reminder on

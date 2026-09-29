@@ -38,6 +38,12 @@ Go helper 的本机 `POST /api/v2/mq/store` 是低层通信接口，会检查 UR
 
 握手、正文和回执必须与**当前**签名策略完全一致。收到更高 epoch 后删除旧会话，所有未发完的旧请求（包括还没加密的本机明文）标为 `quarantined`；已生成的旧信封保留原字节，不以同一消息 ID 重新加密。旧队列默认不当作新模式消息交付。`platform_queued` 只表示平台准入，入站在验签、解密、验证回执并持久写入后才 ACK；业务完成另算。
 
+本机发件序号与密文在同一个事务里持久化，发生平台永久 `v2 message ID conflict` 时，原序号已经消耗却没有收件方可取的信封。若同一会话有较高序号的有效平台回执，helper 才可产生一个新的 MQ 控制信封填补空洞：Header 的 session/direction/sequence 与冲突信封相同，`message_id` 为 `v2skip_` 加原密文的域分离 SHA-256；签名和 AEAD 绑定完整 Header。正文固定 `kind=agent_comm.sequence_skip.v1`、原消息 ID 和原信封摘要，不包含原业务正文。`private` 模式使用独立的 `private-sequence-skip` HKDF 域，避免复用原序号的业务密钥；`compliance` 模式使用新随机 CEK 与 nonce。生成的控制信封及原消息映射在本机事务中持久化，网络重试使用同一密文。旧冲突行及已准入的后续业务信封字节保持不变。
+
+收件方按普通 v2 消息核验已固定身份、签名、策略、方向、AEAD 和平台准入回执，然后只在控制包序号等于 `ReceiveSequence+1` 时，将序号与隐藏去重 tombstone 原子写入；不写业务 inbox，也不广播 SSE。相同控制信封在 ACK 丢失后可重复 ACK；其他内容或序号不能越过空洞。平台按存入时间取消息，较高序号可先到而暂时验证失败，控制包到达后下一轮再按顺序收取。此控制只认证发送者声明已取消本机未准入消息，接收端无法独立证明发送者的本地错误原因；因此生成端严格限定为已持久记录、无回执的精确永久冲突。策略切换、会话不匹配或缺少较高序号的有效回执时不自动修补。
+
+当前自动修补只适用于少量积压的收件箱。Platform 默认每个 URN 最多保存 500 条消息，单次 retrieve 还受 4 MiB 响应上限约束；若较高序号的未 ACK 消息填满配额，控制包可能无法准入，或排在检索窗口之外而无法被收件端看到。此时保留两端原身份目录、`mailbox.db` 和 WAL/SHM，暂停继续向该收件人发送，核对原消息的 `conflict`、`repair_status` 与 `repair_last_error`；不要手动 ACK、删除队列或重建身份。大型积压需要 Platform 分页或控制包优先通道才能可靠恢复。旧版 SDK 曾允许普通业务消息使用 `v2skip_` 前缀；新版接收 helper 对已验签、已验平台回执且通过 AEAD 的普通正文仍按业务消息入箱，`private` 模式仅让使用独立控制密钥认证的包推进修补序号。新版普通 store 禁止再创建此前缀；升级前仍应核对遗留待发/未读 ID 与两端版本。
+
 ## helper API
 
 固定根后重启 daemon。`POST /api/v2/mq/store` 接受与本机 v1 store 相同的消息 JSON，返回 HTTP 202、稳定 `message_id` 和本次观察的披露模式；`GET /api/v2/mq/status?message_id=...` 返回 `status`、`policy_hash`、`receipt_verified` 等。v2 验证后的入站进入原有本机 `/api/v1/mq/retrieve`/SSE/ACK，增加 `mode`、`policy_epoch`、`gateway_key_id`、`envelope_hash`。这些是逐条消息的验证结果，不是全局 UI 标签。

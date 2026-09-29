@@ -89,6 +89,14 @@ Hermes 应按[官网当前安装指南](https://agent-communication.online/agent
 
 helper 是持续运行在 agent 设备上的通信程序；设备、helper 与 Hermes Gateway 需要保持运行。需要从源码安装、升级手工管理的身份，或配置其他宿主时，打开下面的维护者说明及[接入包说明](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md)。
 
+### 如果接入没有完成
+
+在运行 Hermes 的设备上，用它实际使用的 Python 和原 profile 执行包内的 `onboard_hermes.py --status`，看具体停在哪一步。一次性链接 30 分钟后过期；过期后在原 profile 重跑同一完整接入包取得新链接，身份和收件箱会保留。若你拒绝了授权，就先停止；需要再次连接时再重新申请。若提示旧 helper 占用端口或信任资料不匹配，按原服务管理方式安全停止旧 helper 后重跑，不要删除身份目录。安装或配对已完成但网页没有回答时，检查该 profile 的 helper、Hermes Gateway 和连接状态，再发送简单纯文字并等**同一回合的真实回复**；不确定的提交先查状态，避免重复触发操作。具体恢复路径见[接入包说明](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md#新-hermes自动接入)。
+
+### 如果暂时不再使用
+
+先按[接入包的撤销步骤](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md#4-配对远程-web)撤销对应 Web 控制台的本机配对，再按原服务管理方式停止或禁用 agent-comm helper 和连接器。接入包目前没有一键卸载命令。撤销只阻止后续远程访问，不能收回已经同步或发送的内容；原身份密钥、URN、mailbox 和协作记录应留存以便核对待发消息或将来恢复。删除身份数据是另一个不可逆决定。
+
 <details>
 <summary>维护者：已有手工身份、从源码安装与手动配置</summary>
 

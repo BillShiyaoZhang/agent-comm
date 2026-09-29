@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,8 @@ type v2Engine struct {
 	policy      *v2.Policy
 	lastRefresh time.Time
 }
+
+const v2HandshakeWait = 5 * time.Second
 
 func (e *v2Engine) currentPolicy() *v2.Policy {
 	e.mu.RLock()
@@ -77,6 +80,13 @@ func (e *v2Engine) run(ctx context.Context) {
 }
 
 func (e *v2Engine) tick(ctx context.Context) error {
+	retired, err := e.ds.mailbox.retirePersistedV2Conflicts()
+	if err != nil {
+		return err
+	}
+	if retired > 0 {
+		log.Printf("V2 worker: retired %d persisted message ID conflict(s)", retired)
+	}
 	e.mu.RLock()
 	needRefresh := e.policy == nil || time.Since(e.lastRefresh) > 10*time.Second
 	e.mu.RUnlock()
@@ -100,6 +110,9 @@ func (e *v2Engine) tick(ctx context.Context) error {
 		failures = append(failures, err)
 	}
 	if err := e.processMessages(ctx, policy); err != nil {
+		failures = append(failures, err)
+	}
+	if err := e.scheduleV2SequenceSkip(ctx, policy); err != nil {
 		failures = append(failures, err)
 	}
 	if err := e.deliverNext(ctx, policy); err != nil {
@@ -144,6 +157,10 @@ func (ds *DaemonServer) handleV2Store(w http.ResponseWriter, r *http.Request) {
 	}
 	if !messageIDPattern.MatchString(req.MessageID) {
 		http.Error(w, "Invalid message_id", http.StatusBadRequest)
+		return
+	}
+	if strings.HasPrefix(req.MessageID, v2SequenceSkipPrefix) || req.Kind == v2SequenceSkipKind {
+		http.Error(w, "Reserved sequence repair fields", http.StatusBadRequest)
 		return
 	}
 	if err := req.MessageFields.validate(); err != nil {
@@ -224,9 +241,61 @@ func (e *v2Engine) framePeer(ctx context.Context, frame *v2.HandshakeFrame) (ed2
 	return ed25519.PublicKey(resolved.Ed25519PubKey), true, nil
 }
 
+// An expired Init or Accept cannot be accepted by the Platform. Keep other
+// invalid records for diagnosis instead of silently replacing their bytes.
+func (e *v2Engine) pendingHandshakeFrame(policy *v2.Policy, record *v2HandshakeRecord, now time.Time) (*v2.HandshakeFrame, bool, error) {
+	var raw []byte
+	wantType := v2.FrameInit
+	switch record.role {
+	case "initiator":
+		raw = record.initFrame
+	case "responder":
+		raw, wantType = record.acceptFrame, v2.FrameAccept
+	default:
+		return nil, false, errors.New("invalid persisted handshake role")
+	}
+	frame, err := v2.ParseFrame(raw)
+	if err != nil {
+		return nil, false, err
+	}
+	if frame.Type != wantType || frame.SessionID != record.sessionID || frame.SenderURN != e.client.URN || frame.RecipientURN != record.peerURN {
+		return nil, false, errors.New("persisted handshake identity mismatch")
+	}
+	var lifetime struct {
+		Expiry int64 `json:"expiry"`
+	}
+	if err := json.Unmarshal(frame.Payload, &lifetime); err != nil || lifetime.Expiry == 0 {
+		return nil, false, errors.New("invalid persisted handshake lifetime")
+	}
+	if lifetime.Expiry <= now.Unix() {
+		return frame, true, nil
+	}
+	if err := v2.ValidateFrameForRelay(policy, frame, now); err != nil {
+		return nil, false, fmt.Errorf("persisted handshake cannot be replayed: %w", err)
+	}
+	return frame, false, nil
+}
+
+func (e *v2Engine) retireExpiredHandshake(record *v2HandshakeRecord) error {
+	if err := e.ds.mailbox.retireV2Handshake(*record); err != nil {
+		return err
+	}
+	log.Printf("Retired expired V2 handshake session %s; queued messages and identity preserved", record.sessionID)
+	return nil
+}
+
 func (e *v2Engine) startHandshake(ctx context.Context, policy *v2.Policy, peerURN string) error {
-	if _, err := e.ds.mailbox.loadV2HandshakeByPeer(peerURN); err == nil {
-		return nil
+	if existing, err := e.ds.mailbox.loadV2HandshakeByPeer(peerURN); err == nil {
+		_, expired, err := e.pendingHandshakeFrame(policy, existing, time.Now())
+		if err != nil {
+			return err
+		}
+		if !expired {
+			return nil
+		}
+		if err := e.retireExpiredHandshake(existing); err != nil {
+			return err
+		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -331,12 +400,22 @@ func (e *v2Engine) processFrames(ctx context.Context, policy *v2.Policy) error {
 func (e *v2Engine) handleInit(ctx context.Context, policy *v2.Policy, init *v2.HandshakeFrame, peer ed25519.PublicKey) error {
 	peerURN := init.SenderURN
 	if existing, err := e.ds.mailbox.loadV2HandshakeByPeer(peerURN); err == nil && existing.sessionID != init.SessionID {
-		// Resolve simultaneous initiation deterministically.
-		if e.client.URN < peerURN {
-			return nil
-		}
-		if err := e.ds.mailbox.deleteV2Handshake(existing.sessionID); err != nil {
+		_, expired, err := e.pendingHandshakeFrame(policy, existing, time.Now())
+		if err != nil {
 			return err
+		}
+		if expired {
+			if err := e.retireExpiredHandshake(existing); err != nil {
+				return err
+			}
+		} else {
+			// Resolve simultaneous initiation deterministically.
+			if e.client.URN < peerURN {
+				return nil
+			}
+			if err := e.ds.mailbox.deleteV2Handshake(existing.sessionID); err != nil {
+				return err
+			}
 		}
 	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
@@ -481,15 +560,18 @@ func (e *v2Engine) resendPending(ctx context.Context, policy *v2.Policy) error {
 			}
 			continue
 		}
-		var frame *v2.HandshakeFrame
-		if record.role == "initiator" {
-			frame, err = v2.ParseFrame(record.initFrame)
-		} else {
-			frame, err = v2.ParseFrame(record.acceptFrame)
+		frame, expired, frameErr := e.pendingHandshakeFrame(policy, &record, time.Now())
+		if frameErr != nil {
+			failures = append(failures, frameErr)
+			continue
 		}
-		if err == nil {
-			_, err = e.client.StoreFrame(ctx, frame)
+		if expired {
+			if err := e.retireExpiredHandshake(&record); err != nil {
+				failures = append(failures, err)
+			}
+			continue
 		}
+		_, err = e.client.StoreFrame(ctx, frame)
 		if err != nil {
 			failures = append(failures, err)
 		}
@@ -518,7 +600,7 @@ func (e *v2Engine) deliverNext(ctx context.Context, policy *v2.Policy) error {
 			if err := e.startHandshake(ctx, policy, req.RecipientURN); err != nil {
 				return e.retryV2(req.MessageID, entry.attempts, err)
 			}
-			return nil
+			return e.ds.mailbox.deferV2Outgoing(req.MessageID, v2HandshakeWait)
 		}
 		if err != nil {
 			return e.retryV2(req.MessageID, entry.attempts, err)
@@ -534,7 +616,7 @@ func (e *v2Engine) deliverNext(ctx context.Context, policy *v2.Policy) error {
 			if err := e.startHandshake(ctx, policy, req.RecipientURN); err != nil {
 				return e.retryV2(req.MessageID, entry.attempts, err)
 			}
-			return nil
+			return e.ds.mailbox.deferV2Outgoing(req.MessageID, v2HandshakeWait)
 		}
 		sequence := session.SendSequence + 1
 		direction := "a_to_b"
@@ -591,7 +673,15 @@ func (e *v2Engine) deliverNext(ctx context.Context, policy *v2.Policy) error {
 }
 
 func (e *v2Engine) retryV2(id string, attempts int, cause error) error {
-	if updateErr := e.ds.mailbox.updateV2Outgoing(id, "accepted", cause.Error(), attempts+1, nil); updateErr != nil {
+	status := "accepted"
+	var platformErr *v2.HTTPError
+	if errors.As(cause, &platformErr) && platformErr.Path == "/api/v2/mq/store" &&
+		platformErr.StatusCode == http.StatusConflict && strings.TrimSpace(platformErr.Body) == "v2 message ID conflict" {
+		// The Platform binds this ID to different durable bytes. Never retry
+		// the same ciphertext after its original server record expires.
+		status = "conflict"
+	}
+	if updateErr := e.ds.mailbox.updateV2Outgoing(id, status, cause.Error(), attempts+1, nil); updateErr != nil {
 		return updateErr
 	}
 	return cause
@@ -652,12 +742,32 @@ func (e *v2Engine) processOneMessage(policy *v2.Policy, item v2.MessageItem) err
 		return errors.New("v2 direction mismatch")
 	}
 	var cek, plaintext []byte
+	isSkipID := strings.HasPrefix(env.Header.MessageID, v2SequenceSkipPrefix)
+	usedSkipKey := false
 	if policy.Mode == v2.ModePrivate {
-		key, keyErr := session.PrivateMessageKey(direction, env.Header.Sequence)
+		var key []byte
+		var keyErr error
+		if isSkipID {
+			key, keyErr = session.PrivateSequenceSkipKey(direction, env.Header.Sequence)
+		} else {
+			key, keyErr = session.PrivateMessageKey(direction, env.Header.Sequence)
+		}
 		if keyErr != nil {
 			return keyErr
 		}
 		plaintext, err = v2.OpenPrivate(policy, env, key)
+		if err == nil && isSkipID {
+			usedSkipKey = true
+		} else if err != nil && isSkipID {
+			// Older helpers allowed ordinary business IDs with this prefix. Only
+			// a control authenticated under the separate skip key may advance a
+			// missing sequence; an old ordinary envelope keeps its original key.
+			legacyKey, keyErr := session.PrivateMessageKey(direction, env.Header.Sequence)
+			if keyErr != nil {
+				return keyErr
+			}
+			plaintext, err = v2.OpenPrivate(policy, env, legacyKey)
+		}
 	} else {
 		cek, plaintext, err = v2.RecipientOpenCompliance(policy, env, e.ds.agent.Keys.X25519SK)
 	}
@@ -677,6 +787,19 @@ func (e *v2Engine) processOneMessage(policy *v2.Policy, item v2.MessageItem) err
 	var wire wireMessage
 	if err := json.Unmarshal(plaintext, &wire); err != nil || wire.Version != 2 {
 		return errors.New("v2 body is not an Agent Comm message")
+	}
+	isControl := isSkipID && wire.Kind == v2SequenceSkipKind
+	if isControl {
+		if (policy.Mode == v2.ModePrivate && !usedSkipKey) || !validV2SequenceSkip(wire.MessageFields) {
+			return errors.New("invalid v2 sequence repair control")
+		}
+		if policy.Mode == v2.ModeCompliance && !v2.ComplianceAllowed(e.keysDir, policy) {
+			return errors.New("compliance disclosure was revoked before sequence repair commit")
+		}
+		return e.ds.mailbox.receiveV2SequenceSkip(env, wire.InReplyTo, wire.TaskID, v2.EnvelopeHash(item.Envelope))
+	}
+	if wire.Kind == v2SequenceSkipKind || (policy.Mode == v2.ModePrivate && usedSkipKey) {
+		return errors.New("invalid v2 sequence repair control")
 	}
 	if err := wire.MessageFields.validate(); err != nil {
 		return err

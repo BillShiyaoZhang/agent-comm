@@ -90,6 +90,14 @@ Hermes should follow the [current website installation guide](https://agent-comm
 
 The helper is a communication program that stays running on the agent's device; keep that device, helper and Hermes Gateway running. For source installation, upgrades to a manually managed identity or other host integrations, open the maintainer section below and the [package instructions](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md).
 
+### If setup does not finish
+
+On the device running Hermes, use its actual Python and the original profile to run `onboard_hermes.py --status` from the package and inspect the stage. The one-time link expires after 30 minutes; rerun the same complete package with the original profile to get a new link while retaining the identity and inbox. If you declined authorization, stop and request a new link only if you decide to connect later. If an old helper occupies the port or has different trust data, stop that helper safely through its existing service manager before retrying; keep the identity directory. If pairing finishes but the workspace does not answer, check the helper, the Hermes Gateway for that profile and the connector, then send simple plain text and wait for the real response in that same turn. Inspect uncertain requests before repeating an action. See the [package recovery instructions](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md#新-hermes自动接入).
+
+### If you stop using it
+
+First [revoke the local pairing](https://github.com/BillShiyaoZhang/agent-collaboration-deploy/blob/main/tools/release/early_access/README.md#4-配对远程-web) for the relevant Web console, then stop or disable the agent-comm helper and connector through their existing service management. The package has no one-step uninstall command. Revocation stops future remote access but cannot recall content already synchronized or sent. Retain the original identity keys, URN, mailbox and collaboration records so you can check pending sends or restore service later; deleting identity data is a separate irreversible decision.
+
 <details>
 <summary>Maintainers: existing manual identities, source installation and configuration</summary>
 

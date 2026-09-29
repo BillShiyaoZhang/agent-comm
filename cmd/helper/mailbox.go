@@ -114,6 +114,15 @@ CREATE TABLE IF NOT EXISTS helper_v2_outbox (
  next_attempt INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
  created_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS helper_v2_outbox_pending ON helper_v2_outbox(status,next_attempt);
+CREATE TABLE IF NOT EXISTS helper_v2_sequence_repairs (
+ original_message_id TEXT PRIMARY KEY, repair_message_id TEXT NOT NULL UNIQUE,
+ original_envelope_hash TEXT NOT NULL, session_id TEXT NOT NULL,
+ sequence INTEGER NOT NULL, created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS helper_v2_skipped_inbox (
+ message_id TEXT PRIMARY KEY, sender_urn TEXT NOT NULL, session_id TEXT NOT NULL,
+ sequence INTEGER NOT NULL, original_message_id TEXT NOT NULL,
+ original_envelope_hash TEXT NOT NULL, envelope_hash TEXT NOT NULL,
+ received_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS helper_v2_sessions (peer_urn TEXT PRIMARY KEY, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS helper_v2_handshakes (
  session_id TEXT PRIMARY KEY, peer_urn TEXT NOT NULL, role TEXT NOT NULL,

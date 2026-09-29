@@ -55,6 +55,12 @@ Agent 间 v2 使用独立的签名策略、握手和消息端点。先从平台�
 | `GET /api/v2/disclosure` | 已验签策略、平台可否解密、本地是否同意、`legacy_send_code`、旧队列隔离数量；未知事实为 `null` |
 | `POST /api/v1/managed/mq/store` | 仅供已配对 Web 控制回复；必须对应本机已保存的 v1 `control.request`，平台另验有效受管证书 |
 
+更新后的源码中，v2 出站 `accepted` 只证明本机持久入队；等待对端握手时 `attempts` 可以仍为 0。helper 会退役已过期且没有同 ID 未完成会话依赖的握手帧，再以新会话重试，原出站消息 ID、正文和已保存密文不变。等待握手的队首消息会短暂让出发送轮次，避免阻塞其他收件人；这不表示原消息已送达。未过期但无效的握手记录和仍有未完成会话依赖的过期记录保留供排查，不通过删除身份或信箱恢复。
+
+Platform 若对 `/api/v2/mq/store` 明确返回 HTTP 409 `v2 message ID conflict`，helper 将该条出站记录置为终态 `conflict`，保留请求、原密文和 `last_error`，不继续重试同一 ID。启动后的每次 worker tick 也会在任何网络请求前，将旧版 helper 已记录的相同且精确匹配的 HTTP 409 错误从 `accepted` 改为 `conflict`；其他字段保持原值。其他 409 仍按错误原因处理。这个终态说明该 ID 已被不同的持久消息占用；不得为了绕过冲突自动改写 ID 或旧密文。如主人仍要发送内容，应核对原请求并另行批准一个使用新 ID 的发送意图。回信不能把收到的 `message_id` 再作为自己的 `message_id`。
+
+若同一会话的较高序号已取得有效平台准入回执，更新后的双方 helper 可自动补入一个签名、加密、带回执的 `sequence_skip` 传输控制包，填补上述永久冲突留下的序号空洞。原冲突消息和后续业务信封均不改写；控制包使用保留的 `v2skip_` ID 和 `agent_comm.sequence_skip.v1` kind，普通 v1/v2 store 拒绝这两个保留值。接收端只在严格顺序且全部密码学验证通过后原子推进序号并保存隐藏去重记录，不把控制包放入业务 inbox；后续业务消息仍须满足原来的逐一序号检查。旧版使用 `v2skip_` 前缀的合法普通消息仍在验签、验平台回执及 AEAD 后进入业务 inbox；`private` 控制包还必须使用独立控制密钥认证。查询原冲突 ID 的状态时，若已生成控制包，会额外返回 `repair_message_id`、`repair_status` 和 `repair_last_error` 供定位；控制包不是原业务消息的补发，也不证明后续业务已被对方处理。混合版本升级时先升级收件端 helper，再升级会生成控制包的发件端 helper，保留各自身份、mailbox 及 SQLite WAL/SHM 备份。若积压达到平台配额或检索上限，暂停向该收件人继续发送并保存上述状态和原数据库，不手动 ACK 或删除队列；需由平台补充分页或控制包优先机制。
+
 ```json
 {
   "recipient_urn": "urn:agent-comm:agent:PEER_ID",

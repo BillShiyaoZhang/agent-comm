@@ -397,3 +397,16 @@ func (s *Session) PrivateMessageKey(direction string, sequence uint64) ([]byte, 
 	info := append([]byte("agent-comm-v2/private-body\x00"+s.ID+"\x00"+direction+"\x00"), n[:]...)
 	return hkdfExpand(s.PRK, info, 32)
 }
+
+// PrivateSequenceSkipKey separates transport repair controls from the ordinary
+// message key at the same sequence. A skipped message may already have been
+// sealed locally even though the Platform permanently refused to admit it.
+func (s *Session) PrivateSequenceSkipKey(direction string, sequence uint64) ([]byte, error) {
+	if !s.Ready() || s.Mode != ModePrivate || len(s.PRK) != 32 || sequence == 0 || (direction != "a_to_b" && direction != "b_to_a") {
+		return nil, errors.New("verified private session and nonzero sequence required")
+	}
+	var n [8]byte
+	binary.BigEndian.PutUint64(n[:], sequence)
+	info := append([]byte("agent-comm-v2/private-sequence-skip\x00"+s.ID+"\x00"+direction+"\x00"), n[:]...)
+	return hkdfExpand(s.PRK, info, 32)
+}

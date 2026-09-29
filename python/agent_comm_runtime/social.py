@@ -163,6 +163,8 @@ class SocialMixin:
         return (self._get("local_profile", "owner") or {}).get("owner_id")
 
     def _queue_social(self, message, owner):
+        if self._get("inbound", message["message_id"]):
+            raise ValueError("Outgoing message ID conflicts with an already received message")
         old = self._get("social_outbox", message["message_id"])
         if old:
             if old["message"] != message or old["owner_id"] != owner:
@@ -468,8 +470,11 @@ class SocialMixin:
             raise ValueError("Confirm this recipient as a local contact before sending a message")
         if not self._can_send_to(urn, owner_session):
             raise ValueError("Wait for this contact to accept the friend request before sending a message")
-        return {"message_id": identifier(params.get("message_id", "message-" + secrets.token_hex(20)), "message_id"),
-                "recipient_urn": urn, "kind": "chat.message", "text": text}
+        message_id = identifier(params.get("message_id", "message-" + secrets.token_hex(20)), "message_id")
+        if self._get("inbound", message_id):
+            raise ValueError("Outgoing message ID conflicts with an already received message")
+        return {"message_id": message_id,
+                 "recipient_urn": urn, "kind": "chat.message", "text": text}
 
     def _send_message(self, params, owner_session):
         message = self._message_values(params, owner_session)

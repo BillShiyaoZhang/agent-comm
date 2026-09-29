@@ -53,7 +53,7 @@ func (m *mailbox) acceptV2(req StoreRequest) (string, error) {
 func (m *mailbox) nextV2Outgoing() (*v2OutboxEntry, error) {
 	entry := &v2OutboxEntry{}
 	var request []byte
-	err := m.db.QueryRow(`SELECT request,envelope,cek,policy_hash,session_id,attempts FROM helper_v2_outbox WHERE status='accepted' AND next_attempt<=? ORDER BY created_at,message_id LIMIT 1`, time.Now().UnixMilli()).Scan(&request, &entry.envelope, &entry.cek, &entry.policyHash, &entry.sessionID, &entry.attempts)
+	err := m.db.QueryRow(`SELECT request,envelope,cek,policy_hash,session_id,attempts FROM helper_v2_outbox WHERE status='accepted' AND next_attempt<=? ORDER BY CASE WHEN substr(message_id,1,7)='v2skip_' THEN 0 ELSE 1 END,created_at,message_id LIMIT 1`, time.Now().UnixMilli()).Scan(&request, &entry.envelope, &entry.cek, &entry.policyHash, &entry.sessionID, &entry.attempts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -113,6 +113,27 @@ func (m *mailbox) updateV2Outgoing(id, status, reason string, attempts int, rece
 	return err
 }
 
+// Waiting for a peer handshake is not a failed message send. Move this entry
+// behind other ready outbox work without changing its ID or attempt count.
+func (m *mailbox) deferV2Outgoing(id string, delay time.Duration) error {
+	_, err := m.db.Exec(`UPDATE helper_v2_outbox SET next_attempt=? WHERE message_id=? AND status='accepted'`, time.Now().Add(delay).UnixMilli(), id)
+	return err
+}
+
+// Older helpers persisted this precise Platform rejection as a retryable error.
+// Retire only those known conflicts before the worker can retry their durable
+// envelopes. A single UPDATE leaves all evidence and session state untouched.
+func (m *mailbox) retirePersistedV2Conflicts() (int64, error) {
+	const oldError = "v2 platform /api/v2/mq/store: HTTP 409: v2 message ID conflict"
+	result, err := m.db.Exec(`UPDATE helper_v2_outbox SET status='conflict'
+		WHERE status='accepted' AND attempts>0 AND last_error IN (?,?,?)`,
+		oldError, oldError+"\n", oldError+"\r\n")
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (m *mailbox) v2OutgoingStatus(id string) (map[string]any, error) {
 	var status, lastError, policyHash string
 	var attempts int
@@ -121,7 +142,22 @@ func (m *mailbox) v2OutgoingStatus(id string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"message_id": id, "status": status, "attempts": attempts, "last_error": lastError, "policy_hash": policyHash, "receipt_verified": len(receipt) > 0}, nil
+	result := map[string]any{"message_id": id, "status": status, "attempts": attempts, "last_error": lastError, "policy_hash": policyHash, "receipt_verified": len(receipt) > 0}
+	if status == "conflict" {
+		var repairID, repairStatus, repairError string
+		err := m.db.QueryRow(`SELECT r.repair_message_id,o.status,o.last_error
+			FROM helper_v2_sequence_repairs r JOIN helper_v2_outbox o ON o.message_id=r.repair_message_id
+			WHERE r.original_message_id=?`, id).Scan(&repairID, &repairStatus, &repairError)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if err == nil {
+			result["repair_message_id"] = repairID
+			result["repair_status"] = repairStatus
+			result["repair_last_error"] = repairError
+		}
+	}
+	return result, nil
 }
 
 func (m *mailbox) highestV2Epoch() (uint64, error) {
@@ -264,6 +300,34 @@ func (m *mailbox) scanV2Handshake(row *sql.Row) (*v2HandshakeRecord, error) {
 func (m *mailbox) deleteV2Handshake(sessionID string) error {
 	_, err := m.db.Exec(`DELETE FROM helper_v2_handshakes WHERE session_id=?`, sessionID)
 	return err
+}
+
+// Retire an expired handshake only if no unfinished session still depends on
+// it. The original outbox entry, its message ID, and all sessions are kept.
+func (m *mailbox) retireV2Handshake(record v2HandshakeRecord) error {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var raw []byte
+	err = tx.QueryRow(`SELECT data FROM helper_v2_sessions WHERE peer_urn=?`, record.peerURN).Scan(&raw)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil {
+		var session v2.Session
+		if err := json.Unmarshal(raw, &session); err != nil {
+			return err
+		}
+		if session.ID == record.sessionID && !session.Ready() {
+			return errors.New("unfinished v2 session still depends on expired handshake")
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM helper_v2_handshakes WHERE session_id=?`, record.sessionID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (m *mailbox) seenV2Frame(frameID string) (bool, error) {

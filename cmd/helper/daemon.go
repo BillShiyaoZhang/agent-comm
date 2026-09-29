@@ -465,6 +465,10 @@ func (ds *DaemonServer) handleLegacyStore(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Invalid message_id", http.StatusBadRequest)
 		return
 	}
+	if strings.HasPrefix(req.MessageID, v2SequenceSkipPrefix) || req.Kind == v2SequenceSkipKind {
+		http.Error(w, "Reserved sequence repair fields", http.StatusBadRequest)
+		return
+	}
 	if err := req.MessageFields.validate(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

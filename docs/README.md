@@ -11,6 +11,7 @@
 - [Releases](guides/RELEASES.md)：二进制、文档包与机器可读清单。
 - [v0.9.4](releases/v0.9.4.md)：匹配 runtime/connector、对端内容安全门禁与保留原身份的升级。
 - [v0.9.5](releases/v0.9.5.md)：已审入站事件后的协作 worker 恢复、持久旧状态迁移与匹配包升级。
+- [v0.9.6](releases/v0.9.6.md)：已配对主人按事项查询当前状态与有限历史，并在对话中提及多个事项；源码说明不证明公开安装包已经更新。
 
 ## Architecture
 
