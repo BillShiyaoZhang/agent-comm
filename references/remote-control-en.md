@@ -49,6 +49,9 @@ Availability depends on both the pairing allowlist and the host adapter. First c
 | `contacts.respond` | Required `request_id`, `decision=accept\|reject`; optional `contact_id`, `aliases` | Handles an incoming request; acceptance saves a contact and establishes communication without granting trust or collaboration authority, then sends the response to synchronize both agents |
 | `messages.send` | Required `recipient_urn`, `text`; optional stable `message_id` | Durably submits the user's exact content only to a `connected` contact, reusing the ID after failures; does not imply peer reading |
 | `collaboration.state` | Optional `task_id` | Contacts, requests, resources, tasks, actions, pending/completed decisions, inbox, sent messages and proposals; reads confer no approval authority |
+| `task.list` | Optional `query`, `limit` (1–100), `cursor` | Searches local owner tasks and returns summary `items` with `next_cursor`; requires separate pairing |
+| `task.detail` | Required local `task_id` | Bounded current task, currently visible approval questions, collaboration/message snapshot and this console's `conversation_refs`; hidden peer-derived questions are redacted and `coverage.truncated` identifies omissions |
+| `task.events` | Required local `task_id`; optional `limit` (1–20), opaque `cursor` | Paged local transition journal, reviewed protocol/messages and linked turns; returns `items`, `next_cursor`, `coverage`; older history is incomplete |
 | `inbox.list` | Optional `task_id` | Approved persisted content and `read` / `read_at`, plus metadata-only `pending_review`; no fresh helper retrieval |
 | `inbox.review_preview` | Required `message_id` | Separate READ; complete body, authenticated sender and immutable `fingerprint`; unavailable to model tools |
 | `inbox.review` | Required `message_id`, `decision=approve\|reject` | Separate owner WRITE; approval requires full same-session preview; terminal rejection; no automatic replay |
@@ -56,8 +59,8 @@ Availability depends on both the pairing allowlist and the host adapter. First c
 | `attention.list` | Optional `after`, `limit` (1–100) | Durable attention changes from the same agent; follow `cursor` / `has_more`. Handled items become resolved |
 | `approval.respond` | Required `approval_id`, `decision=approve\|deny` | Records a user's explicit decision on a trusted Web approval card in the same Store and invalidates late native answers. Never a model tool for answering on the owner's behalf |
 | `collaboration.execute` | Runtime tool arguments with required `action` | Complete Runtime route registered by Hermes; `describe` returns `actions` and `action_fields`. Other fields depend on the action. Not supplied by standalone |
-| `conversation.send` | Required `text`; optional `conversation_id` | When Hermes enables it and pairing permits it, returns `submitted`, conversation ID, turn ID; no completed answer is implied |
-| `conversation.get` | Required `conversation_id` | Up to 100 recent turns for this console/owner conversation: state, text, response, or error |
+| `conversation.send` | Required `text`; optional `conversation_id`, up to eight `mentions:[{"kind":"task","task_id":"..."}]` | When Hermes enables it and pairing permits it, verifies each mention belongs to the paired owner and returns `submitted`, conversation ID, turn ID; a mention is not approval |
+| `conversation.get` | Required `conversation_id` | Up to 100 recent turns for this console/owner: state, text, response, `mentions`, and actual operation `related` |
 
 For requested remote conversations, explicitly add `--allow conversation.send --allow conversation.get` to that console's pairing. Standalone cannot execute these even when they appear in its allowlist. Both `conversation.send` and `messages.send` accept up to 24000 UTF-8 bytes; each console can have at most 100 unfinished conversation turns.
 

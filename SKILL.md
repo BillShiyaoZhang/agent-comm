@@ -115,6 +115,8 @@ Hermes 适配器另提供 `conversation.send` / `conversation.get` 和 `collabor
 
 具体 CLI、RPC 参数和消费者选择见 [远程工作台参考](references/remote-control.md)。
 
+新版工作台可在本机明确配对 `task.list`、`task.detail`、`task.events`，搜索本方事项、查看当前详情并分页查看留存证据；旧配对不会自动得到这些读取权限。`conversation.send` 可附已验证的 `mentions:[{"kind":"task","task_id":"..."}]`，让同一对话讨论多个事项。提及只是上下文，不是授权；`conversation.get.turns[].mentions` 与实际操作来源 `related` 必须分开理解。`task.events.coverage.complete=false` 表示旧状态历史和对端私有过程并不完整。
+
 <a id="sdk-only"></a>
 ## Go SDK 与高级集成
 

@@ -101,6 +101,8 @@ The Hermes adapter additionally supplies `conversation.send` / `conversation.get
 
 See [Remote console reference](references/remote-control-en.md) for CLI commands, RPC parameters, and consumer selection.
 
+The new workspace can explicitly pair `task.list`, `task.detail`, and `task.events` to search local owner tasks, inspect current details, and page through retained evidence. Existing pairings do not gain these reads automatically. `conversation.send` may carry verified `mentions:[{"kind":"task","task_id":"..."}]` so one conversation can discuss several tasks. A mention only identifies context; `conversation.get.turns[].mentions` must remain distinct from `related`, which records actual operation provenance. `task.events.coverage.complete=false` makes older history and the peer's private process explicitly incomplete.
+
 <a id="sdk-only"></a>
 ## Go SDK and advanced integration
 

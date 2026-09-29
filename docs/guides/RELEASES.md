@@ -2,6 +2,8 @@
 
 实际发布逻辑见 [.github/workflows/release.yml](../../.github/workflows/release.yml)。发布由 SDK 仓库的 `v*` tag 或维护者触发工作流。
 
+当前源码预备 runtime 0.1.11 与 Hermes connector 1.5.13（要求 runtime `>=0.1.11,<0.2`），增加本方事项提及、查询与留存证据分页；详情见 [v0.9.6 配套发布说明](../releases/v0.9.6.md)。这不表示 wheel、官网清单或用户设备已升级。发布前需要从这两个源码版本构建匹配 wheel，运行完整宿主测试，保留原身份与数据库原地升级，并更新公开清单。
+
 v0.9.5 的协作 worker 持久等待状态修复及原身份升级要求见[配套发布说明](../releases/v0.9.5.md)。runtime 为 0.1.10，Hermes connector 为 1.5.12 并要求 runtime `>=0.1.10,<0.2`；helper、协作 wire 与 SQLite schema 不变。v0.9.4 的对端内容安全门禁仍适用。说明描述包行为，实际资产发布以清单和相应验收记录为准。
 
 ## 当前产物

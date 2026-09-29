@@ -6,7 +6,7 @@
 
 屏蔽回执与 contacts/state 含单调 `safety_revision`，历史回执不能覆盖新状态。真实 `capabilities.peer_content_safety={version:1,mode:"owner_review",automatic_peer_model_execution:false}` 才表明更新后的本机边界。两种 Hermes 模式均不直接让对端来信启动模型；解除屏蔽或批准均不自动重放历史。审核不能替代业务委托、共享许可或 Web 运营审核；`review_policy` 不证明 Web/App 显示过滤已完成。完整契约与宿主限制见[屏蔽与本人审核](../references/peer-safety.md)。
 
-`agent-comm-runtime` 0.1.10 是可独立安装的 Python 3.11+ 包，标准库即可运行。它不导入 Hermes、模型 SDK 或任何记忆库。联系人、授权、任务、不可变动作、资源快照、入站和审计的唯一实现位于这里；Hermes connector 是它的首个实际宿主适配器。Web 通过明确配对的远程控制协议同步 agent 侧状态；拥有对应权限后可直接添加联系人和确认授权，所有决定仍写入 agent 的同一个 Store。
+`agent-comm-runtime` 源码版本 0.1.11 是可独立安装的 Python 3.11+ 包，标准库即可运行。它不导入 Hermes、模型 SDK 或任何记忆库。联系人、授权、任务、不可变动作、资源快照、入站和审计的唯一实现位于这里；Hermes connector 是它的首个实际宿主适配器。Web 通过明确配对的远程控制协议同步 agent 侧状态；拥有对应权限后可直接添加联系人和确认授权，所有决定仍写入 agent 的同一个 Store。
 
 v0.9.5 与 Hermes connector 1.5.12 配套。已审核、已应用的协作事件留下的旧 `peer_review_required` 等待标记，可由后续受信任 worker tick 核验后恢复；待审或拒绝的内容仍隔离，旧事件不重发。升级时保留原身份、实际 profile、helper mailbox、协作/远程/消费回执数据库及 WAL；先停下该身份的所有消费者并备份，再用实际运行 Hermes 的 Python 安装匹配 wheel。SQLite schema 2 保留已有记录，旧 runtime 拒绝打开升级后的库；不能靠回装旧 wheel 或重建身份撤销安全门禁。已有 pairing 的方法和到期时间保持不变。发布与升级说明见 [v0.9.5](../docs/releases/v0.9.5.md)。
 
@@ -46,7 +46,7 @@ flowchart LR
     TP --> G["Go helper<br/>身份、密钥与持久收发"]
 ```
 
-扩展协议版本 `1.0`、Python 包版本 `0.1.10`、协作消息 `agent-comm-collaboration/v1` / `v2`、SQLite schema `2` 是不同版本维度。当前 adapter API 要求版本精确相同；未来改变合约时显式升级，避免静默兼容猜测。v2 与 attention 使用新增记录类型，旧 v1 行保留；原 `hermes-native-<profile hash>` 主体仍能读取旧记录。不能用旧二进制继续处理已建立的 v2 协作。
+扩展协议版本 `1.0`、Python 源码包版本 `0.1.11`、协作消息 `agent-comm-collaboration/v1` / `v2`、SQLite schema `2` 是不同版本维度。当前 adapter API 要求版本精确相同；未来改变合约时显式升级，避免静默兼容猜测。v2 与 attention 使用新增记录类型，旧 v1 行保留；原 `hermes-native-<profile hash>` 主体仍能读取旧记录。不能用旧二进制继续处理已建立的 v2 协作。
 
 ## 双边协作与持久提醒
 
@@ -244,6 +244,13 @@ Hermes 的 `collaboration/policy.py`、`store.py`、`transport.py` 仅保留薄�
 既有 `conversation.get` 返回每个回合的可选 `related`（task / approval / collaboration 的稳定 ID），
 及 `history={limit:100,returned,truncated}`，明确返回最近 100 回合；这不代表完整历史发现或分页。
 旧记录没有来源时返回空关联，不从回复文字猜 ID。
+
+已配对的新工作台可显式获准 `task.list`、`task.detail`、`task.events`。三者分别按当前主人列出本方任务、读取某一任务的当前快照与当前可见的审批问题、分页读取留存证据；每个方法都需要单独列入本机 pairing，旧配对不会自动扩权。`task.list` 接受可选 `query`、`limit`（1–100）、`cursor`，返回 `items` 和 `next_cursor`；`task.detail` 必须传 `task_id`，并返回 `conversation_refs`（仅当前配对控制台的真实提及或可信操作来源）。`task.events` 必须传 `task_id`，可传 `limit`（1–20）、`cursor`，事件含 `event_id`、`kind`、本机记录时间 `at`、`source` 和 `details`。读取始终验证任务属于配对主人；入站内容仍经过联系人、屏蔽与主人内容审核门禁。
+
+`conversation.send` 可选 `mentions:[{"kind":"task","task_id":"本方稳定ID"}]`，最多 8 个且不重复。bridge 验证每个 ID 属于当前配对主人后把它持久化到回合；回执和 `conversation.get.turns[].mentions` 原样返回。Hermes 仅把已验证的 ID 作为事项上下文交给模型。`mentions` 表示用户讨论的事项，`related` 仅表示该回合确实产生/更新的记录；二者都不授予新权限，也不恢复过期任务。纯文字 `@某事项` 不建立结构化关联。
+
+`task.events.coverage.complete=false`：本版只为升级后的本地任务、审批、操作状态变更写入追加式日志；旧的状态转移无法从当前记录还原。协议事件和当前审核后可见的入站消息可按事项读取；旧记录的完整性、对方内部过程和业务完成都不能由这条时间线证明。`task.detail` 的消息快照只包括最近 100 条可见消息，旧审批若原记录已不存在也不能还原问题全文。
+详情响应受 200 KiB 内容预算约束，`coverage.truncated` 分别指出哪些列表未全部返回；仍获准查看的审批问题保持原文，已隐藏的对端派生问题标 `question_redacted=true`。`task.events` 的不可变日志只留状态元数据，不留审批问题、动作正文或对端协议原文；按字节预算提前结束一页时仍返回续页游标，单条过大的可见对话回复或消息正文仅返回前段并标 `*_truncated=true`。
 
 既有获准 `attention.list` 返回对话回合的持久事项：submitted / running 版本为 resolved 的普通进展，
 completed 为 `conversation_completed`，failed / interrupted 为 `conversation_failed`，

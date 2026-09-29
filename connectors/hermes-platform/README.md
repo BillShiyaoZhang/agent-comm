@@ -365,6 +365,10 @@ $env:PYTHONDONTWRITEBYTECODE = '1'
 及 `history={limit:100,returned,truncated}`，明确返回最近 100 回合；这不代表完整历史发现或分页。
 旧记录没有来源时返回空关联，不从回复文字猜 ID。
 
+工作台的新事项入口使用本方 `task_id`，而非可更名的标题或对端 `collaboration_id`。本机管理员须另外配对 `task.list`、`task.detail`、`task.events`，旧 pairing 不会自动获得这些读取权限。`task.list` 可按 `query` 查找，`task.detail` 给出当前任务、准确审批问题、可见消息及当前配对控制台的 `conversation_refs`；`task.events` 使用稳定游标分页返回本机留存的任务、授权、操作、协议和已审消息记录，`coverage` 明示升级前历史缺口。具体参数与门禁见 [Python runtime](../../python/README.md)。
+
+`conversation.send` 可附至多 8 个已验证的结构化提及 `mentions:[{"kind":"task","task_id":"..."}]`。Hermes 接收该回合时会看到本机验证过的事项 ID，须读取最新状态；提及本身不批准任务、扩大授权或通知对方。`conversation.get.turns[].mentions` 是用户讨论关联，`related` 是实际写入的来源关联，两者语义不同。
+
 既有获准 `attention.list` 返回对话回合的持久事项：submitted / running 版本为 resolved 的普通进展，
 completed 为 `conversation_completed`，failed / interrupted 为 `conversation_failed`，
 终态 target 为 `{kind:"conversation",id:conversation_id,turn_id}`。完成与失败是结果提醒，

@@ -26,6 +26,7 @@ from .worker import WorkerMixin
 from .social import SOCIAL_KINDS, SocialMixin, key as social_key
 from .peer_review import PeerReviewMixin, REVIEW_POLICY
 from .source_context import SourceContextMixin
+from .task_history import TaskHistoryMixin
 
 
 def canonical(value):
@@ -53,7 +54,7 @@ class RemoteMutationConflict(ValueError):
     code = "request_conflict"
 
 
-class Store(SourceContextMixin, PeerReviewMixin, SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
+class Store(TaskHistoryMixin, SourceContextMixin, PeerReviewMixin, SocialMixin, AttentionMixin, CollaborationV2Mixin, WorkerMixin):
     def __init__(self, path, *, clock=time.time, local_urn=None, owner_principal=None):
         self.clock = clock
         self.local_urn = local_urn
@@ -65,6 +66,11 @@ class Store(SourceContextMixin, PeerReviewMixin, SocialMixin, AttentionMixin, Co
         self._db.execute("PRAGMA synchronous=FULL")
         self._db.execute("CREATE TABLE IF NOT EXISTS collaboration_records "
                          "(kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id))")
+        self._db.execute("CREATE TABLE IF NOT EXISTS task_history "
+                         "(sequence INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, "
+                         "task_id TEXT NOT NULL, body TEXT NOT NULL)")
+        self._db.execute("CREATE INDEX IF NOT EXISTS task_history_owner_task_sequence "
+                         "ON task_history(owner_id,task_id,sequence)")
         self._db.execute("CREATE TABLE IF NOT EXISTS collaboration_meta (version INTEGER NOT NULL)")
         row = self._db.execute("SELECT version FROM collaboration_meta").fetchone()
         if row and row[0] not in {1, 2}:
@@ -152,9 +158,11 @@ class Store(SourceContextMixin, PeerReviewMixin, SocialMixin, AttentionMixin, Co
             "SELECT body FROM collaboration_records WHERE kind=? ORDER BY id", (kind,))]
 
     def _put(self, kind, key, body):
+        previous = self._get(kind, key) if kind in {"task", "approval", "operation", "v2_operation"} else None
         self._record_source_context(kind, key, body)
         self._db.execute("INSERT INTO collaboration_records VALUES (?,?,?) "
                          "ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body", (kind, key, canonical(body)))
+        self._record_task_history(kind, key, body, previous=previous)
         if kind in {"approval", "inbound", "operation", "v2_operation", "v2_collaboration"}:
             self._attention_on_write(kind, key, body)
 

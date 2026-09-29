@@ -16,7 +16,7 @@ import time
 from .identity import validate_urn
 
 PROTOCOL = "agent-comm-control/v1"
-READ_METHODS = ("capabilities", "contacts.list", "collaboration.state", "inbox.list", "inbox.review_preview", "attention.list", "contacts.requests")
+READ_METHODS = ("capabilities", "contacts.list", "collaboration.state", "inbox.list", "inbox.review_preview", "attention.list", "contacts.requests", "task.list", "task.detail", "task.events")
 WRITE_METHODS = ("contacts.add", "contacts.respond", "contacts.block", "contacts.unblock", "messages.send", "inbox.mark_read", "inbox.review", "approval.respond")
 CONVERSATION_METHODS = ("conversation.send", "conversation.get")
 CONTROL_KINDS = {"control.request", "control.response"}
@@ -201,6 +201,26 @@ class RemoteBridge:
                 raise RemoteError("peer_content_safety_changed", "Host admission changed after this turn was accepted; read its existing conversation before retrying")
             raise RemoteError("peer_content_safety_required", "Upgrade the host's owner-review admission path before starting a conversation")
 
+    def _task_conversations(self, pairing, owner, task_id):
+        """Only this pairing's turns and trusted navigation links."""
+        with self.store._lock:
+            links = [link for link in self.store._all("conversation_link")
+                     if self.store._belongs(link, owner) and link["console_urn"] == pairing["console_urn"]
+                     and link.get("task_id") == task_id and link.get("conversation_id")]
+        linked_turns = {(link["conversation_id"], link.get("turn_id")) for link in links}
+        turns = [turn for turn in self._all("turn")
+                 if turn["owner_principal"] == pairing["owner_principal"]
+                 and turn["console_urn"] == pairing["console_urn"]
+                 and (any(mention["task_id"] == task_id for mention in turn.get("mentions", []))
+                      or (turn["conversation_id"], turn["turn_id"]) in linked_turns)]
+        refs = [{"conversation_id": turn["conversation_id"], "turn_id": turn["turn_id"], "relation": "mention"}
+                for turn in turns if any(mention["task_id"] == task_id for mention in turn.get("mentions", []))]
+        refs.extend({"conversation_id": link["conversation_id"],
+                     **({"turn_id": link["turn_id"]} if link.get("turn_id") else {}), "relation": "related"}
+                    for link in links)
+        refs = list({(ref["conversation_id"], ref.get("turn_id"), ref["relation"]): ref for ref in refs}.values())
+        return turns, sorted(refs, key=lambda ref: (ref["conversation_id"], ref.get("turn_id", ""), ref["relation"]))
+
     def _invoke(self, request, pairing):
         method, params = request["method"], request["params"]
         # Store separates profile visibility from exact native approval sessions.
@@ -252,12 +272,46 @@ class RemoteBridge:
             if task_id is not None:
                 identifier(task_id)
             return self.store.state(owner, task_id) if method == "collaboration.state" else self.store.inbox(owner, task_id)
+        if method == "task.list":
+            self._params(params, optional=("query", "limit", "cursor"))
+            return self.store.task_list(owner, query=params.get("query", ""), limit=params.get("limit", 50),
+                                        cursor=params.get("cursor"))
+        if method in {"task.detail", "task.events"}:
+            self._params(params, required=("task_id",), optional=("limit", "cursor") if method == "task.events" else ())
+            task_id = identifier(params["task_id"])
+            # Resolve ownership before reading any references to this stable ID.
+            with self.store._lock:
+                self.store._task(task_id, owner)
+            turns, refs = self._task_conversations(pairing, owner, task_id)
+            if method == "task.detail":
+                result = {**self.store.task_detail(owner, task_id), "conversation_refs": refs[-100:]}
+                result["coverage"]["truncated"]["conversation_refs"] = len(refs) > 100
+                while (result["conversation_refs"] and len(canonical(result).encode()) > 220000):
+                    result["conversation_refs"].pop(0)
+                    result["coverage"]["truncated"]["conversation_refs"] = True
+                return result
+            return self.store.task_events(owner, task_id, limit=params.get("limit", 10),
+                                          cursor=params.get("cursor"), turns=turns)
         if method == "conversation.send" and self.conversations:
             self._require_peer_model_safety()
-            self._params(params, required=("text",), optional=("conversation_id",))
+            self._params(params, required=("text",), optional=("conversation_id", "mentions"))
             text = params["text"]
             if not isinstance(text, str) or not text.strip() or len(text.encode()) > 24000:
                 raise RemoteError("invalid_params", "Conversation text must contain 1–24000 UTF-8 bytes")
+            mentions = params.get("mentions", [])
+            if (not isinstance(mentions, list) or len(mentions) > 8 or
+                    any(not isinstance(m, dict) or set(m) != {"kind", "task_id"} or m["kind"] != "task"
+                        for m in mentions)):
+                raise RemoteError("invalid_params", "Provide at most eight structured task mentions")
+            task_ids = [identifier(m["task_id"]) for m in mentions]
+            if len(set(task_ids)) != len(task_ids):
+                raise RemoteError("invalid_params", "Task mentions must be unique")
+            for task_id in task_ids:
+                try:
+                    with self.store._lock:
+                        self.store._task(task_id, owner)
+                except ValueError as exc:
+                    raise RemoteError("unknown_task", "Task mention is not available to this owner") from exc
             if sum(j["status"] in {"submitted", "running"} and j["console_urn"] == pairing["console_urn"]
                    for j in self._all("turn")) >= 100:
                 raise RemoteError("queue_full", "This console already has 100 pending turns; wait before submitting more")
@@ -265,9 +319,11 @@ class RemoteBridge:
             turn_id = "turn-" + hashlib.sha256((pairing["console_urn"] + "\0" + request["request_id"]).encode()).hexdigest()[:40]
             job = {"turn_id": turn_id, "conversation_id": conversation_id, "console_urn": pairing["console_urn"],
                    "owner_principal": pairing["owner_principal"], "status": "submitted", "text": text,
+                   "mentions": [{"kind": "task", "task_id": task_id} for task_id in task_ids],
                    "response": None, "error": None, "created_at": self.clock(), "updated_at": self.clock()}
             self._put("turn", turn_id, job)
-            return {"status": "submitted", "conversation_id": conversation_id, "turn_id": turn_id}
+            return {"status": "submitted", "conversation_id": conversation_id, "turn_id": turn_id,
+                    "mentions": job["mentions"]}
         if method == "conversation.get" and self.conversations:
             self._params(params, required=("conversation_id",))
             conversation_id = identifier(params["conversation_id"])
@@ -276,6 +332,7 @@ class RemoteBridge:
             keys = ("turn_id", "status", "text", "response", "error", "created_at", "updated_at")
             latest = sorted(jobs, key=lambda j: (j["created_at"], j["turn_id"]))[-100:]
             return {"conversation_id": conversation_id, "turns": [{**{k: j[k] for k in keys},
+                    "mentions": j.get("mentions", []),
                     "related": self.store.conversation_links(owner, pairing["console_urn"], conversation_id, j["turn_id"]) if self.store else []}
                     for j in latest], "history": {"limit": 100, "returned": len(latest), "truncated": len(jobs) > 100}}
         if method in self.handlers:

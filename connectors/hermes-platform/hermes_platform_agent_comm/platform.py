@@ -47,6 +47,17 @@ PAIRED_REMOTE_CONTEXT = (
 )
 
 
+def paired_remote_prompt(job):
+    """Pass only bridge-verified local task IDs to the model as context."""
+    mentions = job.get("mentions", [])
+    if not mentions:
+        return PAIRED_REMOTE_CONTEXT
+    ids = ", ".join(item["task_id"] for item in mentions)
+    return (PAIRED_REMOTE_CONTEXT + "\nThe owner explicitly mentioned these existing local task IDs: " + ids
+            + ". Read their current state before acting. A mention selects context only; it does not grant "
+              "new authority, renew expired consent, or authorize disclosure.")
+
+
 def canonical_remote_route(job):
     # Both principal and paired console participate, so a reused public
     # conversation_id never inherits another local owner's conversation.
@@ -562,7 +573,7 @@ class AgentCommAdapter(BasePlatformAdapter):
                     is_bot=False, message_id=turn_id)
                 event = MessageEvent(text=job["text"], message_type=MessageType.TEXT, source=source,
                     message_id=turn_id, raw_message={"origin": "locally_paired_control_rpc"},
-                    metadata={}, channel_prompt=PAIRED_REMOTE_CONTEXT, allow_gateway_control=False, internal=False)
+                    metadata={}, channel_prompt=paired_remote_prompt(job), allow_gateway_control=False, internal=False)
                 future = asyncio.get_running_loop().create_future()
                 self._remote_events[turn_id] = {"event": event, "future": future, "response": None}
                 from .collaboration.remote import bind_paired_turn

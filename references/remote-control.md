@@ -49,6 +49,9 @@ agent-comm-runtime remote serve --hermes-profile <actual_profile> --agent-urn <l
 | `contacts.respond` | 必需 `request_id`、`decision=accept\|reject`；可选 `contact_id`、`aliases` | 处理收到的好友请求，接受时保存联系人并建立通讯关系；不授予信任或协作权限，向对方发送响应并同步双方连接状态 |
 | `messages.send` | 必需 `recipient_urn`、`text`；可选稳定 `message_id` | 仅向已 `connected` 的联系人持久提交用户输入的确切正文，断线重试复用消息 ID；不代表对方已读 |
 | `collaboration.state` | 可选 `task_id` | 联系人、请求、资料、事项、动作、待确认项、已作决定、入站、发送记录及提议；读取不授予审批权限 |
+| `task.list` | 可选 `query`、`limit`（1–100）、`cursor` | 本方事项搜索；返回简要 `items` 与 `next_cursor`，需独立配对 |
+| `task.detail` | 必需本方 `task_id` | 当前任务、审批确切问题、协作和消息的有界快照及该 console 的 `conversation_refs`；`coverage.truncated` 指明截断 |
+| `task.events` | 必需本方 `task_id`；可选 `limit`（1–20）、不透明 `cursor` | 追加日志、已审协议/消息及有可信关联的回合，返回 `items`、`next_cursor`、`coverage`；旧历史不能完整重建 |
 | `inbox.list` | 可选 `task_id` | 已批准内容及 `read` / `read_at`，另含仅元数据的 `pending_review`；不是新一次 helper 拉取 |
 | `inbox.review_preview` | 必需 `message_id` | 独立 READ；完整正文、真实发送方与不可变 `fingerprint`，不提供给模型工具 |
 | `inbox.review` | 必需 `message_id`、`decision=approve\|reject` | 独立主人 WRITE；同 session 完整预览后批准，拒绝永久，不自动重放 |
@@ -56,8 +59,8 @@ agent-comm-runtime remote serve --hermes-profile <actual_profile> --agent-urn <l
 | `attention.list` | 可选 `after`、`limit`（1–100） | 同一 agent 的持久待办增量；跟随 `cursor` / `has_more`，已处理事项更新为 resolved |
 | `approval.respond` | 必需 `approval_id`、`decision=approve\|deny` | 用户在可信 Web 审批卡对具体问题作决定；写入同一 Store 并使迟到的原生回答失效。不得作为模型代答工具 |
 | `collaboration.execute` | Runtime 工具参数对象，必需 `action` | Hermes 注册的完整 Runtime 入口；`describe` 返回 `actions`、`action_fields`，其它字段由所选动作决定；standalone 不提供 |
-| `conversation.send` | 必需 `text`；可选 `conversation_id` | Hermes 启用且明确授权时提交回合，返回 `submitted`、conversation ID、turn ID；不代表回答已生成 |
-| `conversation.get` | 必需 `conversation_id` | 该 console 与主人对应会话最近最多 100 个回合的状态、正文、回答或错误 |
+| `conversation.send` | 必需 `text`；可选 `conversation_id`、至多 8 个 `mentions:[{"kind":"task","task_id":"..."}]` | Hermes 启用且明确授权时提交回合；每个提及必须是配对主人的现存事项，不代表批准；返回 `submitted`、conversation ID、turn ID |
+| `conversation.get` | 必需 `conversation_id` | 该 console 与主人对应会话最近最多 100 个回合的状态、正文、回答、`mentions` 和实际操作 `related` |
 
 需要远程会话时，对该 console 的明确配对增加 `--allow conversation.send --allow conversation.get`；standalone 即使白名单包含它们也没有对应宿主执行能力。`conversation.send` 和 `messages.send` 的正文上限均为 24000 UTF-8 字节；同一 console 最多 100 个未完成会话回合。
 
